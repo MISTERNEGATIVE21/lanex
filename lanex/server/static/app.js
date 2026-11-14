@@ -6,7 +6,7 @@ import { setupTabs } from "./modules/tabs.js";
 import { setupNav, startAt, go, bootTab, hashTab } from "./modules/nav.js";
 import { noteRunStarted, noteRunFinished, loadRuns as loadContextRuns } from "./modules/context.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
-import { setupTheme } from "./modules/theme.js";
+import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
 import { setupDensity } from "./modules/density.js";
 import { setupShell, paintProgress } from "./modules/shell.js";
@@ -23,8 +23,6 @@ import { setupWizard } from "./modules/wizard.js";
 import { icon } from "./modules/icons.js";
 import { setupFullscreen } from "./modules/fullscreen.js";
 import { setupTooltips } from "./modules/tooltip.js";
-import { mountRunBar } from "./modules/runbar.js";
-import { setupViews } from "./modules/views.js";
 
 // ---------------------------------------------------------------- pages on demand
 // Each page's code loads the first time it is needed (its tab opens, or an
@@ -35,13 +33,13 @@ const PAGES = {
   flow: () => import("./modules/flow.js"),
   runs: () => import("./modules/runs.js"),
   tools: () => import("./modules/tools.js"),
-  results: () => import("./modules/results.js"),
+  analytics: () => import("./modules/analytics.js"),
+  verify: () => import("./modules/verify.js"),
   layout: () => import("./modules/layout.js"),
   cells: () => import("./modules/cells.js"),
   ide: () => import("./modules/ide/main.js"),
-  settings: () => import("./modules/settings.js"),
 };
-const TAB_PAGE = { flow: "flow", runs: "runs", tools: "tools", results: "results", layout: "layout", cells: "cells", ide: "ide", settings: "settings" };
+const TAB_PAGE = { pipeline: "flow", runs: "runs", tools: "tools", analytics: "analytics", verify: "verify", layout: "layout", cells: "cells", ide: "ide" };
 const _mods = {};      // name -> the module, once loaded
 const _modP = {};      // name -> its loading promise
 function page(name) {
@@ -68,8 +66,9 @@ function prefetch(names) {
 
 // Map each side-nav tab to a line-style SVG icon (replaces per-OS emoji glyphs).
 const TAB_ICONS = {
-  setup: "folder", ide: "code", config: "sliders", flow: "flow", runs: "clock",
-  results: "chart", layout: "grid", cells: "layers", tools: "tools", settings: "gear",
+  setup: "folder", pipeline: "flow", runs: "clock",
+  ide: "code", tools: "tools", analytics: "chart", verify: "check",
+  dse: "beaker", layout: "grid", cells: "layers", manual: "command",
 };
 function paintNavIcons() {
   document.querySelectorAll(".side-tab").forEach((tab) => {
@@ -141,15 +140,9 @@ async function boot() {
       const dd = state.designDir ? "?design_dir=" + encodeURIComponent(state.designDir) : "";
       window.open("/ide" + dd, "_blank", "noopener");
     });
+    document.getElementById("tools-icon")?.addEventListener("click", () => go("tools", {}, { link: false }));
     document.getElementById("palette-btn")?.addEventListener("click", openPalette);
-    // The run in view: one control, in the top bar, for every page.
-    mountRunBar(document.getElementById("top-runbar"), {
-      baseline: true,
-      live: () => (state.status && state.status.running && state.flowShowsLive && state.liveTag) || "",
-    });
-    // Pages with views: Config's are plain markup; Results and Library set
-    // theirs up when they first render.
-    setupViews("config", { first: "common" });
+    document.getElementById("theme-btn")?.addEventListener("click", toggleTheme);
 
     // Everything boot asks the server goes out at once: the compatibility
     // check, the flow metadata, and which project to open. None waits for
@@ -451,9 +444,9 @@ function handle(ev) {
     document.dispatchEvent(new CustomEvent("g:flow_done", { detail: ev }));
     const pill = document.getElementById("run-pill");
     if (pill) {
-      pill.classList.remove("pill-running", "pill-pass", "pill-fail", "pill-warn");
-      pill.classList.add(ev.error ? "pill-fail" : ev.cancelled ? "pill-warn" : "pill-pass");
-      pill.textContent = ev.error ? "Failed" : ev.cancelled ? "Stopped" : "Finished";
+      pill.classList.remove("pill-running", "pill-pass", "pill-fail");
+      pill.classList.add(ev.error ? "pill-fail" : ev.cancelled ? "pill-pending" : "pill-pass");
+      pill.textContent = ev.error ? "failed" : ev.cancelled ? "stopped" : "done";
     }
     // The toast, the window title and the notification say how it ended (runend.js).
     runFinished(ev).catch((e) => console.error("run end", e));
@@ -648,12 +641,16 @@ document.addEventListener("g:active_design_changed", (e) => {
 // than a moment, until the page draws).
 const RENDER = {
   tools: (m) => m.renderTools(),
-  results: (m) => m.renderResults(),
+  analytics: (m) => {
+    m.renderAnalyticsFull();
+    import("./modules/compare.js").then((c) => c.renderCompare());
+    import("./modules/watch.js").then((w) => w.renderWatch());
+  },
   runs: (m) => m.renderRuns(),
-  flow: (m) => m.renderFlow(),
-  settings: (m) => m.renderSettings(),
+  pipeline: (m) => m.renderFlow(),
   ide: (m) => m.initIde({ designDir: state.designDir, runMode: state.runMode }),
   layout: (m) => m.renderLayout(),
+  verify: (m) => m.renderVerify(),
   cells: (m) => m.renderCells(),
 };
 document.addEventListener("g:tab_activated", (e) => {

@@ -26,7 +26,6 @@ function syncBtn() {
   if (open) _unseen = 0;
   btn.setAttribute("aria-pressed", open ? "true" : "false");
   btn.classList.toggle("has-activity", _unseen > 0);
-  btn.classList.toggle("has-content", bodyText().trim().length > 0);
   if (count) {
     count.hidden = _unseen === 0;
     count.textContent = _unseen > 99 ? "99+" : String(_unseen);

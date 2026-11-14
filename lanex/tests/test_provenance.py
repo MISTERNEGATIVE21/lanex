@@ -407,7 +407,7 @@ def test_frontend_config_tier_wiring() -> None:
     prov_js = (static / "modules" / "provenance.js").read_text()
     assert "applies only when the run's PDK/SCL matches" in prov_js
     assert "configChipSpec" in prov_js
-    css = (static / "legacy.css").read_text()
+    css = (static / "styles.css").read_text()
     assert ".vconfig" in css and ".vconfig-scoped" in css
 
 

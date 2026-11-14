@@ -15,9 +15,10 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import * as ctx from "./context.js";
 import { normDir } from "./context.js";
+import { mountRunBar } from "./runbar.js";
 import { toast } from "./toast.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
-import { showView } from "./views.js";
+import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
 import * as M from "./analytics-model.js";
@@ -158,10 +159,11 @@ export async function renderAnalyticsFull() {
 }
 
 function wireOnce() {
-  const sec = document.getElementById("sec-results");
+  const sec = document.getElementById("sec-analytics");
   if (!sec || sec._anWired) return;
   sec._anWired = true;
   C.wireTips(sec);
+  mountRunBar(document.getElementById("analytics-runbar"), { baseline: true });
   ctx.onContext(async (d) => {
     if (!sec.classList.contains("section-active") || d.why === "loaded" || d.why === "settled") return;   // it renders when shown
     if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBaseline(); paint(); return; }
@@ -173,6 +175,17 @@ function wireOnce() {
     const { openResolvedSettings } = await import("./finalsettings.js");
     openResolvedSettings(_tag);
   });
+  // Jump bar: scroll + spy.
+  const nav = document.getElementById("analytics-jump");
+  nav.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-jump]");
+    if (!btn) return;
+    const t = document.getElementById(btn.dataset.jump);
+    if (!t) return;
+    if (t.tagName === "DETAILS") t.open = true;
+    t.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  wireScrollSpy(nav);
   // Delegated actions inside the rendered sections.
   sec.addEventListener("click", (e) => {
     // a used cell opens in the Cells library (function, layout, drive strengths)
@@ -185,7 +198,7 @@ function wireOnce() {
     const pick = e.target.closest("[data-an-run]");
     if (pick && ctx.contextRow(pick.dataset.anRun)) {
       ctx.setRun(pick.dataset.anRun);
-      showView("results", "summary");
+      document.getElementById("an-overview")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
     const exp = e.target.closest("[data-an-expand]");
@@ -267,11 +280,6 @@ async function loadTrends(dir) {
 // The first screen (overview, timing) is drawn at once; the sections below it
 // follow one per task, so no single task builds all 9k nodes (half a second
 // on a slow laptop). A newer paint drops the rest of an older one.
-// A view that was hidden when the page drew has charts without a width yet.
-export function redrawCharts() {
-  C.drawCharts(document.getElementById("an-body"));
-}
-
 let _paintSeq = 0;
 function paint() {
   if (!_ctx) return;

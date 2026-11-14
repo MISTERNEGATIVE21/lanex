@@ -105,14 +105,14 @@ async function paintStatus() {
   // The count first: a narrow window cuts the end of the line, not the count.
   el.textContent = "Step " + c.current + " of " + c.total + (c.stage ? " · " + FS.stageLabel(c.stage) : "") + (name ? " · " + name : "") +
     (typeof eta === "number" && eta > 0 ? " · ~" + Math.max(1, Math.round(eta / 60)) + " min left" : "");
-  el.dataset.go = "flow";
+  el.dataset.go = "pipeline";
   delete el.dataset.tone;
   el.title = "";
 }
 
 // A ring on the Flow tab while a run goes; a red mark when the last run failed.
 function paintRail(failed) {
-  const tab = document.querySelector('.side-tab[data-tab="flow"]');
+  const tab = document.querySelector('.side-tab[data-tab="pipeline"]');
   if (!tab) return;
   const running = !!(state.status && state.status.running);
   const c = running ? current() : null;
@@ -159,7 +159,7 @@ export async function runFinished(ev) {
     status.textContent = _result + (out.tail ? " · " + out.tail : "");
     status.dataset.tone = out.tone;
     status.title = out.title;
-    status.dataset.go = "flow";
+    status.dataset.go = "pipeline";
   }
   const pill = document.getElementById("run-pill");
   if (pill) {
@@ -182,7 +182,7 @@ export async function runFinished(ev) {
   const acts =
     kind === "clean" ? [{ label: "See chip", run: () => go("layout") }, { label: "Sign-off", run: () => go("verify") }]
     : kind === "checks-failed" ? [{ label: "Show the problems", run: () => go("verify", { section: "vf-checks" }) }]
-    : kind === "halted" ? [{ label: "Why", run: () => go("flow") }]
+    : kind === "halted" ? [{ label: "Why", run: () => go("pipeline") }]
     : [];
   if (rv && rv.state === "warning") acts.splice(0, acts.length, { label: "Show timing", run: () => go("verify") }, { label: "See chip", run: () => go("layout") });
   const msg = out.title + (out.body ? (/: /.test(out.title) ? ". " : ": ") + out.body : "");
@@ -258,7 +258,7 @@ function notify(sum, kind) {
     n.onshow = () => { state.lastNotice = { shown: Date.now(), title: sum.title }; };
     n.onclick = () => {
       window.focus();
-      import("./nav.js").then((m) => m.go(kind === "clean" ? "layout" : "flow"));
+      import("./nav.js").then((m) => m.go(kind === "clean" ? "layout" : "pipeline"));
       n.close();
     };
   } catch (_e) { /* a browser without page notifications */ }

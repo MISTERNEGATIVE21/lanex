@@ -3,15 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>LanEx</title>
-  <meta name="description" content="A cockpit for LibreLane: Verilog to a chip layout." />
+  <title>LanEx: RTL to GDSII cockpit</title>
+  <meta name="description" content="A cockpit for LibreLane." />
   <link rel="stylesheet" href="/static/fonts.css" />
-  <link rel="stylesheet" href="/static/tokens.css" />
-  <link rel="stylesheet" href="/static/ui.css" />
-  <link rel="stylesheet" href="/static/frame.css" />
-  <link rel="stylesheet" href="/static/legacy.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/features.css" />
   <link rel="stylesheet" href="/static/ide.css" />
-  <link rel="stylesheet" href="/static/project.css" />
+  <link rel="stylesheet" href="/static/shell.css" />
+  <link rel="stylesheet" href="/static/setup.css" />
   <link rel="stylesheet" href="/static/analytics.css" />
   <link rel="stylesheet" href="/static/verify.css" />
   <link rel="stylesheet" href="/static/flow.css" />
@@ -24,7 +23,6 @@
   <link rel="stylesheet" href="/static/vendor/driverjs/driver.css" />
   <link rel="stylesheet" href="/static/guide.css" />
   <link rel="stylesheet" href="/static/skeleton.css" />
-  <link rel="stylesheet" href="/static/settings.css" />
   <!-- The modules the first paint needs (app.js's static imports, all of
        them): fetched side by side now instead of one import level at a time.
        Page modules load on demand (app.js PAGES). frontend_test.mjs checks
@@ -32,90 +30,75 @@
   <link rel="modulepreload" href="/static/app.js" />
   <link rel="modulepreload" href="/static/modules/api.js" />
   <link rel="modulepreload" href="/static/modules/state.js" />
-  <link rel="modulepreload" href="/static/modules/tabs.js" />
-  <link rel="modulepreload" href="/static/modules/nav.js" />
-  <link rel="modulepreload" href="/static/modules/icons.js" />
-  <link rel="modulepreload" href="/static/modules/context.js" />
   <link rel="modulepreload" href="/static/modules/setup.js" />
   <link rel="modulepreload" href="/static/modules/config.js" />
-  <link rel="modulepreload" href="/static/modules/toast.js" />
-  <link rel="modulepreload" href="/static/modules/jumpnav.js" />
   <link rel="modulepreload" href="/static/modules/fs.js" />
   <link rel="modulepreload" href="/static/modules/preflight.js" />
-  <link rel="modulepreload" href="/static/modules/pdkinfo.js" />
-  <link rel="modulepreload" href="/static/modules/flowstages.js" />
-  <link rel="modulepreload" href="/static/modules/theme.js" />
-  <link rel="modulepreload" href="/static/modules/hotkeys.js" />
-  <link rel="modulepreload" href="/static/modules/density.js" />
-  <link rel="modulepreload" href="/static/modules/prefs.js" />
+  <link rel="modulepreload" href="/static/modules/nav.js" />
+  <link rel="modulepreload" href="/static/modules/tabs.js" />
+  <link rel="modulepreload" href="/static/modules/context.js" />
   <link rel="modulepreload" href="/static/modules/shell.js" />
-  <link rel="modulepreload" href="/static/modules/overlay.js" />
-  <link rel="modulepreload" href="/static/modules/zoom.js" />
   <link rel="modulepreload" href="/static/modules/palette.js" />
-  <link rel="modulepreload" href="/static/modules/runmode.js" />
-  <link rel="modulepreload" href="/static/modules/dialog.js" />
   <link rel="modulepreload" href="/static/modules/palettemodel.js" />
   <link rel="modulepreload" href="/static/modules/help.js" />
+  <link rel="modulepreload" href="/static/modules/wizard.js" />
   <link rel="modulepreload" href="/static/modules/runend.js" />
   <link rel="modulepreload" href="/static/modules/reportcard.js" />
   <link rel="modulepreload" href="/static/modules/verify-model.js" />
   <link rel="modulepreload" href="/static/modules/problems.js" />
-  <link rel="modulepreload" href="/static/modules/logs.js" />
+  <link rel="modulepreload" href="/static/modules/dialog.js" />
   <link rel="modulepreload" href="/static/modules/loading.js" />
-  <link rel="modulepreload" href="/static/modules/wizard.js" />
-  <link rel="modulepreload" href="/static/modules/fullscreen.js" />
+  <link rel="modulepreload" href="/static/modules/zoom.js" />
+  <link rel="modulepreload" href="/static/modules/hotkeys.js" />
+  <link rel="modulepreload" href="/static/modules/density.js" />
+  <link rel="modulepreload" href="/static/modules/jumpnav.js" />
+  <link rel="modulepreload" href="/static/modules/flowstages.js" />
+  <link rel="modulepreload" href="/static/modules/icons.js" />
+  <link rel="modulepreload" href="/static/modules/toast.js" />
   <link rel="modulepreload" href="/static/modules/tooltip.js" />
-  <link rel="modulepreload" href="/static/modules/runbar.js" />
-  <link rel="modulepreload" href="/static/modules/verdict.js" />
-  <link rel="modulepreload" href="/static/modules/views.js" />
+  <link rel="modulepreload" href="/static/modules/pdkinfo.js" />
+  <link rel="modulepreload" href="/static/modules/fullscreen.js" />
+  <link rel="modulepreload" href="/static/modules/runmode.js" />
+  <link rel="modulepreload" href="/static/modules/logs.js" />
+  <link rel="modulepreload" href="/static/modules/theme.js" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
   <link rel="manifest" href="/static/manifest.json" />
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f5f9" />
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c1017" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f7fb" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1524" />
   <link rel="apple-touch-icon" href="/static/vendor/icon-192.png" />
   <!-- Metric tables must never be rewritten by browser auto-translate (it
        mangles numeric text nodes) — this page displays signoff numbers. -->
   <meta name="google" content="notranslate" />
-  <!-- The theme before the first paint: the saved choice, else the system's. -->
-  <script>
-    (function () {
-      var t = "system";
-      try { t = localStorage.getItem("ll.theme") || "system"; } catch (e) {}
-      var light = t === "light" || (t !== "dark" && window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches);
-      document.documentElement.dataset.theme = light ? "light" : "dark";
-    })();
-  </script>
 </head>
 <body class="theme-dark">
-  <script>if (document.documentElement.dataset.theme === "light") { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); }</script>
   <!-- Splash: covers the whole window until boot() finishes. -->
   <div class="splash" id="splash">
     <div class="splash-inner">
       <img class="splash-logo logo--dark" src="/static/vendor/lanex-logo-dark.png" alt="LanEx" />
       <img class="splash-logo logo--light" src="/static/vendor/lanex-logo-light.png" alt="LanEx" />
-      <div class="progress is-busy splash-bar"><i></i></div>
-      <div class="splash-status" id="splash-status">Starting…</div>
+      <div class="splash-spinner"></div>
+      <div class="splash-status" id="splash-status">booting…</div>
     </div>
   </div>
 
   <div id="app" class="layout" style="display:none">
-    <!-- Top bar: the project, the run in view, search, Run, one menu. -->
+    <!-- Reticle edge: identity, project, search, run, and the few global controls. -->
     <header class="topbar">
       <div class="brand">
-        <img class="brand-logo logo--dark" src="/static/vendor/lanex-wordmark-dark.png" alt="LanEx" width="80" height="22" />
-        <img class="brand-logo logo--light" src="/static/vendor/lanex-wordmark-light.png" alt="LanEx" width="81" height="22" />
+        <img class="brand-logo logo--dark" src="/static/vendor/lanex-wordmark-dark.png" alt="LanEx" width="95" height="26" />
+        <img class="brand-logo logo--light" src="/static/vendor/lanex-wordmark-light.png" alt="LanEx" width="96" height="26" />
       </div>
 
       <div class="tb-project">
-        <button id="design-pill" class="tb-pick" aria-haspopup="menu" aria-expanded="false" aria-controls="project-menu" data-tip="Switch, create or open a project">
-          <span class="tb-pick-k">Project</span>
+        <button id="design-pill" class="project-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="project-menu" data-tip="Switch, create or open a project">
+          <span class="project-kicker">Project</span>
           <span class="text">No project open</span>
           <svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
         </button>
         <div class="menu project-menu" id="project-menu" role="menu" hidden>
-          <div class="menu-label">Recent projects</div>
+          <div class="menu-lane">Recent projects</div>
           <div class="project-recents" id="project-recents"></div>
           <div class="menu-sep" role="separator"></div>
           <button class="menu-item" role="menuitem" id="btn-new-project">
@@ -131,287 +114,306 @@
             <span id="reveal-label">Show in file manager</span>
           </button>
         </div>
+        <!-- Shown after following a link from another page (nav.js). -->
+        <button id="nav-back" class="nav-back" hidden><span class="nav-back-k">Back to</span><span class="nav-back-to"></span></button>
       </div>
 
-      <!-- The run in view: one control for every page (runbar.js). -->
-      <div class="tb-run rb-host" id="top-runbar"></div>
-
-      <!-- Shown after following a link from another page (nav.js). -->
-      <button id="nav-back" class="nav-back" hidden><span class="nav-back-k">Back to</span><span class="nav-back-to"></span></button>
-
-      <span class="tb-space"></span>
-
-      <button id="palette-btn" class="tb-search" aria-label="Search commands (Ctrl K)">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5"/></svg>
-        <span class="tb-search-l">Search</span>
-        <kbd>Ctrl K</kbd>
+      <button id="palette-btn" class="cmdk-launcher" aria-label="Search commands (Ctrl K)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5"/></svg>
+        <span class="cmdk-lbl">Search commands</span>
+        <kbd class="cmdk-hintkey">Ctrl K</kbd>
       </button>
 
-      <!-- Settings that apply to the next run only are never invisible. -->
-      <button id="oneoff-chip" class="chip chip-clickable" data-go="config" data-go-view="changed" data-tip="Settings that apply to runs started here and are not in the config file" hidden></button>
-
-      <div class="run-split split" role="group" aria-label="Run">
-        <button id="btn-run-global" class="btn btn-primary run-main" disabled data-tip="Run the flow on this project (r)">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg><span>Run</span>
-        </button>
-        <button id="run-opts-btn" class="btn btn-primary run-opts" aria-haspopup="menu" aria-expanded="false" aria-controls="run-menu" aria-label="Run options" data-tip="What to run, how, and what happens when it ends">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-        <!-- The Run menu: what, how, when (audit 6.3). Flow picker, only / skip,
-             threads, priority, keep-awake and the queue arrive with phase 2. -->
-        <div class="menu run-menu" id="run-menu" role="menu" aria-label="Run options" hidden>
-          <div class="rm-sec" data-keep>
-            <div class="menu-label">What</div>
-            <label class="rm-row"><span>Run up to</span><select id="run-stop-after" class="inp-sm" aria-label="Stop the run after a stage"></select></label>
-            <label class="rm-row"><span>Start from</span><select id="run-resume-from" class="inp-sm" aria-label="Resume from a stage of the run in view"></select></label>
-            <p class="menu-note" id="run-resume-note"></p>
-          </div>
-          <div class="menu-sep" role="separator"></div>
-          <div class="rm-sec" data-keep>
-            <div class="menu-label">How</div>
-            <div class="rm-row"><span>Engine</span>
-              <div class="seg seg-sm" role="group" aria-label="Engine">
-                <button class="engine-btn engine-btn-active" data-runmode="container" data-tip="Recommended. Every EDA tool comes in LibreLane's image.">Container</button>
-                <button class="engine-btn" data-runmode="local" data-tip="Use the EDA tools installed on this machine.">Local tools</button>
-              </div>
-            </div>
-            <div class="rm-row"><span>Mode</span>
-              <div class="seg seg-sm" role="group" aria-label="Mode">
-                <button class="mode-btn mode-btn-active" data-mode="auto" data-tip="Every step, start to finish, ending in a GDS.">Full auto</button>
-                <button class="mode-btn" data-mode="semi" data-tip="Pause after each step so you can inspect it.">Step by step</button>
-              </div>
-            </div>
-          </div>
-          <div class="menu-sep" role="separator"></div>
-          <div class="rm-sec" data-keep>
-            <div class="menu-label">When it runs</div>
-            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-show"/><span>Show Flow when a run starts</span></label>
-            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-notify"/><span>Tell me when a run finishes</span></label>
-            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-chime"/><span>Play a sound</span></label>
-          </div>
-          <div class="menu-sep" role="separator"></div>
-          <button class="menu-item" role="menuitem" data-go="console" data-go-pane="command">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg>
-            <span>Show the command</span>
+      <div class="tb-right">
+        <div class="run-split" role="group" aria-label="Run">
+          <button id="btn-run-global" class="run-main" disabled data-tip="Run the flow on this project (r)">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg><span>Run</span>
           </button>
+          <button id="run-opts-btn" class="run-opts" aria-haspopup="menu" aria-expanded="false" aria-controls="run-menu" aria-label="Run options" data-tip="Run mode and engine">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="menu run-menu" id="run-menu" role="menu" hidden>
+            <div class="menu-lane">Mode</div>
+            <button class="menu-item menu-radio mode-btn mode-btn-active" role="menuitemradio" data-mode="auto">
+              <span class="radio" aria-hidden="true"></span>
+              <span class="mi-text"><b>Full auto</b><small>Every step, start to finish, ending in a GDS.</small></span>
+            </button>
+            <button class="menu-item menu-radio mode-btn" role="menuitemradio" data-mode="semi">
+              <span class="radio" aria-hidden="true"></span>
+              <span class="mi-text"><b>Step by step</b><small>Pause after each step so you can inspect it.</small></span>
+            </button>
+            <div class="menu-sep" role="separator"></div>
+            <div class="menu-lane">Engine</div>
+            <button class="menu-item menu-radio engine-btn engine-btn-active" role="menuitemradio" data-runmode="container">
+              <span class="radio" aria-hidden="true"></span>
+              <span class="mi-text"><b>Container</b><small>Recommended. Every EDA tool comes in LibreLane's image.</small></span>
+            </button>
+            <button class="menu-item menu-radio engine-btn" role="menuitemradio" data-runmode="local">
+              <span class="radio" aria-hidden="true"></span>
+              <span class="mi-text"><b>Local tools</b><small>Use the EDA tools installed on this machine.</small></span>
+            </button>
+            <div class="menu-sep" role="separator"></div>
+            <div class="menu-lane">Run up to</div>
+            <label class="menu-field"><select id="run-stop-after" aria-label="Stop the run after a stage"></select></label>
+            <div class="menu-lane">Resume from</div>
+            <label class="menu-field"><select id="run-resume-from" aria-label="Resume from a stage of the run on the results pages"></select></label>
+            <p class="menu-note" id="run-resume-note"></p>
+            <div class="menu-sep" role="separator"></div>
+            <div class="menu-lane">While it runs</div>
+            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-show"/>
+              <span class="mi-text"><b>Show the flow when a run starts</b><small>Otherwise you stay on the page you're on.</small></span></label>
+            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-notify"/>
+              <span class="mi-text"><b>Tell me when a run finishes</b><small>A notification with the result while LanEx is in the background.</small></span></label>
+            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-chime"/>
+              <span class="mi-text"><b>Play a sound</b><small>A short chime when a run ends.</small></span></label>
+          </div>
         </div>
-      </div>
 
-      <div class="tb-app">
-        <button id="app-menu-btn" class="iconbtn" aria-haspopup="menu" aria-expanded="false" aria-controls="app-menu" aria-label="Help, appearance and settings" data-tip="Help, appearance and settings">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
+        <span class="tb-sep" aria-hidden="true"></span>
+
+        <button id="tools-icon" class="iconbtn" aria-label="Tools and PDKs" data-tip="Tools and PDKs">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-3 3-2-2z"/></svg>
+          <span id="tools-count" class="badge" hidden></span>
         </button>
-        <div class="menu app-menu" id="app-menu" role="menu" aria-label="Help, appearance and settings" hidden>
-          <button class="menu-item" role="menuitem" id="help-icon"><span>Help and glossary</span><kbd>?</kbd></button>
-          <button class="menu-item" role="menuitem" data-app="keys"><span>Keyboard shortcuts</span></button>
-          <button class="menu-item" role="menuitem" data-app="first-chip"><span>First-chip guide</span></button>
-          <button class="menu-item" role="menuitem" data-app="tour"><span>Take the tour</span></button>
-          <div class="menu-sep" role="separator"></div>
-          <div class="rm-row" data-keep><span>Theme</span>
-            <div class="seg seg-sm" role="group" aria-label="Theme" id="theme-seg">
-              <button data-theme="system">System</button>
-              <button data-theme="dark">Dark</button>
-              <button data-theme="light">Light</button>
-            </div>
-          </div>
-          <div class="rm-row" data-keep><span>Size</span>
-            <span class="zoom-ctl" role="group" aria-label="Interface size">
-              <button id="zoom-out-btn" class="iconbtn iconbtn-sm" aria-label="Smaller">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>
-              </button>
-              <button id="zoom-pct" class="zoom-pct is-auto" aria-label="Interface size">100%</button>
-              <button id="zoom-in-btn" class="iconbtn iconbtn-sm" aria-label="Larger">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-              </button>
-            </span>
-          </div>
-          <div class="menu-sep" role="separator"></div>
-          <button class="menu-item" role="menuitem" data-go="settings"><span>Settings</span></button>
-          <button class="menu-item" role="menuitem" data-app="about"><span>About LanEx</span></button>
-        </div>
+        <button id="help-icon" class="iconbtn" aria-label="Help, glossary and shortcuts" data-tip="Help, glossary and shortcuts (?)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.2 9.2a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.4-2.8 4M12 17.2h.01"/></svg>
+        </button>
+        <span class="zoom-ctl" role="group" aria-label="Interface size">
+          <button id="zoom-out-btn" class="iconbtn iconbtn-sm" aria-label="Smaller" data-tip="Smaller">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+          </button>
+          <button id="zoom-pct" class="zoom-pct is-auto" aria-label="Interface size" data-tip="Sized for this screen">100%</button>
+          <button id="zoom-in-btn" class="iconbtn iconbtn-sm" aria-label="Larger" data-tip="Larger">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </span>
+        <button id="theme-btn" class="iconbtn" aria-label="Switch light or dark" data-tip="Light / dark (t)">
+          <svg class="ico-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M20 13.2A8 8 0 1 1 10.8 4a6.3 6.3 0 0 0 9.2 9.2z"/></svg>
+          <svg class="ico-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
       </div>
     </header>
 
-    <!-- The rail: the places people work in, in the order of the journey.
+    <!-- Shuttle index: every tab is a die on the plate, grouped by activity.
          tabs.js / hotkeys address tabs by data-tab, so the wrappers are free. -->
-    <nav class="side-tabs" role="tablist" aria-orientation="vertical" aria-label="Pages">
-      <div class="rail-group">
-        <button class="side-tab side-tab-active" data-tab="setup" data-tip="The project: its design, its sources, ready to run">
-          <span class="ico"></span><span class="label">Project</span>
+    <nav class="side-tabs" role="tablist" aria-orientation="vertical" aria-label="Sections">
+      <div class="rail-group" style="--n:3">
+        <span class="rail-label">Design</span>
+        <button class="side-tab side-tab-active" data-tab="setup" data-tip="Your design, PDK and run settings">
+          <span class="ico"></span><span class="label">Setup</span>
         </button>
-        <button class="side-tab" data-tab="ide" data-tip="Edit, check and simulate the Verilog">
-          <span class="ico"></span><span class="label">Code</span>
+        <button class="side-tab" data-tab="ide" data-tip="Edit, lint and simulate Verilog">
+          <span class="ico"></span><span class="label">RTL IDE</span>
         </button>
-        <button class="side-tab" data-tab="config" data-tip="Every setting the flow will use">
-          <span class="ico"></span><span class="label">Config</span>
+        <button class="side-tab" data-tab="cells" data-tip="Standard cells, memories and macros, and which cells the flow may use">
+          <span class="ico"></span><span class="label">Cells</span>
         </button>
       </div>
-      <div class="rail-group">
-        <button class="side-tab" data-tab="flow" data-tip="One run, stage by stage: where it is, why it stopped">
+      <div class="rail-group" style="--n:2">
+        <span class="rail-label">Run</span>
+        <button class="side-tab" data-tab="pipeline" data-tip="A run stage by stage: where it is, how long it took, why it stopped">
           <span class="ico"></span><span class="label">Flow</span>
         </button>
-        <button class="side-tab" data-tab="runs" data-tip="Every run and sweep">
+        <button class="side-tab" data-tab="runs" data-tip="Every run and sweep: compare, pick a baseline, sweep a setting">
           <span class="ico"></span><span class="label">Runs</span>
         </button>
       </div>
-      <div class="rail-group">
-        <button class="side-tab" data-tab="results" data-tip="How a run came out: checks, timing, area, power, every metric">
-          <span class="ico"></span><span class="label">Results</span>
-        </button>
-        <button class="side-tab" data-tab="layout" data-tip="See the chip: every stage, every layer">
+      <div class="rail-group" style="--n:3">
+        <span class="rail-label">Results</span>
+        <button class="side-tab" data-tab="layout" data-tip="See your chip: every flow stage, every layer, and the desktop viewers">
           <span class="ico"></span><span class="label">Layout</span>
         </button>
-        <button class="side-tab" data-tab="cells" data-tip="Cells, macros and which cells the flow may use">
-          <span class="ico"></span><span class="label">Library</span>
+        <button class="side-tab" data-tab="analytics" data-tip="How a run went: timing, area, power, routing and every metric">
+          <span class="ico"></span><span class="label">Analytics</span>
+        </button>
+        <button class="side-tab" data-tab="verify" data-tip="DRC, LVS, antenna and timing sign-off checks">
+          <span class="ico"></span><span class="label">Verify</span>
         </button>
       </div>
-      <div class="rail-group rail-foot">
-        <button class="side-tab" data-tab="tools" data-tip="The tools and PDKs on this machine">
+      <div class="rail-group rail-foot" style="--n:1">
+        <span class="rail-label">System</span>
+        <button class="side-tab" data-tab="tools" data-tip="Install or check EDA tools and PDKs">
           <span class="ico"></span><span class="label">Tools</span>
-          <span id="tools-count" class="badge" hidden></span>
-        </button>
-        <button class="side-tab" data-tab="settings" data-tip="Preferences">
-          <span class="ico"></span><span class="label">Settings</span>
         </button>
       </div>
     </nav>
 
   <!-- Main work area -->
   <main class="work">
-    <!-- PROJECT (id "setup"): open or start a project, see that it is ready, run it. -->
+    <!-- SETUP -->
     <section class="section section-active no-project" id="sec-setup">
-
-      <!-- No project open: the ways in, and nothing else. -->
-      <div class="pj-start" id="project-empty">
-        <h1>Start a project</h1>
-        <p class="read">A project is one chip design: a folder with your Verilog, its testbenches and the config LibreLane runs.</p>
-        <div class="pj-start-acts">
-          <button class="btn btn-primary btn-lg" data-open="new-project">New project…</button>
-          <button class="btn btn-lg" id="btn-browse-folder">Open a folder…</button>
-          <button class="btn btn-lg" data-open="example" data-tip="Blinky goes from Verilog to a layout in under a minute">Try the Blinky example</button>
-        </div>
-        <section class="pj-recent" id="pj-recent" aria-labelledby="hub-list-label">
-          <div class="pj-recent-h"><h2 id="hub-list-label">Recent projects</h2><button class="link" data-open="manage">Manage…</button></div>
-          <div class="hub-rows" id="hub-rows"></div>
-        </section>
-        <details class="path-entry" id="path-entry">
-          <summary>Paste a folder path</summary>
-          <div class="picker-row">
-            <input type="text" id="design-dir-input" placeholder="C:\Users\you\my-chip   or   /home/you/my-chip" autocomplete="off" spellcheck="false" aria-label="Folder path"/>
-            <button class="btn" id="btn-set-design">Open</button>
-          </div>
-        </details>
+      <div class="section-jump-stack">
+        <nav class="section-jump" id="setup-jump" aria-label="Sections of this page">
+          <button class="chip chip-clickable" data-jump="setup-design">Project</button>
+          <button class="chip chip-clickable" data-jump="setup-sources">Sources</button>
+          <button class="chip chip-clickable" data-jump="setup-pdk">PDK</button>
+          <button class="chip chip-clickable" data-jump="setup-settings">Settings</button>
+          <button class="chip chip-clickable" data-jump="setup-preflight">Run</button>
+          <button class="chip chip-clickable" data-jump="cfg-card">All settings</button>
+        </nav>
       </div>
 
-      <!-- A project is open. -->
-      <div class="pj" id="project-open" hidden>
-        <header class="pj-head">
-          <h1 class="proj-name" id="proj-name"></h1>
-          <span class="proj-path" id="proj-path"></span>
-          <span class="spacer"></span>
-          <button class="btn btn-quiet btn-sm" data-open="ide">Open in Code</button>
-          <button class="btn btn-quiet btn-sm" data-open="reveal" id="proj-reveal">Show in Explorer</button>
-        </header>
-        <div id="autoconfig-banner" class="autoconfig-banner" hidden></div>
+      <!-- Welcome hero: the pitch, the process stack, the three steps and the pickers. -->
+      <div class="hero" id="hero">
+        <div class="hero-inner">
+          <div class="hero-head">
+            <div class="hero-copy">
+              <p class="section-eyebrow">open-silicon flow · sky130 · gf180mcu</p>
+              <h1>Take Verilog <span class="hl">all the way to silicon.</span></h1>
+              <p class="hero-sub">
+                LibreLane is the open-source flow that turns Verilog into a chip layout on
+                <strong>SkyWater 130&nbsp;nm</strong>, <strong>GF 180&nbsp;nm MCU</strong> and other open
+                processes. LanEx runs it for you, one step at a time, with no terminal.
+              </p>
+            </div>
+            <!-- Signature: the chip's process-layer stack, built bottom-up like the flow.
+                 setup.js redraws it for the selected PDK. -->
+            <aside class="layer-stack" id="layer-stack" aria-hidden="true">
+              <div class="ls-layer" style="--lc:var(--met5);--lsw:90%" title="met5"><span class="ls-bar"></span><span class="ls-tag">met5</span></div>
+              <div class="ls-layer" style="--lc:var(--met4);--lsw:81%" title="met4"><span class="ls-bar"></span><span class="ls-tag">met4</span></div>
+              <div class="ls-layer" style="--lc:var(--met3);--lsw:72%" title="met3"><span class="ls-bar"></span><span class="ls-tag">met3</span></div>
+              <div class="ls-layer" style="--lc:var(--met2);--lsw:63%" title="met2"><span class="ls-bar"></span><span class="ls-tag">met2</span></div>
+              <div class="ls-layer" style="--lc:var(--met1);--lsw:54%" title="met1"><span class="ls-bar"></span><span class="ls-tag">met1</span></div>
+              <div class="ls-layer" style="--lc:var(--li);--lsw:45%" title="li1"><span class="ls-bar"></span><span class="ls-tag">li1</span></div>
+              <div class="ls-layer" style="--lc:var(--poly);--lsw:36%" title="poly"><span class="ls-bar"></span><span class="ls-tag">poly</span></div>
+              <div class="ls-sub">substrate · 130&nbsp;nm</div>
+            </aside>
+          </div>
+          <ol class="steps-3" id="onboard-checklist">
+            <li data-ck="design">
+              <span class="step-no" aria-hidden="true">1</span>
+              <div class="step-text"><b>Open a project</b><span>A new one, an example, or a folder with your Verilog.</span></div>
+              <button class="btn btn-sm step-act" data-step-act="project">New project</button>
+            </li>
+            <li data-ck="rtl">
+              <span class="step-no" aria-hidden="true">2</span>
+              <div class="step-text"><b>Write and simulate</b><span>Check the syntax and run a testbench before the long run.</span></div>
+              <button class="btn btn-sm btn-ghost step-act" data-step-act="ide">RTL IDE</button>
+            </li>
+            <li data-ck="pdk">
+              <span class="step-no" aria-hidden="true">3</span>
+              <div class="step-text"><b>Pick PDK and settings</b><span>sky130A is the default. Most designs change two or three settings.</span></div>
+              <button class="btn btn-sm btn-ghost step-act" data-step-act="pdk">Change</button>
+            </li>
+            <li data-ck="run">
+              <span class="step-no" aria-hidden="true">4</span>
+              <div class="step-text"><b>Run the flow</b><span>Each stage lights up as it finishes. The GDS lands in <code>runs/&lt;name&gt;/final</code>.</span></div>
+              <button class="btn btn-sm btn-ghost step-act" data-step-act="run">Go to Run</button>
+            </li>
+          </ol>
 
-        <div class="pj-grid">
-          <div class="pj-main">
-            <!-- Design: what is built, on which clock, for which process. Saved in the config. -->
-            <section class="panel" id="setup-design" aria-labelledby="pj-design-h">
-              <div class="panel-h">
-                <h2 id="pj-design-h">Design</h2>
-                <span class="spacer"></span>
-                <span id="pdk-readiness" class="pill pill-pending">checking…</span>
-              </div>
-              <div class="panel-b">
-                <div class="pj-fields proj-design" id="proj-design">
-                  <!-- .pd-src: where the value comes from (projectcard.js), shown on hover -->
-                  <div class="pd-field"><span class="pd-l"><label for="pd-top">Top module</label><span class="pd-src" data-src-key="DESIGN_NAME"></span></span><select id="pd-top"></select></div>
-                  <div class="pd-field"><span class="pd-l"><label for="pd-clock">Clock port</label><span class="pd-src" data-src-key="CLOCK_PORT"></span></span><select id="pd-clock"></select></div>
-                  <div class="pd-field pd-field-period"><span class="pd-l"><label for="pd-period">Clock period</label><span class="pd-src" data-src-key="CLOCK_PERIOD"></span></span>
-                    <span class="pd-period inp-unit"><input id="pd-period" type="number" min="0.1" step="0.1" inputmode="decimal"/><em>ns</em></span>
-                    <small id="pd-mhz"></small></div>
-                  <div class="pj-pdk" id="setup-pdk">
-                    <div class="pd-field"><span class="pd-l"><label for="pdk-select">Process (PDK)</label><span class="pd-src" data-src-key="PDK"></span></span><select id="pdk-select"></select></div>
-                    <div class="pd-field"><span class="pd-l"><label for="scl-select">Cell library</label><span class="pd-src" data-src-key="STD_CELL_LIBRARY"></span></span><select id="scl-select"></select></div>
+          <!-- Project hub: the open project on the left, every known project on the right -->
+          <div class="picker project-hub" id="setup-design">
+            <div class="hub-grid">
+              <section class="hub-current" aria-labelledby="hub-current-label">
+                <span class="hub-label" id="hub-current-label">Get started</span>
+                <!-- Nothing open: the three ways in. Each lives here and only here. -->
+                <div class="project-empty-state" id="project-empty">
+                  <div class="proj-name">Start a project</div>
+                  <p>A project is one chip design: a folder with your Verilog, its testbenches, any constraint files and the <code>config.json</code> LibreLane runs.</p>
+                  <div class="start-tiles">
+                    <button class="start-tile is-primary" data-open="new-project">
+                      <span class="st-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+                      <span class="st-text"><b>New project</b><small>Blank or from an example. Opens the RTL IDE on your top module.</small></span>
+                    </button>
+                    <button class="start-tile" id="btn-browse-folder">
+                      <span class="st-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+                      <span class="st-text"><b>Open a folder</b><small>Verilog you already have, or a LibreLane or OpenLane design with its config.</small></span>
+                    </button>
+                    <button class="start-tile" data-open="example">
+                      <span class="st-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l13 8-13 8z"/></svg></span>
+                      <span class="st-text"><b>Try an example</b><small>Blinky goes from Verilog to a GDS in a few minutes. The quickest way to see the whole flow.</small></span>
+                    </button>
                   </div>
                 </div>
-                <p class="pdk-about" id="pdk-about"></p>
-                <p class="pd-status" id="pd-status" role="status"></p>
-                <div id="design-summary" class="proj-notes" role="status"></div>
-              </div>
-            </section>
-
-            <!-- Sources: the files, and which of them go into the chip. -->
-            <section class="panel panel-flush" id="setup-sources" aria-labelledby="pj-src-h">
-              <div class="panel-h">
-                <h2 id="pj-src-h">Sources</h2>
-                <span class="muted" id="filesel-count"></span>
-                <span class="spacer"></span>
-                <button class="btn btn-quiet btn-sm" data-open="new-file"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New file</button>
-                <button class="btn btn-quiet btn-sm" id="btn-add-files">Add files…</button>
-                <button class="btn-icon btn-sm" id="btn-filesel-refresh" aria-label="Rescan the project folder" data-tip="Rescan the project folder"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg></button>
-              </div>
-              <div class="filesel-card" id="filesel-card" hidden>
-                <div id="filesel-list" class="filesel-list"></div>
-                <div class="filesel-foot" id="filesel-foot" hidden>
-                  <button class="link" id="btn-filesel-all">Tick all design files</button>
-                  <button class="link" id="btn-filesel-none">Untick all</button>
+                <div class="project-open-state" id="project-open" hidden>
+                  <div class="proj-name" id="proj-name"></div>
+                  <div class="proj-path" id="proj-path"></div>
+                  <div class="proj-design" id="proj-design">
+                    <!-- .pd-src: the source button of the value (projectcard.js), outside the label -->
+                    <div class="pd-field"><span><label for="pd-top">Top module</label><span class="pd-src" data-src-key="DESIGN_NAME"></span></span><select id="pd-top"></select></div>
+                    <div class="pd-field"><span><label for="pd-clock">Clock port</label><span class="pd-src" data-src-key="CLOCK_PORT"></span></span><select id="pd-clock"></select></div>
+                    <div class="pd-field"><span><label for="pd-period">Clock period</label><span class="pd-src" data-src-key="CLOCK_PERIOD"></span></span>
+                      <span class="pd-period"><input id="pd-period" type="number" min="0.1" step="0.1" inputmode="decimal"/><em>ns</em></span>
+                      <small id="pd-mhz"></small></div>
+                  </div>
+                  <p class="pd-status" id="pd-status" role="status"></p>
+                  <p class="proj-lastrun" id="proj-lastrun"></p>
+                  <div id="design-summary" class="proj-notes" role="status"></div>
+                  <div class="picker-actions">
+                    <button class="btn btn-primary" data-open="ide">Open in RTL IDE</button>
+                    <button class="btn" data-open="reveal" id="proj-reveal">Show in Explorer</button>
+                  </div>
                 </div>
-                <details class="extras-entry">
-                  <summary>Files outside this project</summary>
-                  <p class="hint">Paths to extra files the run needs that live somewhere else, such as a shared <code>pin_order.cfg</code>. Separate them with commas.</p>
-                  <input type="text" id="filesel-extras" placeholder="/path/to/pin_order.cfg, /path/to/other.v" spellcheck="false" aria-label="Files outside this project"/>
-                </details>
-              </div>
-            </section>
+              </section>
+              <section class="hub-list" aria-labelledby="hub-list-label">
+                <div class="hub-list-head">
+                  <span class="hub-label" id="hub-list-label">Your projects</span>
+                </div>
+                <div class="hub-rows" id="hub-rows"></div>
+                <div class="hub-foot">
+                  <!-- Switching to another project: shown only while one is open
+                       (with none open, the start tiles on the left do this). -->
+                  <div class="hub-switch" id="hub-switch" hidden>
+                    <button class="btn btn-sm" data-open="new-project"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New project</button>
+                    <button class="btn btn-sm btn-ghost" data-open="open-folder">Open folder…</button>
+                  </div>
+                  <button class="linklike" data-open="manage">Manage projects…</button>
+                  <details class="path-entry" id="path-entry">
+                    <summary>Type or paste a folder path</summary>
+                    <div class="picker-row">
+                      <input type="text" id="design-dir-input" placeholder="C:\Users\you\my-chip   or   /home/you/my-chip" autocomplete="off" spellcheck="false"/>
+                      <button class="btn" id="btn-set-design">Open</button>
+                    </div>
+                  </details>
+                </div>
+              </section>
+            </div>
+            <div id="recent-designs" class="recent-designs" hidden></div>
+            <div id="autoconfig-banner" class="autoconfig-banner" hidden></div>
           </div>
 
-          <aside class="pj-side">
-            <!-- Ready to run: the checks, the run's name, the one primary action. -->
-            <section class="panel launch" id="setup-preflight" aria-labelledby="pj-ready-h">
-              <div class="panel-h">
-                <h2 id="pj-ready-h">Ready to run</h2>
-                <span class="launch-verdict" id="pf-verdict" role="status"></span>
+          <!-- Sources -->
+          <div class="picker" id="setup-sources">
+            <h2 class="picker-head"><span><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3h6l5 5v13H8zM14 3v5h5M5 7v14h11"/></svg>Sources</span>
+              <span class="block-actions">
+                <button class="btn btn-sm" data-open="new-file"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New file</button>
+                <button class="btn btn-sm btn-ghost" id="btn-add-files">Add files…</button>
+                <button class="btn btn-sm btn-ghost iconbtn-sm" id="btn-filesel-refresh" aria-label="Rescan the project folder" title="Rescan the project folder"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg></button>
+              </span>
+            </h2>
+            <p class="hint" id="filesel-count">Open a project to see its files.</p>
+            <div class="filesel-card" id="filesel-card" hidden>
+              <div id="filesel-list" class="filesel-list"></div>
+              <div class="filesel-foot" id="filesel-foot" hidden>
                 <span class="spacer"></span>
-                <button class="btn-icon btn-sm" id="btn-preflight" aria-label="Check again" data-tip="Check again"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg></button>
+                <button class="linklike" id="btn-filesel-all">Tick all design files</button>
+                <button class="linklike" id="btn-filesel-none">Untick all</button>
               </div>
-              <div class="panel-b">
-                <div id="preflight" class="pf-chain"></div>
-                <div class="launch-pad" id="setup-run">
-                  <label class="field launch-name" for="run-name-input"><span class="field-l">Run name</span>
-                    <input type="text" id="run-name-input" placeholder="the date and time" autocomplete="off" spellcheck="false" data-tip="Names the run's folder in runs/. Leave it empty to use the date and time."/></label>
-                  <button class="btn btn-primary btn-lg btn-block" id="btn-run">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Run flow
-                  </button>
-                  <div class="launch-controls">
-                    <button class="btn btn-danger" id="btn-cancel" disabled hidden><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
-                    <button class="btn" id="btn-resume" hidden data-tip="In Step by step mode the flow pauses after each step."><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Next step</button>
-                  </div>
-                </div>
-              </div>
-            </section>
+              <details class="extras-entry">
+                <summary>Files outside this project</summary>
+                <p class="muted">Paths to extra files the run needs that live somewhere else, such as a shared <code>pin_order.cfg</code>. Separate them with commas.</p>
+                <input type="text" id="filesel-extras" placeholder="/path/to/pin_order.cfg, /path/to/other.v" spellcheck="false"/>
+              </details>
+            </div>
+          </div>
 
-            <nav class="panel pj-links" aria-label="This project">
-              <p class="proj-lastrun" id="proj-lastrun"></p>
-              <button class="pj-link" data-go="config"><span>Configuration</span><span class="muted" id="pj-config-sum"></span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
-              <button class="pj-link" data-go="runs"><span>Runs</span><span class="muted" id="pj-runs-sum"></span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
-            </nav>
-          </aside>
-        </div>
-      </div>
-    </section>
+          <!-- PDK -->
+          <div class="picker" id="setup-pdk">
+            <h2 class="picker-head"><span><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3M5 5h14v14H5zM9 9h6v6H9z"/></svg>Process + standard-cell library</span>
+              <span id="pdk-readiness" class="pill pill-pending">checking…</span>
+            </h2>
+            <p class="hint">The silicon recipe your design is built against.</p>
+            <div class="pdk-row">
+              <div class="field"><span><label for="pdk-select">Process (PDK)</label><span class="pd-src" data-src-key="PDK"></span></span><select id="pdk-select"></select></div>
+              <div class="field"><span><label for="scl-select">Standard-cell library</label><span class="pd-src" data-src-key="STD_CELL_LIBRARY"></span></span><select id="scl-select"></select></div>
+              <p class="pdk-about" id="pdk-about"></p>
+            </div>
+          </div>
 
-    <!-- CONFIG: what the flow will use (mostused.js, config.js) -->
-    <section class="section" id="sec-config">
-      <header class="page-h">
-        <h1>Configuration</h1>
-        <div class="tabs" data-views="config" aria-label="Configuration views">
-          <button class="tab" data-view="common">Common</button>
-          <button class="tab" data-view="all">All settings</button>
-        </div>
-      </header>
-      <div data-view-panel="common">
+          <!-- Common settings: the handful of LibreLane variables real projects
+               change, saved into the project's config (mostused.js). Folded by
+               default; the bar says what is set, so nothing hides behind it. -->
           <details class="picker ms-card" id="setup-settings">
             <summary class="ms-sum">
               <span class="ms-sum-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><path d="M16 4v4M10 10v4M18 16v4"/></svg></span>
@@ -430,8 +432,33 @@
               <div class="ms-body" id="ms-body"><p class="muted">Open a project to see its settings.</p></div>
             </div>
           </details>
+
+          <!-- Ready to run: three checkpoints on one trace, then the launch. -->
+          <div class="picker launch" id="setup-preflight">
+            <h2 class="picker-head"><span><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h5M15 12h5M9 9h6v6H9z"/></svg>Ready to run?</span>
+              <span class="launch-verdict" id="pf-verdict" role="status"></span>
+              <span class="block-actions"><button class="btn btn-sm btn-ghost iconbtn-sm" id="btn-preflight" aria-label="Check again" title="Check again"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg></button></span>
+            </h2>
+            <p class="hint">LanEx checks the design, the PDK and the tools first, so a run doesn't fail half-way through.</p>
+            <div id="preflight" class="pf-chain"></div>
+            <div class="launch-pad" id="setup-run">
+              <button class="btn btn-cta" id="btn-run">
+                <span class="big"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Run flow</span>
+              </button>
+              <div class="launch-controls">
+                <button class="btn btn-warn" id="btn-cancel" disabled hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
+                <button class="btn btn-ghost" id="btn-resume" hidden title="In Step by step mode the flow pauses after each step."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Next step</button>
+              </div>
+              <p class="launch-note">Verilog to GDSII · 5 to 60 minutes · follow it on the Flow page</p>
+              <label class="launch-name" for="run-name-input"><span>Run name</span>
+                <input type="text" id="run-name-input" placeholder="first-try" autocomplete="off" spellcheck="false"/>
+                <small>Names the run's folder in <code>runs/</code>. Leave it empty to use the date and time.</small></label>
+            </div>
+          </div>
+        </div>
       </div>
-      <div data-view-panel="all">
+
+      <!-- Config / Constraints -->
       <details class="card" id="cfg-card">
         <summary>
           <strong>All settings</strong>
@@ -463,13 +490,14 @@
           <div id="vars-form" class="vars-form"></div>
         </div>
       </details>
-      </div>
+
     </section>
 
-    <!-- FLOW (id "flow"; "pipeline" is an alias in nav.js): one run,
+    <!-- FLOW (rail "Flow"; the id stays "pipeline", spec decision 1): one run,
          stage by stage, and why it stopped (modules/flow.js). -->
-    <section class="section" id="sec-flow">
+    <section class="section" id="sec-pipeline">
       <div class="an-runbar fl-runbar ld-keep">
+        <div class="rb-host" id="flow-runbar"></div>
         <span class="bar-spacer"></span>
         <button class="btn btn-ghost btn-sm" id="fl-live" hidden><span class="fl-live-dot"></span> Back to the live run</button>
         <button class="btn btn-ghost btn-sm" id="fl-copy-cmd" title="Copy the librelane command this run used, to run it in a terminal or CI"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg> Command</button>
@@ -610,13 +638,11 @@
 
     <!-- TOOLS -->
     <section class="section" id="sec-tools">
-      <header class="page-h" id="tools-jump">
-        <h1>Tools</h1>
-        <div class="page-h-acts">
+      <nav class="section-jump tl-strip" id="tools-jump" aria-label="Tools page actions">
+        <span class="tl-strip-gap"></span>
         <button class="btn btn-sm btn-ghost" id="tl-copy-diag" title="Copy versions, image digest, PDK and system facts for a bug report">Copy diagnostics</button>
         <button class="btn btn-sm btn-ghost" id="tl-recheck" title="Probe every component again (a few seconds)">Check all</button>
-        </div>
-      </header>
+      </nav>
       <div id="tools-summary" class="tl-summary" aria-live="polite">
         <div class="tl-verdict is-loading"><div class="tl-verdict-main"><div class="an-eyebrow">Tools and PDKs</div>
           <h2 class="tl-verdict-title"><span class="spinner-sm"></span> Checking components…</h2>
@@ -702,50 +728,91 @@
       </div>
     </section>
 
-    <!-- RESULTS: how a run came out (analytics.js, verify.js, results.js).
-         One page, one verdict, eight views; "analytics" and "verify" are
-         aliases in nav.js. -->
-    <section class="section" id="sec-results">
-      <header class="page-h">
-        <h1>Results</h1>
-        <div class="tabs" data-views="results" aria-label="Results views">
-          <button class="tab" data-view="summary">Summary</button>
-          <button class="tab" data-view="timing">Timing</button>
-          <button class="tab" data-view="checks">Checks</button>
-          <button class="tab" data-view="area">Area and power</button>
-          <button class="tab" data-view="routing">Routing</button>
-          <button class="tab" data-view="trends">Trends</button>
-          <button class="tab" data-view="metrics">Metrics</button>
-          <button class="tab" data-view="reports">Reports</button>
-          <button class="tab" data-view="compare">Compare</button>
-        </div>
-        <div class="page-h-acts">
-          <div class="split">
-            <button class="btn btn-quiet btn-sm" id="rs-more-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="rs-more">More <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
-            <div class="menu rs-more" id="rs-more" role="menu" hidden>
-              <button class="menu-item" role="menuitem" id="btn-analytics-settings"><span>Settings this run used</span></button>
-              <button class="menu-item" role="menuitem" id="btn-analytics-csv"><span>Download metrics as CSV</span></button>
-              <button class="menu-item" role="menuitem" id="btn-verify-copy"><span>Copy the check summary</span></button>
-              <button class="menu-item" role="menuitem" id="btn-verify-klayout"><span>Open in KLayout with markers</span></button>
-              <div class="menu-sep" role="separator"></div>
-              <button class="menu-item" role="menuitem" id="btn-refresh-analytics"><span>Reload</span></button>
-            </div>
-          </div>
-        </div>
-      </header>
+    <!-- ANALYTICS -->
+    <section class="section" id="sec-analytics">
+      <nav class="section-jump" id="analytics-jump" aria-label="Jump to section">
+        <span class="muted">Jump to:</span>
+        <button class="chip chip-clickable" data-jump="an-overview">Overview</button>
+        <button class="chip chip-clickable" data-jump="an-timing">Timing</button>
+        <button class="chip chip-clickable" data-jump="an-area">Area</button>
+        <button class="chip chip-clickable" data-jump="an-power">Power</button>
+        <button class="chip chip-clickable" data-jump="an-routing">Routing</button>
+        <button class="chip chip-clickable" data-jump="an-flow">Flow</button>
+        <button class="chip chip-clickable" data-jump="an-history">History</button>
+        <button class="chip chip-clickable" data-jump="analytics-compare">Compare</button>
+        <button class="chip chip-clickable" data-jump="an-all">All metrics</button>
+      </nav>
+      <div class="an-runbar">
+        <div class="rb-host" id="analytics-runbar"></div>
+        <span class="bar-spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="btn-analytics-settings" title="Every variable this run used (its resolved.json), and where each value came from: an override, your config, or a PDK default"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg> Settings used</button>
+        <button class="btn btn-ghost btn-sm" id="btn-analytics-csv" title="Download every metric of this run (and the baseline) as CSV"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> CSV</button>
+        <button class="btn btn-ghost btn-sm" id="btn-refresh-analytics" title="Reload runs and metrics"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
+      </div>
       <div class="an-empty empty" id="an-empty" hidden>
         <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
         <h3>No runs yet</h3>
         <p>Run the flow once and this page shows how it went: timing, area, power, routing and every metric LibreLane recorded.</p>
-        <button class="btn btn-primary" data-go="setup">Go to Project</button>
+        <button class="btn btn-primary" data-go="setup">Go to Setup</button>
       </div>
       <div id="an-body">
-        <div data-view-panel="summary">
-          <div class="an-sec" id="vf-overview"></div>
-          <div class="an-sec" id="an-overview"></div>
+        <div class="an-sec" id="an-overview"></div>
+        <div class="an-sec" id="an-timing"></div>
+        <div class="an-sec" id="an-area"></div>
+        <div class="an-sec" id="an-power"></div>
+        <div class="an-sec" id="an-routing"></div>
+        <div class="an-sec" id="an-flow"></div>
+        <div class="an-sec" id="an-history">
+          <header class="an-head"><div><div class="an-eyebrow">History</div><h2 class="an-title">How is this design trending?</h2>
+            <p class="an-lede">The same numbers across this design's recent runs, so a change that made things worse stands out.</p></div></header>
+          <div id="an-history-body"></div>
+          <details class="card an-watch" id="watch-card">
+            <summary><strong>Metric watch</strong><span class="hint">Get a warning when a finished run breaks a limit you set, for example setup slack must stay at or above 0. Checked only against metrics the run produced.</span></summary>
+            <div class="card-body" id="watch-body"></div>
+          </details>
         </div>
-        <div data-view-panel="timing">
-          <div class="an-sec" id="an-timing"></div>
+        <div class="an-sec" id="analytics-compare">
+          <header class="an-head"><div><div class="an-eyebrow">Compare</div><h2 class="an-title">Put several runs side by side</h2>
+            <p class="an-lede">Pick two or more runs, from any design you have opened, to see which settings differ and how every metric moved.</p></div></header>
+          <div class="an-card an-card-wide" id="compare-body"><p class="muted">Loading runs from every design you have opened…</p></div>
+        </div>
+        <div class="an-sec" id="an-all">
+          <header class="an-head"><div><div class="an-eyebrow">All metrics</div><h2 class="an-title">Every number LibreLane recorded</h2>
+            <p class="an-lede">Grouped by topic. Rows with a count open to show each corner, net or iteration.</p></div></header>
+          <div id="an-all-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VERIFY -->
+    <section class="section" id="sec-verify">
+      <nav class="section-jump" id="verify-jump" aria-label="Jump to section">
+        <span class="muted">Jump to:</span>
+        <button class="chip chip-clickable" data-jump="vf-overview">Overview</button>
+        <button class="chip chip-clickable" data-jump="vf-checks">Checks</button>
+        <button class="chip chip-clickable" data-jump="vf-timing">Timing</button>
+        <button class="chip chip-clickable" data-jump="vf-drc">DRC</button>
+        <button class="chip chip-clickable" data-jump="vf-lvs">LVS &amp; XOR</button>
+        <button class="chip chip-clickable" data-jump="vf-rel">Antenna &amp; power</button>
+        <button class="chip chip-clickable" data-jump="vf-reports">Reports</button>
+      </nav>
+      <div class="an-runbar">
+        <div class="rb-host" id="verify-runbar"></div>
+        <span class="bar-spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="btn-verify-klayout" title="Open this run's final GDS in KLayout with the DRC and XOR markers loaded"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg> Open in KLayout</button>
+        <button class="btn btn-ghost btn-sm" id="btn-verify-copy" title="Copy a plain-text sign-off checklist to paste into an issue or a review"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9h11v11H9zM5 15H4V4h11v1"/></svg> Copy summary</button>
+        <button class="btn btn-ghost btn-sm" id="btn-verify-settings" title="Every variable this run used (its resolved.json), including the ERROR_ON_ switches that decide which checks fail the run"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg> Settings used</button>
+        <button class="btn btn-ghost btn-sm" id="btn-verify-refresh" title="Reload runs and results"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
+      </div>
+      <div class="an-empty empty" id="vf-empty" hidden>
+        <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg></span>
+        <h3>No runs yet</h3>
+        <p>Run the flow once and this page shows whether the layout passes sign-off: timing in every corner, design rules, LVS, antenna and power, each judged the way LibreLane judges it.</p>
+        <button class="btn btn-primary" data-go="setup">Go to Setup</button>
+      </div>
+      <div id="vf-body">
+        <div class="an-sec" id="vf-overview"></div>
+        <div class="an-sec" id="vf-checks"></div>
         <div class="an-sec" id="vf-timing">
           <div id="vf-timing-body"></div>
           <div class="an-card an-card-wide vf-paths" id="timing-paths-card">
@@ -765,52 +832,13 @@
             <div id="timing-table"></div>
           </div>
         </div>
-        </div>
-        <div data-view-panel="checks">
-          <div class="an-sec" id="vf-checks"></div>
-          <div class="an-sec" id="vf-drc"></div>
-          <div class="an-sec" id="vf-lvs"></div>
-          <div class="an-sec" id="vf-rel"></div>
-        </div>
-        <div data-view-panel="area">
-          <div class="an-sec" id="an-area"></div>
-          <div class="an-sec" id="an-power"></div>
-        </div>
-        <div data-view-panel="routing">
-          <div class="an-sec" id="an-routing"></div>
-        </div>
-        <div data-view-panel="trends">
-          <div class="an-sec" id="an-flow"></div>
-        <div class="an-sec" id="an-history">
-          <header class="an-head"><div><div class="an-eyebrow">History</div><h2 class="an-title">How is this design trending?</h2>
-            <p class="an-lede">The same numbers across this design's recent runs, so a change that made things worse stands out.</p></div></header>
-          <div id="an-history-body"></div>
-          <details class="card an-watch" id="watch-card">
-            <summary><strong>Metric watch</strong><span class="hint">Get a warning when a finished run breaks a limit you set, for example setup slack must stay at or above 0. Checked only against metrics the run produced.</span></summary>
-            <div class="card-body" id="watch-body"></div>
-          </details>
-        </div>
-        </div>
-        <div data-view-panel="compare">
-        <div class="an-sec" id="analytics-compare">
-          <header class="an-head"><div><div class="an-eyebrow">Compare</div><h2 class="an-title">Put several runs side by side</h2>
-            <p class="an-lede">Pick two or more runs, from any design you have opened, to see which settings differ and how every metric moved.</p></div></header>
-          <div class="an-card an-card-wide" id="compare-body"><p class="muted">Loading runs from every design you have opened…</p></div>
-        </div>
-        </div>
-        <div data-view-panel="metrics">
-        <div class="an-sec" id="an-all">
-          <header class="an-head"><div><div class="an-eyebrow">All metrics</div><h2 class="an-title">Every number LibreLane recorded</h2>
-            <p class="an-lede">Grouped by topic. Rows with a count open to show each corner, net or iteration.</p></div></header>
-          <div id="an-all-body"></div>
-        </div>
-        </div>
-        <div data-view-panel="reports">
+        <div class="an-sec" id="vf-drc"></div>
+        <div class="an-sec" id="vf-lvs"></div>
+        <div class="an-sec" id="vf-rel"></div>
         <div class="an-sec" id="vf-reports">
           <header class="an-head"><div><div class="an-eyebrow">Reports</div><h2 class="an-title">Every report this run wrote</h2>
             <p class="an-lede">The raw DRC, LVS, STA and antenna reports, straight from the tools. View one here with search, download it, or find it on disk.</p></div></header>
           <div id="vf-reports-body"></div>
-        </div>
         </div>
       </div>
     </section>
@@ -822,6 +850,7 @@
          open from the same place. -->
     <section class="section" id="sec-layout">
       <div class="an-runbar lx-runbar">
+        <div class="rb-host" id="layout-runbar"></div>
         <span class="bar-spacer"></span>
         <button class="btn btn-sm lx-3d-main" id="lx-3d-main" aria-pressed="false" title="See the chip in 3D, in the app: every metal, via and device layer at its real height (3). Zoomed in, it shows the area on screen. Press again for the flat view."><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg> 3D view</button>
         <div class="lx-split" id="lx-openin">
@@ -847,7 +876,7 @@
         <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg></span>
         <h3>No runs yet</h3>
         <p>Run the flow once and your chip shows up here: the floorplan, the placed cells, the clock tree, the routed wires and the final GDS, layer by layer.</p>
-        <button class="btn btn-primary" data-go="setup">Go to Project</button>
+        <button class="btn btn-primary" data-go="setup">Go to Setup</button>
       </div>
 
       <div class="lx-page" id="lx-page" hidden>
@@ -958,15 +987,13 @@
 
     <!-- CELLS & MACROS (modules/cells.js, cells-macros.js, cells-rules.js) -->
     <section class="section" id="sec-cells">
-      <header class="page-h">
-        <h1>Library</h1>
-        <div class="tabs" data-views="cells" id="cells-jump" aria-label="Library views">
-          <button class="tab" data-view="cells">Cells</button>
-          <button class="tab" data-view="macros">Macros</button>
-          <button class="tab" data-view="rules">Flow rules</button>
-        </div>
-      </header>
-      <div class="an-sec" id="cl-library" data-view-panel="cells">
+      <nav class="section-jump" id="cells-jump" aria-label="Jump to section">
+        <span class="muted">Jump to:</span>
+        <button class="chip chip-clickable" data-jump="cl-library">Library</button>
+        <button class="chip chip-clickable" data-jump="cl-macros">Macros</button>
+        <button class="chip chip-clickable" data-jump="cl-rules">Flow rules</button>
+      </nav>
+      <div class="an-sec" id="cl-library">
         <div class="an-head"><div>
           <div class="an-eyebrow">Library</div>
           <h2 class="an-title">The cells your design is built from</h2>
@@ -985,7 +1012,7 @@
         <div id="cl-lib"></div>
       </div>
 
-      <div class="an-sec" id="cl-macros" data-view-panel="macros">
+      <div class="an-sec" id="cl-macros">
         <div class="an-head"><div>
           <div class="an-eyebrow">Macros</div>
           <h2 class="an-title">Pre-built blocks</h2>
@@ -994,7 +1021,7 @@
         <div id="cl-macros-body"></div>
       </div>
 
-      <div class="an-sec" id="cl-rules" data-view-panel="rules">
+      <div class="an-sec" id="cl-rules">
         <div class="an-head"><div>
           <div class="an-eyebrow">Flow rules</div>
           <h2 class="an-title">Which cells the flow may use</h2>
@@ -1003,39 +1030,37 @@
         <div id="cl-rules-body"></div>
       </div>
     </section>
-    <!-- SETTINGS: every preference in one place (modules/settings.js, prefs.js). -->
-    <section class="section" id="sec-settings">
-      <header class="page-h"><h1>Settings</h1></header>
-      <div class="st-page" id="settings-body"></div>
-    </section>
 
   </main>
 
-  <!-- Status line: the run, what the next run uses, the Console, the honest notice. -->
+  <!-- Wafer edge: run state, what the run will use, logs, and the honest notice. -->
   <footer class="status" aria-label="Status">
     <span class="st-run">
-      <span class="pill pill-pending" id="run-pill">Idle</span>
+      <span class="pill pill-pending" id="run-pill">idle</span>
       <span class="status-progress" id="overall-progress"></span>
     </span>
-    <button class="st-item st-problems" id="st-problems" data-go="results" data-go-filter="problems" hidden>
-      <span class="vdot is-fail" aria-hidden="true"></span><span class="st-problems-t"></span>
+    <button class="st-item st-problems" id="st-problems" data-go="verify" data-go-filter="problems" hidden>
+      <span class="vf-mark is-fail" aria-hidden="true"></span><span class="st-problems-t"></span>
     </button>
     <span class="st-bar" aria-hidden="true"><span class="st-bar-fill" id="status-bar-fill"></span></span>
-    <span class="st-spacer"></span>
     <button class="st-item" id="pdk-pill" data-tip="PDK and cell library for the next run">
       <span class="d" aria-hidden="true"></span><span class="text">PDK: checking</span>
     </button>
-    <button class="st-item" id="st-engine" data-tip="Run engine (change it in the Run menu)"><span class="st-v" id="st-engine-v">Container</span></button>
-    <button class="st-item" id="st-mode" data-tip="Run mode (change it in the Run menu)"><span class="st-v" id="st-mode-v">Full auto</span></button>
-    <span class="st-sep" aria-hidden="true"></span>
-    <button class="st-item st-logs" id="logs-btn" aria-pressed="false" aria-controls="log-panel" data-tip="Install and tool output">
-      <span>Install log</span><span class="st-count" id="logs-count" hidden></span>
-    </button>
+    <button class="st-item" id="st-engine" data-tip="Run engine (change it from the Run menu)"><span class="st-k">Engine</span><span class="st-v" id="st-engine-v">Container</span></button>
+    <button class="st-item" id="st-mode" data-tip="Run mode (change it from the Run menu)"><span class="st-k">Mode</span><span class="st-v" id="st-mode-v">Full auto</span></button>
+    <span class="st-spacer"></span>
     <button class="st-item st-console" id="console-btn" aria-pressed="false" aria-controls="console" data-tip="Console: the flow log, the exact command, what LanEx ran, and a command line (Ctrl+`)">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7l4 4-4 4M11 16h7"/></svg>
       <span>Console</span>
     </button>
-    <span class="status-disclaimer" tabindex="0" data-tip="LanEx shows what the EDA tools report and does no silicon analysis of its own. Always check with your foundry's official sign-off decks before fabrication. Provided AS IS, without warranty (Apache-2.0).">Not a sign-off tool</span>
+    <button class="st-item st-logs" id="logs-btn" aria-pressed="false" aria-controls="log-panel" data-tip="Install and tool output">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 11h16M4 16h10"/></svg>
+      <span>Logs</span><span class="st-count" id="logs-count" hidden></span>
+    </button>
+    <span class="status-disclaimer" data-tip="LanEx shows what the EDA tools report and does no silicon analysis of its own. Always check with your foundry's official sign-off decks before fabrication. Provided AS IS, without warranty (Apache-2.0).">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l10 18H2zM12 10v5M12 18h.01"/></svg>
+      <span class="sd-full">Not a sign-off tool: verify with foundry decks</span><span class="sd-short">Not sign-off</span>
+    </span>
   </footer>
 
   <!-- Folder browser modal -->

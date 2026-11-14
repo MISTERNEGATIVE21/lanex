@@ -10,6 +10,7 @@ import { renderPreflight, freshPreflight, preflightNow, runBlocker } from "./pre
 import { go } from "./nav.js";
 import { currentTab } from "./tabs.js";
 import { icon } from "./icons.js";
+import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
 import * as FS from "./flowstages.js";
 
@@ -146,6 +147,9 @@ function wireSetupActions() {
 export function setupSetup() {
   setupFolderBrowser();
   renderRecentDesigns();
+  // Page header links; the Constraints categories have their own tabs inside
+  // that card (config.js), so they never crowd this bar.
+  wireJump(document.getElementById("sec-setup"));
   wireSetupActions();
   import("./projectcard.js").then((m) => m.wireDesignRow()).catch(() => {});
   import("./mostused.js").then((m) => m.wireSettings()).catch(() => {});
@@ -409,13 +413,13 @@ function paintLastRun(facts) {
   const el = document.getElementById("proj-lastrun");
   if (!el) return;
   const last = facts && facts.last_run;
-  const n = document.getElementById("pj-runs-sum");
-  if (n) n.textContent = facts && facts.runs ? String(facts.runs) : "";
-  if (!facts || !facts.runs || !last) { el.textContent = "No runs yet."; return; }
+  if (!facts || !facts.runs || !last) { el.innerHTML = "No runs yet."; return; }
   // The newest folder of a run still going has no final/ yet: that is not
   // "didn't finish".
   const going = state.status && state.status.running;
-  el.textContent = going ? "A run is going now." : "Last run " + (last.finished ? "finished" : "didn't finish") + " " + ago(last.at) + ".";
+  el.innerHTML = (going ? "A run is going now" : "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at))) +
+    " · <button type='button' class='linklike' data-open='runs'>" +
+    (facts.runs === 1 ? "View it" : "View all " + facts.runs + " runs") + "</button>";
 }
 
 // Only the "Last run" line, read again (after a run ends).
@@ -858,7 +862,7 @@ function startRefused(reason, extra = {}) {
   state.runStart = s;
   document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "refused" } }));
   // Flow says it when it shows the run; elsewhere a toast does.
-  const onFlow = document.getElementById("sec-flow")?.classList.contains("section-active");
+  const onFlow = document.getElementById("sec-pipeline")?.classList.contains("section-active");
   if (!onFlow && !extra.mismatch) toast.show("Run refused: " + s.error.reason, "error");
 }
 
@@ -964,7 +968,7 @@ async function onRunClick({ show = false, fixed = false } = {}) {
   // The page first (it reads the scroll position while nothing has changed
   // yet, so no forced layout), then the button and Flow's "Starting".
   const from = currentTab();
-  if (showFlow) go("flow", {}, { link: false });
+  if (showFlow) go("pipeline", {}, { link: false });
   beginStart(from, showFlow);
   const checkP = fresh ? null : preflightNow();
   if (checkP) checkP.catch(() => {});
@@ -1000,10 +1004,10 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     state.previewedConfigHash = null;
     const tag = res.tag || payload.tag || null;
     document.dispatchEvent(new CustomEvent("g:run_started", { detail: { tag } }));
-    if (!showFlow && currentTab() !== "flow") {
+    if (!showFlow && currentTab() !== "pipeline") {
       toast.show((payload.tag ? "Run " + payload.tag + " started" : "The run started") +
         ". It keeps going in the background; the status bar shows how far it is.", "info", 7000,
-        { label: "Watch it", run: () => go("flow") });
+        { label: "Watch it", run: () => go("pipeline") });
     }
     // The check that ran beside the start: say so only if it found something.
     if (checkP) {

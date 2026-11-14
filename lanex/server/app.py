@@ -450,9 +450,8 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         if path == "/ide" or path == "/ide.html":
             self._serve_static("ide.html")
             return
-        # The old home screen is gone; its address opens the app.
         if path == "/landing" or path == "/landing.html":
-            self._serve_static("index.html")
+            self._serve_static("landing.html")
             return
         if path.startswith("/static/"):
             rel = path[len("/static/"):]

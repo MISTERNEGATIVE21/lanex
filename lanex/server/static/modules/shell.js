@@ -1,22 +1,83 @@
 // shell.js — the frame's behaviour: the project switcher, the Run menu, the
-// app menu, the help sheet (Learn / Shortcuts / About) and the status line.
+// help sheet (Learn / Shortcuts / About), the status line and page titles.
 //
-// Menus and the sheet open through overlay.js, like every overlay.
+// Every overlay here is light-dismiss: clicking anywhere outside it, or Esc,
+// closes it. Only one overlay is open at a time.
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { SHORTCUTS, IDE_SHORTCUTS } from "./hotkeys.js";
-import { wireMenu, openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 
-// ------------------------------------------------------------ overlays
-// The names older modules use for a light overlay (the install log): they map
-// onto the one stack.
-export function openOverlay(el, owner, close) {
-  openLayer(el, { kind: "popover", owner, onClose: close, focus: false });
+// ------------------------------------------------------------ overlay manager
+// One open overlay at a time; outside pointerdown or Esc closes it.
+let _open = null; // { el, owner, close }
+
+function closeOpen() {
+  if (!_open) return;
+  const o = _open;
+  _open = null;
+  o.close();
 }
-export function isOverlayOpen(el) { return isLayerOpen(el); }
-export function releaseOverlay(el) { closeLayer(el); }
+
+export function openOverlay(el, owner, close) {
+  if (_open && _open.el !== el) closeOpen();
+  _open = { el, owner, close };
+}
+
+export function isOverlayOpen(el) {
+  return !!_open && _open.el === el;
+}
+
+export function releaseOverlay(el) {
+  if (_open && _open.el === el) _open = null;
+}
+
+function wireLightDismiss() {
+  document.addEventListener("pointerdown", (e) => {
+    if (!_open) return;
+    const t = e.target;
+    if (_open.el.contains(t)) return;
+    if (_open.owner && _open.owner.contains(t)) return;
+    // Clicks inside a modal dialog or the palette belong to them, not to us.
+    if (t.closest && t.closest(".dlg-backdrop, .smodal-backdrop, .cmdk, .toast, #fs-modal")) return;
+    closeOpen();
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && _open) { closeOpen(); e.stopPropagation(); }
+  });
+}
+
+// ------------------------------------------------------------ menus
+function wireMenu(btn, menu, onOpen) {
+  if (!btn || !menu) return;
+  const close = () => {
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+  };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!menu.hidden) { closeOpen(); return; }
+    menu.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    openOverlay(menu, btn, close);
+    if (onOpen) onOpen();
+    menu.querySelector(".menu-item")?.focus({ preventScroll: true });
+  });
+  // Arrow keys move between items; picking an item closes the menu.
+  menu.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const items = [...menu.querySelectorAll(".menu-item:not(:disabled)")];
+    const i = items.indexOf(document.activeElement);
+    const n = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+    items[n]?.focus();
+    e.preventDefault();
+  });
+  menu.addEventListener("click", (e) => {
+    // A tick box or a field (the Run menu's options) keeps the menu open.
+    if (e.target.closest(".menu-item:not(.menu-check)")) closeOpen();
+  });
+}
 
 // ------------------------------------------------------------ project switcher
 function baseName(p) {
@@ -105,8 +166,8 @@ function whereShort(d) {
   return parts.slice(-2).join(sep) || full;
 }
 
-// The recent list on the Project page (shown while no project is open): every
-// project LanEx knows about. Clicking a row opens it.
+// The project list on the Setup page: every project LanEx knows about, the
+// open one marked. Clicking a row opens it.
 let _hubSeq = 0;
 // Rows keep the place they had when the page loaded: opening a project marks
 // it where it is instead of jumping it to the top (the top-bar menu is the
@@ -127,10 +188,13 @@ export async function renderHubRows() {
   const dirs = stableOrder(await knownProjects());
   if (seq !== _hubSeq) return;   // a newer render is on its way
   const scroll = host.scrollTop;
-  // First run, nothing anywhere yet: no list to show.
-  const box = document.getElementById("pj-recent");
-  if (box) box.hidden = !dirs.length;
-  if (!dirs.length) { host.innerHTML = ""; return; }
+  // First run, nothing anywhere yet: the start tiles get the whole card.
+  document.getElementById("setup-design")?.classList.toggle("no-projects", !dirs.length);
+  if (!dirs.length) {
+    host.innerHTML = "<p class='hub-none'>No projects yet. New projects go in <code>" +
+      fmt.escape(displayPath((_defaults && _defaults.projects_dir) || "")) + "</code>.</p>";
+    return;
+  }
   host.innerHTML = dirs.map((d) => {
     const cur = d === state.designDir;
     return "<button class='hub-row" + (cur ? " is-current" : "") + "' data-dir='" + fmt.escape(d) + "'" +
@@ -149,7 +213,7 @@ function wireHub() {
     const row = e.target.closest(".hub-row");
     if (row) switchProject(row.dataset.dir);
   });
-  const sec = document.getElementById("sec-setup");
+  const sec = document.getElementById("setup-design");
   sec?.addEventListener("click", (e) => {
     const b = e.target.closest("[data-open]");
     if (!b) return;
@@ -293,6 +357,21 @@ export function paintProgress(done, total) {
   fill.style.transform = "scaleX(" + (total ? Math.min(1, done / total) : 0) + ")";
 }
 
+// ------------------------------------------------------------ page titles
+// Each tab's sticky header names the page it belongs to, from the rail label.
+function paintPageTitles() {
+  document.querySelectorAll(".work > .section").forEach((sec) => {
+    const tab = sec.id.replace(/^sec-/, "");
+    const label = document.querySelector('.side-tab[data-tab="' + tab + '"] .label');
+    const bar = sec.querySelector(":scope > .section-jump, :scope > .section-jump-stack > .section-jump");
+    if (!bar || !label || bar.querySelector(".page-title")) return;
+    const h = document.createElement("h1");
+    h.className = "page-title";
+    h.textContent = label.textContent === "Cells" ? "Cells & macros" : label.textContent;
+    bar.prepend(h);
+  });
+}
+
 // ------------------------------------------------------------ help sheet
 let _sheet = null;
 
@@ -311,9 +390,17 @@ function sheet() {
     "<button class='iconbtn' data-act='close' aria-label='Close help'>" +
     "<svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>" +
     "</div>" +
+    // The guides (guide.js listens for g:guide).
+    "<div class='sheet-guides'><span class='sheet-guides-k'>New here?</span>" +
+    "<button class='btn btn-sm' data-guide='first-chip'>First-chip guide</button>" +
+    "<button class='btn btn-sm btn-ghost' data-guide='tour'>Take the tour</button></div>" +
     "<div class='sheet-body' id='help-sheet-body'></div>";
   document.body.appendChild(el);
-  el.querySelector("[data-act='close']").addEventListener("click", () => closeLayer(el));
+  el.querySelectorAll("[data-guide]").forEach((b) => b.addEventListener("click", () => {
+    closeOpen();
+    document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: b.dataset.guide } }));
+  }));
+  el.querySelector("[data-act='close']").addEventListener("click", () => closeOpen());
   el.querySelectorAll(".sheet-tab").forEach((t) =>
     t.addEventListener("click", () => showPane(t.dataset.pane)));
   _sheet = el;
@@ -323,6 +410,7 @@ function sheet() {
 function closeSheet() {
   if (!_sheet) return;
   _sheet.hidden = true;
+  document.getElementById("help-icon")?.setAttribute("aria-pressed", "false");
 }
 
 // Open the help sheet on a pane. Returns the body element for callers (Learn's
@@ -331,7 +419,8 @@ export function openHelp(pane = "learn", { render = true } = {}) {
   const el = sheet();
   if (el.hidden) {
     el.hidden = false;
-    openLayer(el, { kind: "sheet", owner: document.getElementById("app-menu-btn"), onClose: closeSheet, label: "Help", focus: false });
+    document.getElementById("help-icon")?.setAttribute("aria-pressed", "true");
+    openOverlay(el, document.getElementById("help-icon"), closeSheet);
   }
   if (!render) {
     selectHelpTab(pane);
@@ -410,25 +499,18 @@ async function renderAbout(body) {
 
 // ------------------------------------------------------------ setup
 export function setupShell() {
-  wireMenu(document.getElementById("design-pill"), document.getElementById("project-menu"), { onOpen: renderRecents });
+  wireLightDismiss();
+  wireMenu(document.getElementById("design-pill"), document.getElementById("project-menu"), renderRecents);
   wireMenu(document.getElementById("run-opts-btn"), document.getElementById("run-menu"));
-  wireMenu(document.getElementById("app-menu-btn"), document.getElementById("app-menu"));
   document.getElementById("btn-open-project")?.addEventListener("click", openFolder);
   document.getElementById("btn-reveal-project")?.addEventListener("click", () => revealProject());
-  // The app menu: help, the guides, About. (Theme and size are their own
-  // controls inside it: theme.js, zoom.js.)
-  document.getElementById("help-icon")?.addEventListener("click", () => openHelp("learn"));
-  document.getElementById("app-menu")?.addEventListener("click", (e) => {
-    const a = e.target.closest("[data-app]");
-    if (!a) return;
-    const act = a.dataset.app;
-    if (act === "keys" || act === "about") openHelp(act);
-    else document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: act } }));
+  document.getElementById("help-icon")?.addEventListener("click", () => {
+    if (_sheet && !_sheet.hidden) closeOpen(); else openHelp("learn");
   });
   // Status items jump to where the setting lives.
   document.getElementById("pdk-pill")?.addEventListener("click", () =>
     import("./nav.js").then((m) => m.go("setup", { section: "setup-pdk" })));
-  const openRunMenu = (e) => { e.stopPropagation(); const b = document.getElementById("run-opts-btn"); if (b && b.getAttribute("aria-expanded") !== "true") b.click(); };
+  const openRunMenu = (e) => { e.stopPropagation(); document.getElementById("run-opts-btn")?.click(); };
   document.getElementById("st-engine")?.addEventListener("click", openRunMenu);
   document.getElementById("st-mode")?.addEventListener("click", openRunMenu);
   // Mode/engine changes happen in setup.js / runmode.js; mirror them here.
@@ -441,6 +523,7 @@ export function setupShell() {
     if (r2 && d && !d.wsl) r2.textContent = "Show in file manager";
     paintProject();
   }).catch(() => {});
+  paintPageTitles();
   paintProject();
   paintRunSettings();
   wireHub();

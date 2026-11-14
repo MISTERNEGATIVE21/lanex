@@ -15,7 +15,8 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import * as ctx from "./context.js";
-import { revealIn } from "./views.js";
+import { mountRunBar } from "./runbar.js";
+import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns, needleLine } from "./provenance.js";
 import { renderFileText, fileActionsHtml, wireFileActions } from "./fileview.js";
@@ -157,14 +158,14 @@ export function renderVerify() {
 }
 
 async function render() {
-  const body = document.getElementById("an-body");
+  const body = document.getElementById("vf-body");
   if (!body) return;
   wireOnce();
   const runs = await ctx.loadRuns();
   // The list could not be loaded at all (LanEx busy or asleep): leave the page
   // as it is; context.js retries and the page repaints when runs arrive.
   if (!runs.length && ctx.runsLoadFailed()) return;
-  const empty = document.getElementById("an-empty");
+  const empty = document.getElementById("vf-empty");
   if (!runs.length || !ctx.contextRun()) {
     body.classList.add("is-empty");
     empty.hidden = false;
@@ -192,17 +193,30 @@ export async function revealProblems() {
 }
 
 function wireOnce() {
-  const sec = document.getElementById("sec-results");
+  const sec = document.getElementById("sec-verify");
   if (!sec || sec._vfWired) return;
   sec._vfWired = true;
   wireTips(sec);
+  mountRunBar(document.getElementById("verify-runbar"), { baseline: true });
   ctx.onContext(async (d) => {
     if (!sec.classList.contains("section-active") || d.why === "loaded" || d.why === "settled") return;   // it renders when shown
     if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBase(); paint(); return; }
     renderVerify();
   });
+  document.getElementById("btn-verify-refresh").addEventListener("click", () => renderVerify());
+  document.getElementById("btn-verify-settings").addEventListener("click", async () => {
+    const { openResolvedSettings } = await import("./finalsettings.js");
+    openResolvedSettings(_tag);
+  });
   document.getElementById("btn-verify-klayout").addEventListener("click", (e) => openKlayout(e.currentTarget));
   document.getElementById("btn-verify-copy").addEventListener("click", copySummary);
+  const nav = document.getElementById("verify-jump");
+  nav.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-jump]");
+    if (!b) return;
+    document.getElementById(b.dataset.jump)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  wireScrollSpy(nav);
 
   sec.addEventListener("click", (e) => {
     const t = e.target;
@@ -235,7 +249,7 @@ async function selectRun(tag) {
   const my = ++_token;
   _tag = tag;
   _baseTag = ctx.contextBaseline();
-  const body = document.getElementById("an-body");
+  const body = document.getElementById("vf-body");
   body.classList.add("is-loading");
   let rep = null;
   try { rep = await api.verify(tag); } catch (_e) { rep = null; }
@@ -246,7 +260,7 @@ async function selectRun(tag) {
   problemsOf(tag).then((px) => {
     if (my !== _token || !px) return;
     _px = px;
-    if (_rep) { renderChecks(); renderTiming(); renderDrc(); wireProvBtns(document.getElementById("an-body")); }
+    if (_rep) { renderChecks(); renderTiming(); renderDrc(); wireProvBtns(document.getElementById("vf-body")); }
   });
   await loadBase();
   if (my !== _token) return;
@@ -282,7 +296,7 @@ function paint() {
   renderLvs();
   renderRel();
   renderReports();
-  const sec = document.getElementById("an-body");
+  const sec = document.getElementById("vf-body");
   wireProvBtns(sec);
   wireFileActions(sec);
   // The page height just changed under the jump bar: let its scroll-spy re-read.
@@ -299,7 +313,6 @@ function jumpTo(id, openCheck) {
   }
   const el = document.getElementById(id);
   if (!el) return;
-  revealIn(el);      // the view it lives in (Checks, Timing, Reports)
   el.scrollIntoView({ behavior: "smooth", block: openCheck ? "center" : "start" });
   if (openCheck) { el.classList.add("is-flash"); setTimeout(() => el.classList.remove("is-flash"), 1400); }
 }
@@ -945,7 +958,7 @@ async function rerun(stepId) {
     const res = await api.verifyRerun({ step_id: stepId, overrides, run_tag: _tag, run_mode: state.runMode });
     if (res.ok) {
       toast.show("Re-running " + stepId + ". This page updates when it finishes.", "success", 8000,
-        { label: "Watch", run: () => import("./nav.js").then((m) => m.go("flow")) });
+        { label: "Watch", run: () => import("./nav.js").then((m) => m.go("pipeline")) });
     } else {
       toast.show("Re-run refused: " + (res.reason || res.error || "unknown"), "error");
     }

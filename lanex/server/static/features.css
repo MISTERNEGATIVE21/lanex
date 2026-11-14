@@ -1,0 +1,553 @@
+/* features.css — styles for the Phase 0–4 additions (verification, compare, DSE,
+   cells, viewers, wizard, learn). Token-only: every color,
+   space, radius, and shadow comes from styles.css :root. No hardcoded hex. */
+
+/* ---- Toasts (bottom-right; class-styled, dismissable) --------------------- */
+.toast-host {
+  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
+  display: flex; flex-direction: column; gap: var(--s-2);
+  max-width: min(380px, calc(92vw / var(--ll-zoom, 1)));
+}
+.toast {
+  display: flex; align-items: flex-start; gap: var(--s-2);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md); box-shadow: var(--sh-2);
+  padding: var(--s-3) var(--s-3); color: var(--text);
+  font-size: var(--t-sm); line-height: 1.4;
+  opacity: 0; transform: translateY(8px);
+  transition: opacity var(--dur-2, 160ms) var(--ease-out, ease-out),
+              transform var(--dur-2, 160ms) var(--ease-out, ease-out);
+}
+.toast.is-in { opacity: 1; transform: none; }
+.toast-success { border-left-color: var(--pass); }
+.toast-warn    { border-left-color: var(--warn); }
+.toast-error   { border-left-color: var(--fail); }
+.toast-info    { border-left-color: var(--accent); }
+.toast-ico { flex: none; display: inline-flex; margin-top: 1px; }
+.toast-success .toast-ico { color: var(--pass); }
+.toast-warn .toast-ico    { color: var(--warn); }
+.toast-error .toast-ico   { color: var(--fail); }
+.toast-info .toast-ico    { color: var(--accent); }
+.toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-close { flex: none; background: none; border: 0; cursor: pointer;
+  color: var(--text-muted); padding: 0; display: inline-flex; line-height: 1; }
+.toast-close:hover { color: var(--text-strong); }
+.toast-act { flex: none; align-self: center; height: 26px; margin: -4px 0; padding: 0 10px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm); background: var(--surface-3); color: var(--text-strong); font: inherit; font-weight: 600; cursor: pointer; }
+.toast-act:hover { border-color: var(--accent); }
+
+/* ---- E4.3 timing compare Δ ------------------------------------------------ */
+.tp-pos { color: var(--pass); }
+.tp-neg { color: var(--fail); }
+
+/* ---- E4.2 metric watch ---------------------------------------------------- */
+.watch-row { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
+.watch-row code { color: var(--text); }
+.watch-del { margin-left: auto; }
+
+/* ---- E4.5 run pin/star ---------------------------------------------------- */
+.run-pin {
+  background: none; border: 0; cursor: pointer; padding: 0 var(--s-1);
+  color: var(--text-disabled); font-size: var(--t-md); line-height: 1;
+}
+.run-pin:hover { color: var(--text-muted); }
+.run-pin.pinned { color: var(--warn); }
+
+/* ---- E5.1 first-run checklist (live ✓/○ on the hero steps) ---------------- */
+#onboard-checklist .ck-mark {
+  display: inline-block; width: 1.2em; font-weight: 700; color: var(--text-muted);
+}
+#onboard-checklist li.ck-done .ck-mark { color: var(--pass); }
+#onboard-checklist li.ck-done { color: var(--text-muted); }
+
+/* ---- shared bits ---------------------------------------------------------- */
+.inp {
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: var(--s-2) var(--s-3); font: inherit;
+}
+.inp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chart-box { width: 100%; }
+
+/* Verify/DSE status DOTS (renamed from .pf* to end the collision with
+   preflight.js's .pf-ok/.pf-warn/.pf-bad glyph TEXT colors in styles.css — B7). */
+.vdot { width: 9px; height: 9px; border-radius: var(--r-pill); display: inline-block; flex: 0 0 auto; }
+.vdot-pass { background: var(--pass); }
+.vdot-fail { background: var(--fail); }
+.vdot-warn { background: var(--warn); }
+.vdot-absent { background: var(--text-disabled); }
+
+.chip-pass { background: var(--pass-soft); color: var(--pass); }
+.chip-fail { background: var(--fail-soft); color: var(--fail); }
+.chip-warn { background: var(--warn-soft); color: var(--warn); }
+
+/* ---- Shared file viewer (download / locate / find) ------------------------ */
+.fv-toolbar { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-2); }
+.fv-title { font-weight: 600; font-size: var(--t-sm); }
+.fv-find { min-width: 140px; }
+.fv-spacer { flex: 1; }
+.file-actions { display: inline-flex; gap: var(--s-1); }
+.file-act { font-size: var(--t-xs); padding: 2px 8px; text-decoration: none; }
+/* position: relative makes mark.offsetTop pane-relative, so the highlight
+   centering can scroll the pane alone (never the dialog around it). */
+.fv-pre { max-height: 420px; overflow: auto; position: relative; }
+.fv-hit { background: var(--warn-soft); color: var(--text-strong); border-radius: 2px; }
+.fv-cur { background: var(--accent); color: var(--on-accent, #fff); }
+/* Provenance: the exact source line a displayed value was read from. */
+.fv-line { background: var(--accent-soft, var(--warn-soft)); color: var(--text-strong);
+  border-radius: 2px; outline: 1px solid var(--accent); display: inline-block; min-width: 100%; }
+.fv-lineno { font-size: var(--t-xs); }
+.prov-btn { padding: 1px 5px; opacity: 0.66; }
+.prov-btn:hover { opacity: 1; }
+.prov-note { margin: 0 0 var(--s-2); }
+.ov-trail-line { overflow-x: auto; margin: 0 0 var(--s-2); }
+/* Final-settings preview: conflict = an override beating a config line (the
+   fact the user must never miss); scoped = conditional on the PDK/SCL. */
+.fs-conflict { color: var(--warn, #b58900); }
+.fs-scoped { color: var(--text-muted); font-style: italic; }
+.fs-note { color: var(--text-muted); margin: var(--s-2) 0 0; }
+.fs-order { margin: 0 0 var(--s-3); padding-left: 1.4em; }
+.fs-order li { margin-bottom: 2px; }
+.fs-tablebar { display: flex; align-items: center; gap: var(--s-2); margin: var(--s-2) 0; }
+.fs-filter { flex: 0 1 260px; }
+/* Its own scroll region so a 400-row table can't swallow the dialog. */
+.fs-tablewrap { max-height: calc(48vh / var(--ll-zoom, 1)); overflow: auto; }
+.fs-all summary { cursor: pointer; color: var(--accent); }
+.prov-view .fv-pre { max-height: calc(56vh / var(--ll-zoom, 1)); }
+/* customDialog's wide variant (provenance viewers, final settings). NOT the
+   folder browser's .dlg-wide below, which pins height and hides body overflow
+   for its own scrolling file list — reusing it clipped these dialogs (the
+   "text cut, can't scroll" bug). Flex column: the BODY scrolls, so the head
+   and the Close button stay reachable however long the content is; height is
+   content-driven up to .dlg's 90vh cap. */
+/* .dlg.dlg-xl: .dlg (declared later in this file) used to win on width, so
+   the wide variant silently stayed 480px. */
+.dlg.dlg-xl { width: min(980px, calc(96vw / var(--ll-zoom, 1)));
+  display: flex; flex-direction: column; }
+.dlg-xl .dlg-body { overflow: auto; flex: 1 1 auto; min-height: 0; }
+.dlg-xl .dlg-head, .dlg-xl .dlg-actions { flex: none; }
+.report-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-1) 0; border-bottom: 1px solid var(--border); }
+.report-row:last-child { border-bottom: 0; }
+.report-row .rk { font-size: var(--t-xs); }
+.report-row .rname { font-family: var(--mono); font-size: var(--t-xs); flex: 1; word-break: break-all; }
+
+/* ---- Right-side log drawer (out-of-pipeline streamed logs) ---------------- */
+/* Topbar Logs toggle: a dot marks output waiting behind a closed drawer. */
+#logs-btn.has-activity::after { content: ""; position: absolute; top: -3px; right: -3px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface); }
+
+/* ---- Desktop viewers card ------------------------------------------------- */
+.tool-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) 0; border-bottom: 1px solid var(--border); }
+.tool-row:last-child { border-bottom: 0; }
+
+/* ---- Runs scope toggle ---------------------------------------------------- */
+.runs-scope-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* ---- Inline SVG icons (icons.js) ------------------------------------------ */
+/* icon() returns an <svg class="ic ic-NAME"> sized in px; these rules keep it
+   aligned with adjacent text in badges, buttons, list rows and empty states. */
+.ic { vertical-align: -0.15em; flex: none; }
+.empty .ico { color: var(--text-muted); }
+.empty .ico .ic { vertical-align: middle; }
+.fs-ico, .out-cat-ico { display: inline-flex; vertical-align: middle; color: var(--text-muted); }
+.fs-ico { margin-right: var(--s-1); }
+.filesel-row.dir .fs-ico { color: var(--accent); }
+/* File picking in the folder browser: the wanted type is clickable, the
+   chosen one is marked, other files are shown but dimmed. */
+.filesel-row.pickable { cursor: pointer; }
+.filesel-row.picked { border-color: var(--accent); background: var(--accent-soft); }
+.filesel-row.unpickable { opacity: 0.55; }
+.ac-banner-icon { display: inline-flex; align-items: center; color: var(--accent); }
+.cmdk-ico .ic { vertical-align: middle; }
+
+/* ---- Privileged-install password banner ----------------------------------- */
+.pw-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-banner);
+  display: flex; align-items: center; justify-content: center; gap: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: var(--warn, #b8860b); color: var(--on-status);
+  font-size: var(--t-sm); box-shadow: var(--sh-2);
+}
+.pw-banner[hidden] { display: none; }
+.pw-banner-ico { display: inline-flex; align-items: center; flex: none; margin-right: calc(-1 * var(--s-3)); }
+
+/* ---- Tooltip (one reusable bubble for [data-tip], tooltip.js) ------------- */
+.tip { position: fixed; z-index: var(--z-toast); pointer-events: none;
+  max-width: 300px; padding: 6px 10px;
+  background: var(--ink-strong); color: var(--wafer);
+  border: 0; border-radius: var(--r-sm); box-shadow: var(--sh-2);
+  font-family: var(--sans); font-size: 13px; font-weight: 500; line-height: 1.4; white-space: normal; }
+.tip[hidden] { display: none; }
+.pw-banner-close {
+  /* Deliberate literal whites: this close button sits on the warn banner fill,
+     not a themed surface, so it stays white in both themes (G1). */
+  background: rgba(255, 255, 255, .18); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .5); border-radius: var(--r-sm, 3px);
+  padding: 2px var(--s-2); cursor: pointer; font-size: var(--t-xs); white-space: nowrap;
+}
+.pw-banner-close:hover { background: rgba(255, 255, 255, .3); }
+
+/* ---- Compare -------------------------------------------------------------- */
+.cmp-checks { display: flex; flex-wrap: wrap; gap: var(--s-3); margin: var(--s-2) 0; }
+.cmp-summary-card { font-weight: 600; }
+.cmp-table td.cmp-num { font-family: var(--mono); text-align: right; }
+.cmp-table caption { text-align: left; font-weight: 600; padding: var(--s-2) 0; color: var(--text); }
+.cmp-check { display: inline-flex; gap: var(--s-1); align-items: center; }
+.cmp-table { border-collapse: collapse; width: 100%; font-size: var(--t-sm); margin: var(--s-3) 0; }
+.cmp-table th, .cmp-table td { border: 1px solid var(--border); padding: var(--s-1) var(--s-2); text-align: left; }
+.cmp-table th { background: var(--surface-2); }
+.cmp-best { background: var(--pass-soft); color: var(--pass); font-weight: 600; }
+.cmp-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--s-3); margin: var(--s-3) 0; align-items: start; }
+.cmp-fig { margin: 0; padding: 12px 14px 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
+.cmp-fig figcaption { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
+.cmp-fig figcaption b { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.cmp-fig figcaption span { font-size: 12.5px; color: var(--text-muted); }
+.cmp-fig figcaption code { flex-basis: 100%; font-size: 11px; color: var(--text-muted); background: none; padding: 0; }
+.cmp-chart { min-height: 80px; }
+
+/* ---- DSE ------------------------------------------------------------------ */
+/* DSE's jump bar sits under the page's own heading, not at the top of the
+   section: no pull-up, or it covers the line above it. */
+#dse-body > .section-jump { margin-top: 0; }
+.dse-builder { padding: var(--s-4); }
+.dse-add { display: flex; gap: var(--s-2); margin: var(--s-2) 0; flex-wrap: wrap; }
+.dse-add > select { flex: 0 1 380px; width: auto; min-width: 220px; }
+.dse-add > input { flex: 1 1 320px; width: auto; min-width: 0; }
+.dse-add > .btn { flex: none; }
+.dse-axis { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
+.dse-mode { display: flex; gap: var(--s-4); margin: var(--s-2) 0; }
+.dse-foot { display: flex; align-items: center; gap: var(--s-3); margin-top: var(--s-3); }
+.dse-qrow { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
+.dse-runpick { padding: var(--s-4); margin-top: var(--s-3); }
+.dse-runpick-head { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-2); }
+.dse-runpick-head h3 { margin: 0; }
+.dse-spacer { flex: 1; }
+.dse-runs { display: grid; gap: var(--s-1); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); max-height: 240px; overflow: auto; }
+.dse-run-row { display: flex; align-items: center; gap: var(--s-2); padding: 2px 0; cursor: pointer; }
+.dse-run-row code { overflow-wrap: anywhere; }
+.dse-runs .vdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dse-runs .vdot-pass { background: var(--pass); }
+.dse-runs .vdot-fail { background: var(--fail); }
+.dse-sweep-lbl { font-size: var(--t-sm); color: var(--text-muted); display: inline-flex; align-items: center; gap: var(--s-1); }
+/* DSE results: comparison table + side-by-side charts */
+.dse-results { padding: var(--s-4); margin-top: var(--s-3); }
+.dse-results-head { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-2); }
+.dse-results-head h3 { margin: 0; }
+.dse-results-table { overflow: auto; }
+.dse-results-table .cmp-table td.rk { font-weight: 600; white-space: nowrap; }
+.dse-results-table .cmp-table td .mu { color: var(--text-muted); font-weight: 400; font-size: var(--t-xs); }
+.dse-results-table .cmp-table th.ok { color: var(--pass); }
+.dse-results-table .cmp-table th.bad { color: var(--fail); }
+.dse-results-table .cmp-table td.best { background: color-mix(in srgb, var(--pass) 18%, transparent); font-weight: 700; }
+.dse-results-table .cmp-table tr.sec td { background: var(--surface-2); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: var(--t-xs); letter-spacing: 0.04em; }
+.dse-charts { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-top: var(--s-3); }
+.dse-chart-col { min-width: 0; }
+.dse-chart-title { font-size: var(--t-sm); color: var(--text-muted); margin-bottom: var(--s-1); display: flex; align-items: center; gap: var(--s-2); }
+.dse-bar-metric { font-size: var(--t-xs); }
+
+/* ---- Cells ---------------------------------------------------------------- */
+.cells-bar { display: flex; gap: var(--s-3); align-items: center; margin-bottom: var(--s-3); flex-wrap: wrap; }
+.cells-grid { display: grid; gap: var(--s-2); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.cell-card { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
+.cell-card code { overflow-wrap: anywhere; }
+
+/* Cells PDK/SCL picker. */
+.cells-pick { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
+.cells-pick select { background-color: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 30px 4px 8px; }
+
+/* ---- Wizard --------------------------------------------------------------- */
+.wizard { max-width: 640px; }
+.wizard-body { padding: var(--s-4); }
+
+[data-explain] { cursor: help; }
+
+/* Cell-usage breakdown (Analytics tab): donut of top masters + full count table. */
+.cu-stats { margin-bottom: var(--s-3); font-size: var(--t-xs); }
+.cu-layout { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  gap: var(--s-4); align-items: start; }
+.cu-chart { height: 300px; min-width: 0; }
+.cu-tablewrap { max-height: 360px; overflow: auto; border: 1px solid var(--border);
+  border-radius: var(--r-sm); }
+.cu-table { width: 100%; border-collapse: collapse; font-size: var(--t-xs); }
+.cu-table th { position: sticky; top: 0; background: var(--surface-2); text-align: left;
+  padding: 6px 10px; border-bottom: 1px solid var(--border); z-index: 1; }
+.cu-table td { padding: 5px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
+.cu-table tr:hover td { background: var(--surface-2); }
+.cu-cell { overflow-wrap: anywhere; }
+.cu-count, .cu-pct { text-align: right; white-space: nowrap; }
+@media (max-width: 720px) { .cu-layout { grid-template-columns: 1fr; } }
+
+/* ---- Auto-generate config (Setup) -------------------------------------- */
+.autoconfig-banner {
+  margin-top: var(--s-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  padding: var(--s-3);
+}
+.autoconfig-banner[hidden] { display: none; }
+.ac-banner-row { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.ac-banner-icon { font-size: 1.3rem; }
+.ac-banner-text { flex: 1; min-width: 220px; color: var(--text); font-size: var(--t-sm); }
+.ac-modal { width: min(680px, calc(94vw / var(--ll-zoom, 1))); }
+.ac-body { padding: var(--s-3); overflow: auto; }
+.ac-detected {
+  display: grid; gap: var(--s-2); margin: var(--s-3) 0;
+  grid-template-columns: 1fr 1fr;
+}
+.ac-detected div { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); }
+.ac-detected dt { font-size: var(--t-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.ac-detected dd { margin: 2px 0 0; font-family: var(--mono); color: var(--text-strong); word-break: break-word; }
+.ac-notes { margin: 0 0 var(--s-3); padding-left: 1.2em; color: var(--warn); font-size: var(--t-sm); }
+.ac-label { display: block; font-size: var(--t-xs); color: var(--text-muted); margin-bottom: 4px; }
+.ac-json {
+  width: 100%; min-height: 200px; resize: vertical;
+  font-family: var(--mono); font-size: var(--t-sm); line-height: 1.4;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: var(--s-2); box-sizing: border-box;
+}
+.ac-actions { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-3); }
+.ac-fmt { font-size: var(--t-sm); color: var(--text-muted); }
+.ac-error { margin-top: var(--s-2); color: var(--fail); font-size: var(--t-sm); }
+.ac-error[hidden] { display: none; }
+
+/* ---- Open-in-container tool row (#3/#6) -------------------------------- */
+.v-open-container {
+  margin-top: var(--s-3); padding-top: var(--s-3);
+  border-top: 1px dashed var(--border);
+}
+.v-open-container .open-in-container[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* ---- Custom cells (advanced cell swap, #5) ----------------------------- */
+.cc-panel { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--border); }
+.cc-head { display: flex; align-items: center; gap: var(--s-3); }
+.cc-head h2 { margin: 0; flex: 1; }
+.cc-badge { font-size: var(--t-xs); padding: 1px 8px; border-radius: var(--r-sm); border: 1px solid var(--accent); color: var(--accent); vertical-align: middle; font-family: var(--mono); }
+.cc-table { width: 100%; border-collapse: collapse; margin: var(--s-3) 0; font-size: var(--t-sm); }
+.cc-table th, .cc-table td { text-align: left; padding: var(--s-2); border-bottom: 1px solid var(--border); }
+.cc-table .mono, .mono { font-family: var(--mono); }
+.cc-chip { font-size: var(--t-xs); padding: 1px 6px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
+.cc-add { margin-top: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.cc-add > summary { padding: var(--s-3); cursor: pointer; font-weight: 600; }
+.cc-form { padding: 0 var(--s-3) var(--s-3); display: flex; flex-direction: column; gap: var(--s-3); }
+.cc-form > label { display: flex; flex-direction: column; gap: 4px; font-size: var(--t-sm); color: var(--text-muted); }
+.cc-form input[type=text] { padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text); }
+.cc-views { display: grid; gap: var(--s-2); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.cc-view { display: flex; flex-direction: column; gap: 4px; font-size: var(--t-sm); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); }
+.cc-form-actions { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+/* ---- Custom macros: instance rows -------------------------------------- */
+.mc-instances { display: flex; flex-direction: column; gap: var(--s-2); }
+.mc-inst-head { font-size: var(--t-sm); color: var(--text-muted); }
+.mc-inst-row { display: grid; grid-template-columns: 1.6fr 0.7fr 0.7fr auto auto; gap: var(--s-2); align-items: center; }
+.mc-inst-row input[type=text], .mc-inst-row select {
+  padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text); font-size: var(--t-sm); min-width: 0; }
+.mc-inst-del { padding: 2px 8px; }
+@media (max-width: 640px) { .mc-inst-row { grid-template-columns: 1fr 1fr; } }
+
+.cc-help { white-space: normal; }
+.cc-help h3 { margin: var(--s-3) 0 var(--s-1); color: var(--text-strong); }
+.cc-help ul, .cc-help ol { margin: 0 0 var(--s-2); padding-left: 1.4em; }
+.cc-help li { margin: 3px 0; }
+.cc-help-modal { width: min(760px, calc(94vw / var(--ll-zoom, 1))); }
+
+/* ---- Manual / advanced (#4) -------------------------------------------- */
+.manual-card { margin-bottom: var(--s-4); }
+.manual-input-row { display: flex; gap: var(--s-2); margin: var(--s-2) 0; }
+.manual-input-row input { flex: 1; font-family: var(--mono); padding: var(--s-2);
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text); }
+.manual-output {
+  margin: var(--s-2) 0 0; max-height: 360px; overflow: auto;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: var(--s-3); font-family: var(--mono); font-size: var(--t-sm); line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; color: var(--text);
+}
+.cli-reveal { margin-top: var(--s-3); }
+.cli-block { margin-bottom: var(--s-3); }
+.cli-label { font-size: var(--t-sm); color: var(--text-muted); margin-bottom: 4px; }
+.cli-row { display: flex; gap: var(--s-2); align-items: stretch; }
+.cli-cmd { flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: var(--s-2); font-family: var(--mono); font-size: var(--t-sm); overflow-x: auto; white-space: pre; }
+
+/* ---- Segmented control (Timing setup/hold, reusable) ------------------- */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-md);
+  overflow: hidden; background: var(--surface-2); }
+.seg-btn { border: 0; background: transparent; color: var(--text-muted); cursor: pointer;
+  padding: 4px var(--s-3); font-size: var(--t-sm); font-weight: 600; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn.is-active { background: var(--accent-soft, var(--surface)); color: var(--accent); }
+.seg-btn:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: -2px; }
+
+/* ---- Generic data table (Timing, reused by future tables) -------------- */
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
+.data-table thead th { position: sticky; top: 0; background: var(--surface-2); color: var(--text);
+  text-align: left; padding: 6px var(--s-2); border-bottom: 1px solid var(--border);
+  font-weight: 600; z-index: 1; }
+.data-table td { padding: 5px var(--s-2); border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.data-table .mono { font-family: var(--mono); font-size: var(--t-xs); }
+.tp-sortable { cursor: pointer; user-select: none; }
+.tp-sortable:hover { color: var(--accent); }
+
+/* ---- Timing paths card ------------------------------------------------- */
+.tp-summary { display: flex; gap: var(--s-2); flex-wrap: wrap; align-items: center;
+  margin: var(--s-3) 0; }
+.tp-hist { width: 100%; }
+.tp-table tbody tr.tp-row { cursor: pointer; }
+.tp-table tbody tr.tp-row:hover { background: var(--hover, var(--surface-2)); }
+.tp-table tbody tr.tp-row-fail td { background: var(--fail-soft); }
+.tp-pre { margin: 0; padding: var(--s-2); background: var(--surface-2); border-radius: var(--r-sm);
+  font-family: var(--mono); font-size: var(--t-xs); line-height: 1.5; overflow-x: auto;
+  white-space: pre; max-height: 360px; color: var(--text); }
+
+/* ---- In-app dialogs (dialog.js) --------------------------------------- */
+.dlg-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex;
+  align-items: center; justify-content: center; background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(2px); padding: var(--s-4); }
+.dlg { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: var(--sh-3);
+  width: min(480px, calc(96vw / var(--ll-zoom, 1))); max-height: calc(90vh / var(--ll-zoom, 1)); overflow: auto; }
+.dlg-head { padding: var(--s-3) var(--s-4); font-weight: 600; font-size: var(--t-md, 15px);
+  border-bottom: 1px solid var(--border); }
+.dlg-body { padding: var(--s-4); color: var(--text); font-size: var(--t-sm); }
+.dlg-body p { margin: 0 0 var(--s-2); line-height: 1.5; }
+.dlg-label { display: block; margin: var(--s-2) 0 4px; color: var(--text-muted); font-size: var(--t-sm); }
+.dlg-input { width: 100%; padding: var(--s-2); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text);
+  font-family: var(--mono); font-size: var(--t-sm); box-sizing: border-box; }
+.dlg-actions { display: flex; gap: var(--s-2); justify-content: flex-end;
+  padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
+/* License & notices (about.js): the NOTICE file is long — keep its own scroll
+   region and preserve its line breaks inside the dialog. */
+.about-notice { white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: calc(52vh / var(--ll-zoom, 1)); overflow: auto; }
+
+/* Wide dialog variant — the folder browser (fs-modal) keeps `hidden` toggling
+   (fs.js), so it lives as a persistent element, not a dialog.js instance. */
+.dlg-backdrop[hidden] { display: none; }
+/* The folder picker is opened from other modals (New project, Open design):
+   it must sit above them, or "Put it here" is hidden behind the wizard. */
+#fs-modal { z-index: calc(var(--z-modal) + 10); }
+.dlg-wide { width: min(720px, calc(94vw / var(--ll-zoom, 1))); height: calc(70vh / var(--ll-zoom, 1)); display: flex; flex-direction: column; }
+.dlg-wide .dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column;
+  gap: var(--s-3); overflow: hidden; }
+.fs-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+.fs-head #fs-modal-title { font-weight: 600; }
+.fs-head .fs-x { flex: none; margin: -4px -6px -4px 0; }
+.fs-body .hint { margin: 0; }
+.fs-pathrow { margin: 0; }
+.fs-up { flex: none; }
+.fs-roots { flex: none; display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.fs-filelist { flex: 1; min-height: 0; overflow: auto; }
+
+/* ---- Runs list: status border, filter, inline note -------------------- */
+.runs-filter { flex: 1; min-width: 0; padding: 5px var(--s-2); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); font-size: var(--t-sm); }
+.runs-list li.run-pass { border-left: 3px solid var(--pass); }
+.runs-list li.run-fail { border-left: 3px solid var(--fail); }
+/* The run the results pages show (context.js): a click on a card picks it. */
+.runs-list li[data-tag] { cursor: pointer; }
+.runs-list li.is-viewing { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.run-viewing { display: none; }
+.runs-list li.is-viewing .run-viewing {
+  display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 3px;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.run-note-row { margin: var(--s-2) 0; }
+.run-note-ta { width: 100%; box-sizing: border-box; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text);
+  font-size: var(--t-sm); padding: var(--s-2); resize: vertical; }
+
+/* ---- Config: per-variable reset-to-default ---------------------------- */
+.var-reset { background: transparent; border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text-muted); cursor: pointer; width: 26px; height: 26px; line-height: 1;
+  font-size: 14px; align-self: center; }
+.var-reset:hover { color: var(--accent); border-color: var(--accent); }
+.var-reset:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 1px; }
+
+/* ---- audit round 19: user presets, auto-lint, batch-select ------------- */
+.preset-user { display: inline-flex; gap: var(--s-2); flex-wrap: wrap; }
+.user-preset { position: relative; padding-right: 20px; }
+.user-preset-del {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  border: none; background: transparent; color: var(--text-muted);
+  cursor: pointer; font-size: 10px; line-height: 1; padding: 2px;
+}
+.user-preset-del:hover { color: var(--fail); }
+.ide-autolint { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-sm); color: var(--text-muted); white-space: nowrap; }
+.run-pick { margin-right: var(--s-2); accent-color: var(--accent); cursor: pointer; }
+
+/* ---- shared run-scope toggle (Analytics/Verify/DSE/Layout pickers) ------ */
+.run-scope-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--t-sm); color: var(--text-muted); white-space: nowrap; cursor: pointer;
+}
+.run-scope-toggle input { accent-color: var(--accent); cursor: pointer; }
+
+/* ---- global topbar Run/Stop button -------------------------------------- */
+/* It reuses .btn-cta for the accent gradient, but .btn-cta is the big, column-
+   stacked Setup "Run flow" button (label + hint, t-lg font). In the fixed-height
+   topbar that made it oversized, so these overrides — scoped to .topbar-run
+   ONLY, never .btn-cta — put it back to a normal single-row toolbar button that
+   lines up with the icon buttons/pills beside it. */
+.topbar-run {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--s-2);
+  height: 34px;              /* match .iconbtn so the toolbar row is even */
+  padding: 0 14px;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset, 0 4px 14px var(--accent-glow);
+}
+.topbar-run svg { flex: 0 0 auto; }
+.topbar-run.is-stop {
+  background: var(--fail); border-color: var(--fail); color: var(--on-accent);
+}
+.topbar-run.is-stop:hover { filter: brightness(1.08); }
+
+/* ---- bundle download checklist dialog ---------------------------------- */
+.dlg-checklist { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-2); max-height: calc(50vh / var(--ll-zoom, 1)); overflow: auto; }
+.dlg-check-tools { display: flex; gap: var(--s-2); margin-bottom: var(--s-1); }
+.dlg-check { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; font-size: var(--t-sm); }
+.dlg-check input { accent-color: var(--accent); cursor: pointer; }
+
+/* ---- compare toolbar (CSV export) -------------------------------------- */
+.cmp-toolbar { display: flex; justify-content: flex-end; margin-bottom: var(--s-2); }
+.cmp-pick-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+/* Full-width, readable compare error (was a tiny pill that clipped the text). */
+.cmp-error {
+  margin: var(--s-3) 0; padding: var(--s-3) var(--s-4); border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--fail) 12%, var(--surface));
+  border: 1px solid var(--fail); color: var(--text);
+  font-size: var(--t-sm); line-height: 1.5; word-break: break-word;
+}
+
+/* ---- scroll-spy: highlight the jump chip for the section in view -------- */
+
+/* ---- Layout: one unified tool button per tool (incl. GDS3D/OpenROAD) ---- */
+
+
+/* ---------- liability disclaimer (LanEx is a viewer, not sign-off) ---------- */
+
+.status-disclaimer {
+  color: var(--warn);
+  font-size: var(--t-xs);
+  letter-spacing: 0.02em;
+  cursor: help;
+  white-space: nowrap;
+}
+.status-disclaimer .sd-short { display: none; }
+/* B20 — between ~900-1100px the full sentence crowds the shortcut hints; show
+   the short form (the full text stays in the title attribute). */
+@media (max-width: 1100px) {
+  .status-disclaimer .sd-full { display: none; }
+  .status-disclaimer .sd-short { display: inline; }
+}
+/* Below 900px the status bar is too tight even for the short form — hide it
+   there (scoped to the status bar; the landing footer keeps its disclaimer). */
+@media (max-width: 900px) { footer.status .status-disclaimer { display: none; } }

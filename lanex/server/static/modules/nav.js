@@ -1,13 +1,8 @@
 // nav.js — moving between pages: go(tab, params), Back and Forward, the rail.
 //
-//   go("results", { check: "magic-drc" })    a page, and a place on it
+//   go("verify", { check: "magic-drc" })     a page, and a place on it
 //   go("ide", { rel: "src/spm.v", line })    go("cells", { cell })
-//   go("setup", { section: "setup-pdk" })    go("results", { view: "timing" })
-//
-// Page ids: setup (Project), ide (Code), config, flow, runs, results, layout,
-// cells (Library), tools, settings. Names from before the redesign still
-// work (resolve): "pipeline" is flow; "analytics" and "verify" are results;
-// a link to one of Setup's old settings sections lands on Config.
+//   go("setup", { section: "setup-pdk" })    go("pipeline", { pane: "stepout" })
 //
 // Every page change is one browser history entry (bare #tab), so Alt+← / Alt+→
 // and the mouse's back and forward buttons work the way they do in a browser.
@@ -35,26 +30,6 @@ const _recent = [];
 
 const work = () => document.querySelector("main.work");
 
-// Old page names, and old places on a page, to where they live now.
-const CONFIG_SECTIONS = { "setup-settings": "common", "cfg-card": "all" };
-export function resolve(tab, params = {}) {
-  if (tab === "pipeline") return ["flow", params];
-  if (tab === "analytics") return ["results", params];
-  if (tab === "verify") {
-    const plain = !params.check && !params.filter && !params.section && !params.view;
-    return ["results", plain ? { ...params, view: "checks" } : params];
-  }
-  if (tab === "setup" && (params.setting || CONFIG_SECTIONS[params.section])) {
-    const { section, ...rest } = params;
-    return ["config", section ? { ...rest, view: CONFIG_SECTIONS[section] } : rest];
-  }
-  return [tab, params];
-}
-// The address shows the page's name as the rail says it.
-const HASH_OUT = { setup: "project", ide: "code", cells: "library" };
-const HASH_IN = { project: "setup", code: "ide", library: "cells", pipeline: "flow", analytics: "results", verify: "results" };
-const hashOf = (tab) => "#" + (HASH_OUT[tab] || tab);
-
 // What each page does with the params of a link (the page itself is already
 // showing and rendering when these run).
 const FOCUS = {
@@ -66,15 +41,12 @@ const FOCUS = {
     else await m.openInIde({ rel: p.rel, line: p.line });
   },
   cells: async (p) => {
-    const V = await import("./views.js");
-    if (p.view) V.showView("cells", p.view);
     if (!p.cell) return;
-    V.showView("cells", "cells");
     const m = await import("./cells.js");
     await m.renderCells({ pdk: p.pdk, scl: p.scl, cell: p.cell });
     document.getElementById("cl-library")?.scrollIntoView({ block: "start" });
   },
-  flow: async (p) => {
+  pipeline: async (p) => {
     if (!p.step && !p.stage) return;
     const m = await import("./flow.js");
     await m.revealInFlow(p);
@@ -85,28 +57,21 @@ const FOCUS = {
     if (p.box) await m.revealBox(p.box);
     else await m.revealSource(p.source);
   },
-  config: async (p) => {
-    const V = await import("./views.js");
-    if (p.view) V.showView("config", p.view);
+  setup: async (p) => {
     if (!p.setting) return;
-    V.showView("config", "all");
     const m = await import("./config.js");
-    return m.revealSetting(p.setting);
+    await m.revealSetting(p.setting);
   },
   runs: async (p) => {
     if (!p.sweep) return;
     const m = await import("./sweeps.js");
     m.openSweepSheet();
   },
-  results: async (p) => {
-    const V = await import("./views.js");
-    if (p.view) V.showView("results", p.view);
-    if (p.check || p.filter) {
-      V.showView("results", "checks");
-      const m = await import("./verify.js");
-      if (p.check) await m.revealCheck(p.check);
-      else await m.revealProblems();
-    } else if (p.section) V.revealIn(p.section);
+  verify: async (p) => {
+    if (!p.check && !p.filter) return;
+    const m = await import("./verify.js");
+    if (p.check) await m.revealCheck(p.check);
+    else await m.revealProblems();
   },
   tools: async (p) => {
     if (!p.item) return;
@@ -122,14 +87,14 @@ export function tabLabel(tab) {
 // "Verify · Checks": the page and the section of it in view.
 function here() {
   const tab = currentTab();
-  const cur = document.querySelector("#sec-" + tab + " .page-h .tab[aria-selected='true']");
+  const cur = document.querySelector("#sec-" + tab + " .section-jump .is-current");
   const sec = cur && cur.textContent.trim();
-  return tabLabel(tab) + (sec && !/^(summary|cells|common)$/i.test(sec) ? " · " + sec : "");
+  return tabLabel(tab) + (sec && !/^(overview|project)$/i.test(sec) ? " · " + sec : "");
 }
 
 function describe(e) {
   const p = e.params || {};
-  const sec = p.view && document.querySelector('#sec-' + e.tab + ' .page-h [data-view="' + p.view + '"]');
+  const sec = p.section && document.querySelector('#sec-' + e.tab + ' [data-jump="' + p.section + '"]');
   const what = p.cell || p.rel || p.check || p.setting || p.step || p.label || (sec ? sec.textContent.trim() : "");
   return tabLabel(e.tab) + (what ? " · " + what : "");
 }
@@ -146,7 +111,6 @@ export function go(tab, params = {}, { link = true } = {}) {
   }
   // DSE is sweeps inside Runs now: the old page name opens Runs' sweep sheet.
   if (tab === "dse") { tab = "runs"; params = { ...params, sweep: "new" }; }
-  [tab, params] = resolve(tab, params);
   if (!document.getElementById("sec-" + tab)) return;
   const from = currentTab();
   saveScroll();
@@ -154,13 +118,13 @@ export function go(tab, params = {}, { link = true } = {}) {
     // Same page: a new place on it replaces the entry (VS Code merges nearby
     // moves the same way), so Back never steps through every click.
     _cur = { ..._cur, params: { ...params } };
-    history.replaceState({ lx: _cur }, "", hashOf(tab));
+    history.replaceState({ lx: _cur }, "", "#" + tab);
     show(_cur, { fresh: true });
     return;
   }
   const via = link && from !== tab ? here() : null;
   _cur = { id: ++_seq, tab, params: { ...params }, via };
-  history.pushState({ lx: _cur }, "", hashOf(tab));
+  history.pushState({ lx: _cur }, "", "#" + tab);
   show(_cur, { fresh: true });
 }
 
@@ -178,13 +142,13 @@ function onPop(e) {
       // An old name: it replaces this entry (Back must not land on it again).
       if (_cur) {
         if (t === "dse") _cur = { ..._cur, tab: "runs" };
-        history.replaceState({ lx: _cur }, "", hashOf(_cur.tab));
+        history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
       }
       go(t);
       return;
     }
     _cur = { id: ++_seq, tab: t || "setup", params: {}, via: null };
-    history.replaceState({ lx: _cur }, "", hashOf(_cur.tab));
+    history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
     show(_cur, { fresh: true });
     return;
   }
@@ -206,12 +170,7 @@ function show(entry, { fresh }) {
   // A focus handler may answer with the id of the element it found (a setting's
   // row): that is held in view like a section while the page fills in.
   if (fresh && (p.section || p.setting)) {
-    // A link to a section shows the view it lives in, then brings it into view.
-    done.then(async (id) => {
-      const target = p.section || id;
-      if (target) (await import("./views.js")).revealIn(target);
-      revealSection(entry.tab, target);
-    });
+    done.then((id) => revealSection(entry.tab, p.section || id));
   } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter || p.item))) {
     restoreScroll(!fresh && _entryScroll[entry.id] != null ? _entryScroll[entry.id] : (_scroll[entry.tab] || 0));
   }
@@ -272,7 +231,7 @@ function revealSection(tab, id) {
     if (el && el.offsetParent !== null) {
       const box = w.getBoundingClientRect();
       const k = box.height / (w.offsetHeight || 1) || 1;          // client px per CSS px (UI zoom)
-      const head = document.querySelector("#sec-" + tab + " > .page-h");
+      const head = document.querySelector("#sec-" + tab + " .section-jump-stack, #sec-" + tab + " > .section-jump");
       const line = head ? (head.getBoundingClientRect().bottom - box.top) / k : 0;
       const want = Math.max(0, w.scrollTop + (el.getBoundingClientRect().top - box.top) / k - line - 12);
       const max = w.scrollHeight - w.clientHeight;
@@ -346,13 +305,11 @@ export function setupNav() {
   });
 }
 
-// The page the address names (#code, #results…), or null: a page, an old name
-// for one (#ide, #verify, #pipeline), or an old page name go() still knows
-// (dse, manual, console).
+// The page the address names (#ide, #verify…), or null: a tab with a page, or
+// an old page name go() still knows (dse, manual, console).
 export function hashTab(hash = location.hash) {
-  let t = String(hash || "").replace(/^#/, "").split(/[?&/]/)[0].trim();
+  const t = String(hash || "").replace(/^#/, "").split(/[?&/]/)[0].trim();
   if (!t || !/^[a-z0-9_-]+$/i.test(t)) return null;
-  t = HASH_IN[t] || t;
   if (document.getElementById("sec-" + t) || ["dse", "manual", "console"].includes(t)) return t;
   return null;
 }
@@ -367,7 +324,7 @@ export function bootTab() {
 
 export function startAt(tab) {
   _cur = { id: ++_seq, tab, params: {}, via: null };
-  history.replaceState({ lx: _cur }, "", hashOf(tab));
+  history.replaceState({ lx: _cur }, "", "#" + tab);
   activate(tab);
   remember(_cur);
   // The first page renders like any page it is shown: a reload on #tools

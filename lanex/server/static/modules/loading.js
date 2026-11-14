@@ -56,10 +56,10 @@ export const skel = {
 // on its way. Pages with their own skeleton (Tools, Cells' layout) keep it.
 export function pageSkeleton(tab) {
   switch (tab) {
-    case "flow": return skel.hero({ lede: 2, actions: 2 }) + skel.tiles(7) + skel.panes(300);
+    case "pipeline": return skel.hero({ lede: 2, actions: 2 }) + skel.tiles(7) + skel.panes(300);
     case "runs": return skel.hero({ lede: 2, actions: 2 }) + skel.rows(8, 6);
-    case "results": return skel.hero({ lede: 2, actions: 2 }) + skel.cards(3) + skel.block(200);
-    case "settings": return skel.rows(6, 2);
+    case "analytics": return skel.hero({ lede: 2, actions: 2 }) + skel.cards(3) + skel.block(200);
+    case "verify": return skel.hero({ lede: 2, actions: 1 }) + skel.cards(4) + skel.rows(5, 4);
     case "layout": return skel.tiles(7) + skel.block(420);
     case "cells": return skel.hero({ lede: 2, actions: 0 }) + skel.cards(3) + skel.rows(6, 4);
     case "ide": return skel.panes(420);

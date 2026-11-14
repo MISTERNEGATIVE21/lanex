@@ -1,8 +1,6 @@
 // hotkeys.js — global keyboard shortcuts + the single source of truth for the
 // Shortcuts tab of the help sheet (so the list and the handlers can never drift).
 import { toggleDensity } from "./density.js";
-import { toggleTheme } from "./theme.js";
-import { singleKeysOn } from "./prefs.js";
 import { go, railKeys } from "./nav.js";
 import { state } from "./state.js";
 import { currentTab } from "./tabs.js";
@@ -46,7 +44,7 @@ export const IDE_SHORTCUTS = [
 // A bare "r" starts a full run only where Run is the page's own action (Setup,
 // Flow): elsewhere a stray r while reading Verify or Layout must not launch a
 // two-minute run. Ctrl+Enter starts it from any page (not while typing).
-export const RUN_KEY_TABS = ["setup", "flow"];
+export const RUN_KEY_TABS = ["setup", "pipeline"];
 export function runKeyAllowed(key, { ctrl = false, tab = "" } = {}) {
   if (key === "Enter" && ctrl) return true;
   return key === "r" && !ctrl && RUN_KEY_TABS.includes(tab);
@@ -74,8 +72,6 @@ export function setupHotkeys() {
     if (e.defaultPrevented || (e.target && (e.target.isContentEditable ||
         (e.target.closest && e.target.closest(".cm-editor, .wv"))))) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    // Single-key shortcuts can be turned off in Settings (WCAG 2.1.4).
-    if (!singleKeysOn()) return;
     // In the RTL IDE (its explorer, tabs, panels) a press meant for the code
     // easily lands on a button instead; there r and s must not start or stop
     // the RTL-to-GDS run.
@@ -85,7 +81,7 @@ export function setupHotkeys() {
       e.preventDefault();
       return;
     }
-    if (e.key === "t") toggleTheme();
+    if (e.key === "t") document.getElementById("theme-btn")?.click();
     if (e.key === "d") toggleDensity();
     const page = railKeys().find(([k]) => k === e.key);
     if (page) go(page[1], {}, { link: false });
@@ -94,7 +90,7 @@ export function setupHotkeys() {
     if (e.key === "s") document.getElementById("btn-cancel")?.click();
     if (e.key === "/") {
       // Flow: filter the log of the step on screen.
-      const s = document.querySelector("#sec-flow.section-active .fl-insp .lv-q input");
+      const s = document.querySelector("#sec-pipeline.section-active .fl-insp .lv-q input");
       if (s) { s.focus(); e.preventDefault(); }
     }
   });

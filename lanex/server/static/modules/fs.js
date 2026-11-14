@@ -378,7 +378,7 @@ function paintCount() {
   const ticked = rows.filter((f) => _checked.has(f.abs)).length;
   const tbs = _files.filter((f) => f.role === "testbench").length;
   el.textContent = rows.length
-    ? ticked + " of " + rows.length + " design file" + (rows.length === 1 ? "" : "s") + " in the chip" +
+    ? ticked + " of " + rows.length + " design file" + (rows.length === 1 ? "" : "s") + " go into the chip" +
       (tbs ? " · " + tbs + " testbench" + (tbs === 1 ? "" : "es") : "")
     : "No design files yet.";
 }

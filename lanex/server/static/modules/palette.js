@@ -51,15 +51,14 @@ function A(id, title, where, ico, run, kbd = "") {
 function actions() {
   const goTo = (t, label, ico) => A("go-" + t, "Go to " + label, label, ico, () => tab(t), railKey(t));
   const list = [
-    goTo("setup", "Project", "folder"),
-    goTo("ide", "Code", "code"),
-    goTo("cells", "Library", "layers"),
-    goTo("flow", "Flow", "flow"),
+    goTo("setup", "Setup", "folder"),
+    goTo("ide", "RTL IDE", "code"),
+    goTo("cells", "Cells", "layers"),
+    goTo("pipeline", "Flow", "flow"),
     goTo("runs", "Runs", "clock"),
     goTo("layout", "Layout", "grid"),
-    goTo("results", "Results", "chart"),
-    goTo("config", "Config", "sliders"),
-    goTo("settings", "Settings", "gear"),
+    goTo("analytics", "Analytics", "chart"),
+    goTo("verify", "Verify", "check"),
     goTo("tools", "Tools", "tools"),
     A("run", "Run the flow", "Run", "play", () => click("btn-run-global"), "Ctrl Enter"),
     A("stop", "Stop the run", "Run", "stop", () => click("btn-cancel"), "s"),
@@ -145,7 +144,7 @@ function runs() {
       where: "Flow", icon: icon("clock"), value: st,
       sub: [whenLocal(r.started_at), r._design && r._design !== design ? r._design.split("/").pop() : ""].filter(Boolean).join(" · "),
       keys: [st],
-      run: async () => { await setRun(r.tag, r._design || design); tab("flow"); },
+      run: async () => { await setRun(r.tag, r._design || design); tab("pipeline"); },
     };
   });
 }
