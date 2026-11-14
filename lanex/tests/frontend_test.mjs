@@ -168,7 +168,7 @@ check("zoom: stylesheets compensate viewport units via --ll-zoom", () => {
     /setProperty\("--ll-zoom"/);
   // Every app stylesheet (the landing page is not zoomed), and the dynamic /
   // small / large viewport units too: 100dvh slipped through once (Layout).
-  const core = ["styles.css", "features.css", "ide.css"];
+  const core = ["ui.css", "frame.css", "ide.css"];
   const sheets = readdirSync(STATIC).filter((f) => f.endsWith(".css") && f !== "landing.css");
   for (const f of core) assert.ok(sheets.includes(f), f);
   for (const f of sheets) {
@@ -1590,7 +1590,9 @@ check("keys: number keys follow the rail, Flow never claims a run that did not h
   assert.ok(/stripIdle/.test(fl) && /FS\.STAGES/.test(fl), "with no run, Flow shows the seven stages");
   const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
   assert.ok(!/Preview tab/.test(html), "index.html still points at the Preview tab");
-  for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar", "flow-runbar"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
+  // The run in view is one control in the top bar, not one per page.
+  assert.ok(html.includes('id="top-runbar"'), "top-runbar missing");
+  for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar", "flow-runbar"]) assert.ok(!html.includes('id="' + id + '"'), id + " is back: the run picker lives in the top bar");
 });
 
 // ---------- P1 Flow: the run moment, the reason first, one verdict ------------------
@@ -1619,7 +1621,7 @@ check("flow page: every step stays in view, Run shows the run, one screen", () =
   const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
   assert.ok(/ll\.showFlowOnRun"\) !== "0"/.test(setup), "a run start no longer shows Flow by default");
   const css = readFileSync(resolve(MOD, "..", "flow.css"), "utf8");
-  assert.ok(/#sec-pipeline\.section-active \{[^}]*min-height: 100%/.test(css), "Flow is no longer one screen tall");
+  assert.ok(/#sec-flow\.section-active \{[^}]*min-height: 100%/.test(css), "Flow is no longer one screen tall");
   assert.ok(/\.fl-steps-scroll \{[^}]*overflow: auto/.test(css), "the step list must scroll inside its pane");
 });
 
@@ -1970,10 +1972,10 @@ check("console: command history steps like a shell and keeps the draft", () => {
 
 check("hotkeys: a bare r runs only on Setup and Flow; Ctrl+Enter anywhere", () => {
   assert.ok(HK.runKeyAllowed("r", { tab: "setup" }));
-  assert.ok(HK.runKeyAllowed("r", { tab: "pipeline" }));
-  assert.ok(!HK.runKeyAllowed("r", { tab: "verify" }));
+  assert.ok(HK.runKeyAllowed("r", { tab: "flow" }));
+  assert.ok(!HK.runKeyAllowed("r", { tab: "results" }));
   assert.ok(!HK.runKeyAllowed("r", { tab: "layout" }));
-  assert.ok(HK.runKeyAllowed("Enter", { ctrl: true, tab: "verify" }));
+  assert.ok(HK.runKeyAllowed("Enter", { ctrl: true, tab: "results" }));
 });
 
 check("console: Manual rail item is gone, go('manual') opens the drawer", () => {
@@ -2085,12 +2087,12 @@ check("loading: a skeleton shows only after the delay, and never over content", 
 });
 
 check("loading: every page has a skeleton shaped like it", () => {
-  for (const tab of ["setup", "ide", "cells", "pipeline", "runs", "layout", "analytics", "verify", "tools"]) {
+  for (const tab of ["setup", "ide", "cells", "flow", "runs", "layout", "results", "settings", "tools"]) {
     const html = LD.pageSkeleton(tab);
     assert.match(html, /class='ld-/, tab);
     assert.doesNotMatch(html, /No runs|No run yet|Open a project/i, tab + " skeleton must not read as an empty state");
   }
-  assert.equal((LD.pageSkeleton("pipeline").match(/class='ld-tile'/g) || []).length, 7, "Flow's seven stages");
+  assert.equal((LD.pageSkeleton("flow").match(/class='ld-tile'/g) || []).length, 7, "Flow's seven stages");
 });
 
 await checkAsync("loading: onceLoader shares one load and retries after a failure", async () => {

@@ -1021,7 +1021,7 @@ async function paintLive() {
   el.innerHTML = "<span class='rn-live-dot' aria-hidden='true'></span><b>Sweep running</b> · run " + Math.min(done + 1, st.total || done + 1) + " of " + (st.total || "?") +
     (st.running ? " · <code>" + esc(st.running) + "</code>" : "") +
     ((st.failed || []).length ? " · <span class='rn-bad'>" + st.failed.length + " failed</span>" : "") +
-    "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-go='pipeline'>Watch in Flow</button>" +
+    "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-go='flow'>Watch in Flow</button>" +
     "<button class='btn btn-ghost btn-sm' id='rn-sweep-stop'>" + icon("stop", { size: 13 }) + " Stop sweep</button>";
   el.querySelector("#rn-sweep-stop").onclick = async () => {
     if (!(await confirmDialog({ title: "Stop the sweep?", confirmText: "Stop sweep", danger: true,
@@ -1069,7 +1069,7 @@ async function paintCard(r) {
     card = "<div class='an-verdict fl-hero is-" + (VERDICT_TONE[v.state] === "pass" ? "pass" : v.state === "failed" ? "fail" : "warn") + "'><div class='an-verdict-main'>" +
       "<div class='an-eyebrow'>Run " + esc(r.tag) + "</div><h2 class='an-title'>" + esc(title) + "</h2>" +
       (lede ? "<p class='an-lede'>" + esc(lede) + "</p>" : "") +
-      "</div><div class='an-verdict-act'>" + (v.state === "failed" ? "<button class='btn btn-primary btn-sm' data-go='pipeline'>" + icon("flow", { size: 13 }) + " Why, and how to fix it</button>" : "") + "</div></div>";
+      "</div><div class='an-verdict-act'>" + (v.state === "failed" ? "<button class='btn btn-primary btn-sm' data-go='flow'>" + icon("flow", { size: 13 }) + " Why, and how to fix it</button>" : "") + "</div></div>";
   }
   host.innerHTML = lineageHtml(r) + card + actionsHtml(r) + "<div class='rn-note-row'><label class='muted' for='rn-note-ta'>Note</label>" +
     "<textarea id='rn-note-ta' class='rn-note-ta' rows='2' placeholder='What you tried, what you saw…'></textarea></div>";
@@ -1096,7 +1096,7 @@ function actionsHtml(r) {
 
 async function runAction(id, r) {
   const d = r._design;
-  if (["flow", "layout", "analytics", "verify"].includes(id)) { await setRun(r.tag, d); go(id === "flow" ? "pipeline" : id); return; }
+  if (["flow", "layout", "analytics", "verify"].includes(id)) { await setRun(r.tag, d); go(id === "flow" ? "flow" : id); return; }
   await focusDesign(d);
   if (id === "again") return reproduceRun(r.tag);
   if (id === "cmd") return copyCommand(r.tag);

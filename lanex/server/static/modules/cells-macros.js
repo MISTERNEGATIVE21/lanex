@@ -498,7 +498,7 @@ async function afterAdd(name, close) {
   } else {
     toast.show("Added " + name + ". Next: instantiate it in your RTL (template on its card).", "success", 6000);
   }
-  document.getElementById("cl-macros")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  import("./views.js").then((v) => v.showView("cells", "macros"));
 }
 
 function panePdk(pane, pdk, close) {

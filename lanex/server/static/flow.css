@@ -9,9 +9,9 @@
  * panes at the bottom take whatever height the run bar, the head and the strip
  * leave (never less than --fl-body-min; below that the page scrolls). flow.js
  * sets --fl-h (the work area's height) and data-fit="short" under 720 px. */
-#sec-pipeline { container: flow / inline-size; --fl-gap: var(--s-3); --fl-body-min: 300px; }
-#sec-pipeline.section-active { display: flex; flex-direction: column; min-height: 100%; }
-#sec-pipeline > * { flex: none; }
+#sec-flow { container: flow / inline-size; --fl-gap: var(--s-3); --fl-body-min: 300px; }
+#sec-flow.section-active { display: flex; flex-direction: column; min-height: 100%; }
+#sec-flow > * { flex: none; }
 .fl-runbar { margin: 0 0 var(--fl-gap); }
 #fl-live[hidden] { display: none; }
 
@@ -47,20 +47,20 @@
 
 /* A short window (a 1366 x 768 laptop): the head tightens so the panes keep
  * room for the steps and the output. */
-#sec-pipeline[data-fit=short] .fl-hero { padding: var(--s-3) var(--s-5); }
-#sec-pipeline[data-fit=short] .fl-hero .an-title { font-size: 23px; margin-top: 4px; }
-#sec-pipeline[data-fit=short] .fl-hero .an-lede { margin-top: 4px; font-size: 14px; }
-#sec-pipeline[data-fit=short] .fl-bar { margin-top: var(--s-3); }
-#sec-pipeline[data-fit=short] .fl-elapsed { font-size: 22px; }
-#sec-pipeline[data-fit=short] .fl-kpis { gap: var(--s-2) var(--s-3); }
-#sec-pipeline[data-fit=short] .fl-kpi { flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 8px; padding-top: 6px; }
-#sec-pipeline[data-fit=short] .fl-kpi-k { flex-basis: 100%; }
-#sec-pipeline[data-fit=short] .fl-kpi-v { font-size: 18px; }
-#sec-pipeline[data-fit=short] .fl-kpi-s { display: none; }
-#sec-pipeline[data-fit=short] .fl-warns { margin-top: var(--s-3); padding-top: var(--s-2); }
-#sec-pipeline[data-fit=short] .fl-ev { margin-top: var(--s-3); }
-#sec-pipeline[data-fit=short] .px-fix { padding: 6px 10px; }
-#sec-pipeline[data-fit=short] .fl-fix-note { display: none; }
+#sec-flow[data-fit=short] .fl-hero { padding: var(--s-3) var(--s-5); }
+#sec-flow[data-fit=short] .fl-hero .an-title { font-size: 23px; margin-top: 4px; }
+#sec-flow[data-fit=short] .fl-hero .an-lede { margin-top: 4px; font-size: 14px; }
+#sec-flow[data-fit=short] .fl-bar { margin-top: var(--s-3); }
+#sec-flow[data-fit=short] .fl-elapsed { font-size: 22px; }
+#sec-flow[data-fit=short] .fl-kpis { gap: var(--s-2) var(--s-3); }
+#sec-flow[data-fit=short] .fl-kpi { flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 8px; padding-top: 6px; }
+#sec-flow[data-fit=short] .fl-kpi-k { flex-basis: 100%; }
+#sec-flow[data-fit=short] .fl-kpi-v { font-size: 18px; }
+#sec-flow[data-fit=short] .fl-kpi-s { display: none; }
+#sec-flow[data-fit=short] .fl-warns { margin-top: var(--s-3); padding-top: var(--s-2); }
+#sec-flow[data-fit=short] .fl-ev { margin-top: var(--s-3); }
+#sec-flow[data-fit=short] .px-fix { padding: 6px 10px; }
+#sec-flow[data-fit=short] .fl-fix-note { display: none; }
 
 /* The failure and report cards put their parts side by side when the page is
  * wide: the reason (or verdict) on the left, what to change (or the numbers)
@@ -167,10 +167,10 @@ button.fl-tile:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(-
 }
 .fl-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity var(--dur-3) var(--ease-out); }
 .fl-pic img.is-in { opacity: 1; }
-#sec-pipeline[data-fit=short] { padding-top: var(--s-3); --fl-body-min: 240px; }
-#sec-pipeline[data-fit=short] .fl-pic { max-height: 44px; }
-#sec-pipeline[data-fit=short] .fl-pic:not(.has-img) .fl-pic-n { font-size: 22px; }
-#sec-pipeline[data-fit=short] .fl-tile-txt { padding: 6px 10px 7px; gap: 1px; }
+#sec-flow[data-fit=short] { padding-top: var(--s-3); --fl-body-min: 240px; }
+#sec-flow[data-fit=short] .fl-pic { max-height: 44px; }
+#sec-flow[data-fit=short] .fl-pic:not(.has-img) .fl-pic-n { font-size: 22px; }
+#sec-flow[data-fit=short] .fl-tile-txt { padding: 6px 10px 7px; gap: 1px; }
 .fl-pic-n {
   font: 600 30px/1 var(--mono); letter-spacing: -0.02em; color: color-mix(in srgb, var(--text-muted) 38%, transparent);
 }
@@ -197,7 +197,7 @@ li.fl-tile .fl-tile-sub { color: var(--text-muted); }
 .fl-body > .fl-steps { height: 340px; }
 .fl-body > .fl-insp { height: 560px; }
 @container flow (min-width: 1100px) {
-  #sec-pipeline > .fl-body {
+  #sec-flow > .fl-body {
     flex: 1 1 0; min-height: var(--fl-body-min);
     grid-template-columns: clamp(360px, 28%, 560px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
   }

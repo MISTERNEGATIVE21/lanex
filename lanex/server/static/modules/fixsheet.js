@@ -342,7 +342,7 @@ async function apply() {
   } catch (_e) {}
   if (safeStorage.get("ll.showFlowOnRun") !== "0") {
     const { go } = await import("./nav.js");
-    go("pipeline", {}, { link: false });
+    go("flow", {}, { link: false });
   }
 }
 

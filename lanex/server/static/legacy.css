@@ -1,42 +1,217 @@
-/* features.css — styles for the Phase 0–4 additions (verification, compare, DSE,
-   cells, viewers, wizard, learn). Token-only: every color,
-   space, radius, and shadow comes from styles.css :root. No hardcoded hex. */
+/* legacy.css — page rules written before the redesign that their pages still use.
+ * Nothing new goes here. Each block leaves when its page is rebuilt on ui.css
+ * (docs/ui-redesign.md); the file is deleted when it is empty.
+ */
 
-/* ---- Toasts (bottom-right; class-styled, dismissable) --------------------- */
-.toast-host {
-  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
-  display: flex; flex-direction: column; gap: var(--s-2);
-  max-width: min(380px, calc(92vw / var(--ll-zoom, 1)));
+/* ============================== from styles.css ============================== */
+/* ---------- preset chips ---------- */
+.preset-row { display: flex; gap: var(--s-2); align-items: center; margin-bottom: var(--s-3); flex-wrap: wrap; }
+.preset-row .lbl { color: var(--text-muted); font-size: var(--t-sm); }
+.reports-row {
+  display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap;
+  padding: var(--s-2) var(--s-3); margin-bottom: var(--s-3);
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2);
 }
-.toast {
-  display: flex; align-items: flex-start; gap: var(--s-2);
-  background: var(--surface-2); border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-md); box-shadow: var(--sh-2);
-  padding: var(--s-3) var(--s-3); color: var(--text);
-  font-size: var(--t-sm); line-height: 1.4;
-  opacity: 0; transform: translateY(8px);
-  transition: opacity var(--dur-2, 160ms) var(--ease-out, ease-out),
-              transform var(--dur-2, 160ms) var(--ease-out, ease-out);
+.reports-row .report-toggle { display: flex; gap: var(--s-2); align-items: center; font-size: var(--t-sm); color: var(--text); cursor: pointer; }
+.reports-row code { background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+/* ---------- active-overrides summary (what will be sent) ---------- */
+.overrides-summary { margin-bottom: var(--s-3); }
+.overrides-summary .ov-none { color: var(--text-muted); font-size: var(--t-sm); }
+.overrides-summary .ov-head { font-size: var(--t-sm); margin-bottom: var(--s-2); }
+.overrides-summary .ov-chips { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.overrides-summary .ov-chip {
+  font-size: var(--t-xs); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 8px; font-family: var(--mono); color: var(--text);
 }
-.toast.is-in { opacity: 1; transform: none; }
-.toast-success { border-left-color: var(--pass); }
-.toast-warn    { border-left-color: var(--warn); }
-.toast-error   { border-left-color: var(--fail); }
-.toast-info    { border-left-color: var(--accent); }
-.toast-ico { flex: none; display: inline-flex; margin-top: 1px; }
-.toast-success .toast-ico { color: var(--pass); }
-.toast-warn .toast-ico    { color: var(--warn); }
-.toast-error .toast-ico   { color: var(--fail); }
-.toast-info .toast-ico    { color: var(--accent); }
-.toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.toast-close { flex: none; background: none; border: 0; cursor: pointer;
-  color: var(--text-muted); padding: 0; display: inline-flex; line-height: 1; }
-.toast-close:hover { color: var(--text-strong); }
-.toast-act { flex: none; align-self: center; height: 26px; margin: -4px 0; padding: 0 10px; border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm); background: var(--surface-3); color: var(--text-strong); font: inherit; font-weight: 600; cursor: pointer; }
-.toast-act:hover { border-color: var(--accent); }
+.overrides-summary .ov-chip code { background: transparent; padding: 0; color: var(--accent-cyan, var(--accent)); }
+.overrides-summary .ov-chip b { color: var(--text-strong); }
+/* Chips are buttons since the provenance trail — same look, plus affordance. */
+.overrides-summary .ov-chip-btn { cursor: pointer; }
+.overrides-summary .ov-chip-btn:hover { border-color: var(--accent); }
 
+/* ---------- config form ---------- */
+.vars-form { display: grid; gap: var(--s-3); }
+.var-row {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-3);
+}
+.var-row .vname {
+  display: flex; gap: var(--s-2); align-items: baseline;
+  font-family: var(--mono); font-size: var(--t-sm);
+  color: var(--text-strong);
+  font-weight: 600;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.var-row .vname .type { color: var(--accent); font-weight: 400; font-size: var(--t-xs); }
+.var-row .vname .flag {
+  background: var(--info-soft);
+  border: 1px solid var(--info);
+  color: var(--info);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  font-size: 10px;
+}
+.var-row .vname .units {
+  background: var(--surface);
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  font-size: 10px;
+  font-weight: 400;
+}
+.var-row .vname .vdefault {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.var-row .vname .vdefault-none { font-style: italic; opacity: .8; }
+/* The "your config" tier: what the design's own config file sets for this
+   field (between the LibreLane default and any override). A button — click
+   opens the config file at that exact line. Scoped (pdk::/scl::) entries are
+   dashed: conditional on the run's PDK, never claimed to apply. */
+.var-row .vname .vconfig {
+  color: var(--accent-cyan, var(--accent));
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.var-row .vname .vconfig:hover { border-color: var(--accent); }
+.var-row .vname .vconfig-scoped { border-style: dashed; color: var(--text-muted); }
+/* B4: an override that differs from the LibreLane default gets an accent edge so
+   the form scannably shows what you are changing. */
+.var-row.modified { border-left: 2px solid var(--accent); }
+.var-row .vdesc { font-size: var(--t-sm); color: var(--text-muted); margin-bottom: var(--s-2); }
+.var-row select, .var-row input[type="text"] { font-family: var(--mono); }
+/* Tools tab: inline-style → class conversions (B13) + uninstall control. */
+.tools-pdk-card { margin-bottom: var(--s-4); }
+.tools-local-card { margin-top: var(--s-4); }
+.pdk-root-row { display: flex; gap: var(--s-2); margin-top: var(--s-1); }
+.tool-installed-row { display: flex; gap: var(--s-2); align-items: center; }
+.uninstall-btn { display: inline-flex; align-items: center; padding: 2px 6px;
+  background: transparent; border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text-muted); cursor: pointer; }
+.uninstall-btn:hover { border-color: var(--fail); color: var(--fail); }
+/* ---------- file selector ---------- */
+.filesel-list { display: grid; gap: 4px; }
+.filesel-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: var(--s-3);
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.filesel-row:hover { border-color: var(--accent); }
+.filesel-row .name { color: var(--text-strong); }
+.filesel-row .size { color: var(--text-muted); font-size: var(--t-xs); }
+.filesel-row .ext { font-size: 10px; padding: 1px 6px; border-radius: var(--r-pill); background: var(--surface-3); color: var(--text); margin-left: var(--s-2); }
+.filesel-row.dir { background: var(--surface-3); }
+.filesel-row.dir .name { color: var(--accent); }
+.fs-roots-pill { background: var(--surface-3); border: 1px solid var(--border); padding: 6px 12px; border-radius: var(--r-sm); cursor: pointer; font-family: var(--mono); font-size: var(--t-xs); color: var(--text); }
+.fs-roots-pill:hover { border-color: var(--accent); color: var(--accent); }
+/* ---- command palette --------------------------------------------------- */
+.cmdk { position: fixed; inset: 0; z-index: var(--z-palette); }
+.cmdk[hidden] { display: none; }
+.cmdk-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.cmdk-panel {
+  position: relative;
+  margin: calc(12vh / var(--ll-zoom, 1)) auto 0;
+  width: min(620px, calc(92vw / var(--ll-zoom, 1)));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-3), 0 0 0 1px var(--accent-soft);
+  overflow: hidden;
+  animation: cmdkIn 0.14s ease both;
+}
+@keyframes cmdkIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.cmdk-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: var(--s-4) var(--s-5);
+  font-size: var(--t-lg);
+  color: var(--text-strong);
+  border-bottom: 1px solid var(--border);
+  outline: none;
+}
+.cmdk-list { max-height: calc(50vh / var(--ll-zoom, 1)); overflow: auto; padding: var(--s-2); }
+.cmdk-item {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.cmdk-item-sel { background: var(--accent-soft); }
+.cmdk-ico { width: 20px; text-align: center; opacity: 0.85; }
+.cmdk-title { flex: 1; color: var(--text); }
+.cmdk-item-sel .cmdk-title { color: var(--text-strong); }
+.cmdk-hint {
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cmdk-empty { padding: var(--s-4); color: var(--text-muted); text-align: center; }
+.cmdk-foot {
+  padding: var(--s-2) var(--s-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+}
+.cmdk-foot kbd { margin: 0 1px; }
+.smodal-title { font-weight: 700; color: var(--text-strong); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.smodal-spacer { flex: 1; }
+.smodal-log {
+  margin: 0; padding: var(--s-3); overflow: auto; flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--t-sm);
+  line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word;
+}
+
+/* Runs list: per-run action buttons + files modal rows. */
+.run-actions { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
+.run-act { padding: 2px 10px; font-size: var(--t-sm); }
+.run-del:hover { color: var(--fail); border-color: var(--fail); }
+.files-row { padding: 2px 0; font-family: var(--mono); font-size: var(--t-sm); border-bottom: 1px solid var(--border); }
+.files-row a { word-break: break-all; }
+
+/* ---- Layout > Run files: synthesis diagrams ---- */
+.diagram-card {
+  margin: 0 0 var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-3);
+}
+.diagram-card figcaption { margin-bottom: var(--s-2); }
+.diagram-body { min-height: 40px; overflow: auto; background: var(--on-accent); border-radius: var(--r-sm); }
+.diagram-body img { display: block; max-width: 100%; height: auto; }
+.diagram-body.muted { background: transparent; padding: var(--s-2); }
+.diagram-actions { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
+.diagram-actions .btn { padding: 2px 10px; font-size: var(--t-sm); }
+
+/* ============================== from features.css ============================== */
 /* ---- E4.3 timing compare Δ ------------------------------------------------ */
 .tp-pos { color: var(--pass); }
 .tp-neg { color: var(--fail); }
@@ -61,13 +236,6 @@
 #onboard-checklist li.ck-done .ck-mark { color: var(--pass); }
 #onboard-checklist li.ck-done { color: var(--text-muted); }
 
-/* ---- shared bits ---------------------------------------------------------- */
-.inp {
-  background: var(--surface-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--r-sm);
-  padding: var(--s-2) var(--s-3); font: inherit;
-}
-.inp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chart-box { width: 100%; }
 
 /* Verify/DSE status DOTS (renamed from .pf* to end the collision with
@@ -173,13 +341,6 @@
 .pw-banner[hidden] { display: none; }
 .pw-banner-ico { display: inline-flex; align-items: center; flex: none; margin-right: calc(-1 * var(--s-3)); }
 
-/* ---- Tooltip (one reusable bubble for [data-tip], tooltip.js) ------------- */
-.tip { position: fixed; z-index: var(--z-toast); pointer-events: none;
-  max-width: 300px; padding: 6px 10px;
-  background: var(--ink-strong); color: var(--wafer);
-  border: 0; border-radius: var(--r-sm); box-shadow: var(--sh-2);
-  font-family: var(--sans); font-size: 13px; font-weight: 500; line-height: 1.4; white-space: normal; }
-.tip[hidden] { display: none; }
 .pw-banner-close {
   /* Deliberate literal whites: this close button sits on the warn banner fill,
      not a themed surface, so it stays white in both themes (G1). */
@@ -371,15 +532,6 @@
 .cli-cmd { flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
   padding: var(--s-2); font-family: var(--mono); font-size: var(--t-sm); overflow-x: auto; white-space: pre; }
 
-/* ---- Segmented control (Timing setup/hold, reusable) ------------------- */
-.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-md);
-  overflow: hidden; background: var(--surface-2); }
-.seg-btn { border: 0; background: transparent; color: var(--text-muted); cursor: pointer;
-  padding: 4px var(--s-3); font-size: var(--t-sm); font-weight: 600; }
-.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
-.seg-btn.is-active { background: var(--accent-soft, var(--surface)); color: var(--accent); }
-.seg-btn:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: -2px; }
-
 /* ---- Generic data table (Timing, reused by future tables) -------------- */
 .data-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
 .data-table thead th { position: sticky; top: 0; background: var(--surface-2); color: var(--text);
@@ -402,23 +554,6 @@
   font-family: var(--mono); font-size: var(--t-xs); line-height: 1.5; overflow-x: auto;
   white-space: pre; max-height: 360px; color: var(--text); }
 
-/* ---- In-app dialogs (dialog.js) --------------------------------------- */
-.dlg-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex;
-  align-items: center; justify-content: center; background: rgba(0,0,0,0.5);
-  backdrop-filter: blur(2px); padding: var(--s-4); }
-.dlg { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-lg); box-shadow: var(--sh-3);
-  width: min(480px, calc(96vw / var(--ll-zoom, 1))); max-height: calc(90vh / var(--ll-zoom, 1)); overflow: auto; }
-.dlg-head { padding: var(--s-3) var(--s-4); font-weight: 600; font-size: var(--t-md, 15px);
-  border-bottom: 1px solid var(--border); }
-.dlg-body { padding: var(--s-4); color: var(--text); font-size: var(--t-sm); }
-.dlg-body p { margin: 0 0 var(--s-2); line-height: 1.5; }
-.dlg-label { display: block; margin: var(--s-2) 0 4px; color: var(--text-muted); font-size: var(--t-sm); }
-.dlg-input { width: 100%; padding: var(--s-2); background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text);
-  font-family: var(--mono); font-size: var(--t-sm); box-sizing: border-box; }
-.dlg-actions { display: flex; gap: var(--s-2); justify-content: flex-end;
-  padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
 /* License & notices (about.js): the NOTICE file is long — keep its own scroll
    region and preserve its line breaks inside the dialog. */
 .about-notice { white-space: pre-wrap; overflow-wrap: anywhere;
@@ -487,29 +622,6 @@
 }
 .run-scope-toggle input { accent-color: var(--accent); cursor: pointer; }
 
-/* ---- global topbar Run/Stop button -------------------------------------- */
-/* It reuses .btn-cta for the accent gradient, but .btn-cta is the big, column-
-   stacked Setup "Run flow" button (label + hint, t-lg font). In the fixed-height
-   topbar that made it oversized, so these overrides — scoped to .topbar-run
-   ONLY, never .btn-cta — put it back to a normal single-row toolbar button that
-   lines up with the icon buttons/pills beside it. */
-.topbar-run {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--s-2);
-  height: 34px;              /* match .iconbtn so the toolbar row is even */
-  padding: 0 14px;
-  font-size: var(--t-sm);
-  font-weight: 600;
-  white-space: nowrap;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset, 0 4px 14px var(--accent-glow);
-}
-.topbar-run svg { flex: 0 0 auto; }
-.topbar-run.is-stop {
-  background: var(--fail); border-color: var(--fail); color: var(--on-accent);
-}
-.topbar-run.is-stop:hover { filter: brightness(1.08); }
-
 /* ---- bundle download checklist dialog ---------------------------------- */
 .dlg-checklist { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-2); max-height: calc(50vh / var(--ll-zoom, 1)); overflow: auto; }
 .dlg-check-tools { display: flex; gap: var(--s-2); margin-bottom: var(--s-1); }
@@ -527,27 +639,105 @@
   font-size: var(--t-sm); line-height: 1.5; word-break: break-word;
 }
 
-/* ---- scroll-spy: highlight the jump chip for the section in view -------- */
 
-/* ---- Layout: one unified tool button per tool (incl. GDS3D/OpenROAD) ---- */
+/* ============================== from shell.css ============================== */
+.sheet-lane { margin: 22px 0 8px; }
+.sheet-lane:first-child { margin-top: 0; }
+.sheet-search { position: sticky; top: -18px; z-index: 1; margin: 0 -20px 4px; padding: 10px 20px; background: var(--die); border-bottom: 1px solid var(--seal); }
+.guide { padding-bottom: 20px; margin-bottom: 22px; border-bottom: 1px solid var(--seal); }
+.guide h3 { font-size: 15px; margin: 18px 0 6px; }
+.guide-list { margin: 0; padding-left: 20px; }
+.guide-list li { margin: 0 0 6px; line-height: 1.5; }
+.guide-samples { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 14px; }
+.guide-samples dt { color: var(--ink-2); }
+.guide-samples dd { margin: 0; }
+.sheet-search input { width: 100%; }
+
+.gloss { display: flex; flex-direction: column; }
+.gloss-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--seal); }
+.gloss-row:last-child { border-bottom: 0; }
+.gloss-term { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink-strong); padding-top: 1px; }
+.gloss-def { font-size: 14px; line-height: 1.5; color: var(--ink); }
+.gloss-empty { color: var(--ink-2); padding: 12px 0; }
+.learn-md { line-height: 1.55; }
+.learn-md code { font-family: var(--mono); }
+.learn-id { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); margin: 0 0 14px; }
 
 
-/* ---------- liability disclaimer (LanEx is a viewer, not sign-off) ---------- */
-
-.status-disclaimer {
-  color: var(--warn);
-  font-size: var(--t-xs);
-  letter-spacing: 0.02em;
-  cursor: help;
-  white-space: nowrap;
+.about-facts { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px 14px; margin: 12px 0 4px; font-size: 14px; }
+.about-facts dt { color: var(--ink-2); }
+.about-facts dd { margin: 0; color: var(--ink); }
+.about-warn { margin: 16px 0; padding: 12px 14px; background: var(--met4-band); border-top: 2px solid var(--met4); font-size: 14px; line-height: 1.5; color: var(--ink); }
+.about-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.about-full summary { cursor: pointer; font-weight: 500; color: var(--ink); padding: 8px 0; }
+.about-full pre {
+  margin: 8px 0 0; padding: 14px; max-height: 360px; overflow: auto;
+  background: var(--wafer-2); border: 1px solid var(--seal); border-radius: var(--r-sm);
+  font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--ink); white-space: pre-wrap;
 }
-.status-disclaimer .sd-short { display: none; }
-/* B20 — between ~900-1100px the full sentence crowds the shortcut hints; show
-   the short form (the full text stays in the title attribute). */
-@media (max-width: 1100px) {
-  .status-disclaimer .sd-full { display: none; }
-  .status-disclaimer .sd-short { display: inline; }
+/* ------------------------------------------------------------ log panel */
+.log-panel {
+  position: fixed; z-index: var(--z-drawer);
+  left: var(--rail-w); right: 0; bottom: var(--status-h);
+  height: min(46vh, 420px); height: min(calc(46vh / var(--ll-zoom, 1)), 420px);
+  display: flex; flex-direction: column;
+  background: var(--wafer-2); border-top: 1px solid var(--seal-strong);
+  box-shadow: 0 -10px 14px -8px rgba(0, 0, 0, 0.55);
+  animation: panel-up var(--dur-3) var(--ease-out);
 }
-/* Below 900px the status bar is too tight even for the short form — hide it
-   there (scoped to the status bar; the landing footer keeps its disclaimer). */
-@media (max-width: 900px) { footer.status .status-disclaimer { display: none; } }
+.log-panel[hidden] { display: none; }
+@keyframes panel-up { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+.log-panel-head { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--seal); background: var(--wafer); }
+.log-panel-title { font-weight: 600; color: var(--ink-strong); font-size: 14px; }
+.log-panel-sub { font-size: 13px; color: var(--ink-2); margin-left: 8px; }
+.log-panel-spacer { flex: 1; }
+.log-panel-body {
+  flex: 1; margin: 0; padding: 12px 16px; overflow: auto;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
+.log-panel-body:empty::before { content: "Nothing yet. Tool and PDK installs, image pulls and removals print their output here."; font-family: var(--sans); font-size: 14px; color: var(--ink-2); }
+/* New project */
+.wizard { width: min(760px, calc(94vw / var(--ll-zoom, 1))); }
+.wizard-body { padding: 20px 22px 22px; }
+.wiz-steps { display: flex; gap: 18px; margin: 0 0 18px; }
+.wiz-step { font-family: var(--cond); font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3); padding-bottom: 6px; }
+.wiz-step.is-on { color: var(--ink-strong); box-shadow: inset 0 -2px 0 var(--met1); }
+.wiz-templates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.wiz-tpl {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left;
+  padding: 14px 16px; min-height: 104px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  color: var(--text); cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.15s ease;
+}
+.wiz-tpl::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: 0.6;
+}
+.wiz-tpl:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.wiz-tpl:focus-visible { outline: 2px solid var(--met1); outline-offset: 1px; }
+.wiz-tpl-title { font-size: 15px; font-weight: 600; color: var(--ink-strong); }
+.wiz-tpl-desc { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+.wiz-tpl-tag { margin-top: auto; font-family: var(--cond); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.wiz-tpl-tag::before { content: ""; width: 6px; height: 6px; background: var(--met3); }
+.wiz-tpl-empty { grid-column: 1 / -1; min-height: 0; }
+.wiz-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 18px; }
+.wiz-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wiz-field.span-2 { grid-column: 1 / -1; }
+.wiz-field > span:first-child { font-size: 14px; font-weight: 500; color: var(--ink-strong); }
+.wiz-help { font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+.wiz-help.wiz-warn { color: var(--warn); }
+.wiz-loc { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.wiz-loc code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 10px; background: var(--wafer-2); border: 1px solid var(--seal); font-size: 12.5px; }
+.wiz-unit { position: relative; display: block; }
+.wiz-unit input { width: 100%; }
+.wiz-unit input { padding-right: 40px; }
+.wiz-unit::after { content: attr(data-unit); position: absolute; right: 11px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--ink-2); pointer-events: none; }
+.wiz-actions { display: flex; align-items: center; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--seal); }
+.wiz-actions .grow-space { flex: 1; }
+.wiz-err { color: var(--poly); font-size: 13.5px; }
+
+.lane-label, .sheet-lane { font-size: var(--fs-1); font-weight: 500; color: var(--text-muted); }

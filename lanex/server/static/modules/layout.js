@@ -19,7 +19,6 @@ import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
 import * as ctx from "./context.js";
-import { mountRunBar } from "./runbar.js";
 import { STAGES as FLOW_STAGES } from "./flowstages.js";
 import { LayoutCanvas, fmtUm, niceLength } from "./layoutcanvas.js";
 import { Layout3D, fmtHeight, fmtSpread } from "./layout3d.js";
@@ -159,7 +158,7 @@ async function openRun(tag) {
     renderStages();
     showMsg("<h3>Nothing to draw yet</h3><p>This run stopped before the floorplan was written, so it has no layout. " +
       "Flow shows where it stopped and why.</p>" +
-      "<button class='btn btn-ghost btn-sm' data-go='pipeline'>Open Flow</button>");
+      "<button class='btn btn-ghost btn-sm' data-go='flow'>Open Flow</button>");
     setNote("");
     return;
   }
@@ -1417,7 +1416,6 @@ function saveImage(kind) {
 function wireOnce() {
   if (S.wired) return;
   S.wired = true;
-  mountRunBar($("layout-runbar"));
   ctx.onContext((d) => { if ($("sec-layout")?.classList.contains("section-active") && d.why !== "loaded" && d.why !== "settled") loadRuns(); });
   document.querySelector("#sec-layout .lx-tools")?.addEventListener("click", onToolbar);
   for (const [id, b] of [["labels", S.labels], ["detail", S.outlines]]) document.querySelector("[data-lx='" + id + "']")?.setAttribute("aria-pressed", b ? "true" : "false");

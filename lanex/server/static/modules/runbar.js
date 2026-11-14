@@ -1,11 +1,10 @@
-// runbar.js — the run picker at the top of Layout, Analytics and Verify: which
-// run the page shows and, where the page measures changes, the run it is
-// compared with. One component and one selection (context.js), so picking a
-// run here picks it on every page.
+// runbar.js — the run in view: which run the pages show and the run its
+// numbers are compared with. It sits once, in the top bar; the selection is
+// the app's (context.js), so picking a run here picks it on every page.
 //
 //   mountRunBar(host, { baseline: true })
-//   mountRunBar(host, { baseline: true, live: () => tag })   (Flow: while a run
-//     is going and the page shows it, the field shows that run, marked live)
+//   mountRunBar(host, { baseline: true, live: () => tag })   (while a run is
+//     going and Flow shows it, the field shows that run, marked live)
 //
 // Each field is a button showing the run's verdict, name and time; it opens a
 // list of runs (verdict, runtime, setup slack, when), filterable when long,
@@ -17,9 +16,15 @@ import { state } from "./state.js";
 import { icon } from "./icons.js";
 import * as ctx from "./context.js";
 import { fmtDur } from "./reportcard.js";
+import { verdictOfRun, runVerdict } from "./verdict.js";
+import { openLayer, closeLayer } from "./overlay.js";
 
 const esc = (s) => fmt.escape(String(s ?? ""));
 let _seq = 0;
+
+// Flow says which run is going when it is showing it; the field marks it live.
+let _live = null;
+export function setLive(fn) { _live = fn; }
 
 export function mountRunBar(host, { baseline = false, live = null } = {}) {
   if (!host) return null;
@@ -27,14 +32,14 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
   const id = "rb" + (++_seq);
   host.classList.add("rb");
   host.innerHTML =
-    field(id, "run", "Run", "The run this page shows. Every results page shows the same one.") +
-    (baseline ? field(id, "base", "Compared with", "Every change on this page is measured against this run.") : "") +
-    "<div class='rb-pop' id='" + id + "-pop' role='dialog' hidden></div>";
+    field(id, "run", "Run", "The run in view. Flow, Results and Layout all show this one.") +
+    (baseline ? field(id, "base", "vs", "Compared with: every change shown is measured against this run.") : "") +
+    "<div class='rb-pop pop' id='" + id + "-pop' role='dialog' aria-label='Runs' hidden></div>";
   const pop = host.querySelector(".rb-pop");
   const S = { which: null, items: [], active: 0, q: "" };
 
   const paint = () => {
-    const lt = live && live();
+    const lt = (live && live()) || (_live && _live()) || "";
     if (lt) paintLive(host.querySelector("[data-rb='run']"), lt);
     else paintPick(host.querySelector("[data-rb='run']"), ctx.contextRow(),
       { empty: ctx.runsLoadFailed() ? "Couldn't load runs. Retrying…" : "No runs yet" });
@@ -52,24 +57,25 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
     S.which = which; S.q = ""; S.active = -1;
     const btn = host.querySelector("[data-rb='" + which + "']");
     host.querySelectorAll(".rb-pick").forEach((x) => x.setAttribute("aria-expanded", x === btn ? "true" : "false"));
-    pop.style.left = btn.offsetLeft + "px";
+    pop.style.left = btn.closest(".rb-field").offsetLeft + "px";
     pop.hidden = false;
     fill();
     const cur = S.items.findIndex((it) => it.cur);
     S.active = cur >= 0 ? cur : 0;
     paintActive();
-    (pop.querySelector(".rb-q") || pop.querySelector(".rb-list")).focus();
-    setTimeout(() => document.addEventListener("pointerdown", outside, true), 0);
+    // One overlay behaviour (overlay.js): Esc and an outside press close it,
+    // focus goes back to the field.
+    closeLayer(pop);
+    openLayer(pop, { kind: "popover", owner: btn, onClose: hide, focus: () => pop.querySelector(".rb-q") || pop.querySelector(".rb-list") });
+  };
+  const hide = () => {
+    pop.hidden = true;
+    host.querySelectorAll(".rb-pick").forEach((x) => x.setAttribute("aria-expanded", "false"));
   };
   const close = (focusBack = true) => {
     if (pop.hidden) return;
-    pop.hidden = true;
-    document.removeEventListener("pointerdown", outside, true);
-    const btn = host.querySelector("[data-rb='" + S.which + "']");
-    host.querySelectorAll(".rb-pick").forEach((x) => x.setAttribute("aria-expanded", "false"));
-    if (focusBack && btn) btn.focus();
+    closeLayer(pop, focusBack ? "api" : "outside");
   };
-  const outside = (e) => { if (!host.contains(e.target)) close(false); };
 
   const fill = () => {
     const runs = ctx.contextRuns();
@@ -171,8 +177,7 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
       return;
     }
     const n = (S.visible || []).length;
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); S.active = Math.min(n - 1, S.active + 1); paintActive(); }
+    if (e.key === "ArrowDown") { e.preventDefault(); S.active = Math.min(n - 1, S.active + 1); paintActive(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); S.active = Math.max(0, S.active - 1); paintActive(); }
     else if (e.key === "Home" && !e.target.classList.contains("rb-q")) { e.preventDefault(); S.active = 0; paintActive(); }
     else if (e.key === "End" && !e.target.classList.contains("rb-q")) { e.preventDefault(); S.active = n - 1; paintActive(); }
@@ -203,7 +208,8 @@ function paintPick(btn, row, { empty, hint = "" }) {
   const mark = btn.querySelector(".rb-mark");
   mark.className = "rb-mark" + (row ? " is-" + verdict(row).cls : " is-none");
   btn.querySelector(".rb-name").textContent = row ? row.tag : empty;
-  btn.querySelector(".rb-meta").textContent = row ? verdict(row).word + " · " + when(row) : hint;
+  btn.querySelector(".rb-meta").textContent = row ? verdict(row).word : hint;
+  btn.title = row ? row.tag + " · " + verdict(row).word + " · " + when(row) : "";
   const all = ctx.getRunScope() === "all";
   btn.querySelector(".rb-tags").innerHTML =
     (row && all && ctx.normDir(row._design) !== ctx.normDir(state.designDir) ? "<span class='rb-tag'>" + esc(ctx.designLabel(row._design)) + "</span>" : "") +
@@ -216,7 +222,7 @@ function paintLive(btn, tag) {
   if (!btn) return;
   btn.querySelector(".rb-mark").className = "rb-mark is-run";
   btn.querySelector(".rb-name").textContent = tag;
-  btn.querySelector(".rb-meta").textContent = "running";
+  btn.querySelector(".rb-meta").textContent = "Running";
   btn.querySelector(".rb-tags").innerHTML = "<span class='rb-tag is-new'>live</span>";
   btn.disabled = false;
 }
@@ -263,30 +269,16 @@ function isNewest(r) {
   return !!same.length && same[0].tag === r.tag;
 }
 
-// The Runs tab's words: a run passed or failed; the newest run of the active
-// design is "running" while the flow is live.
-// The words come from the run's verdict (the server's, the same one Verify
-// shows): passed / failed / stopped / incomplete / running.
-const VERDICT_WORD = {
-  passed: { cls: "pass", word: "passed" },
-  warning: { cls: "warn", word: "finished, with problems" },
-  failed: { cls: "fail", word: "failed" },
-  stopped: { cls: "warn", word: "stopped" },
-  incomplete: { cls: "warn", word: "not enough to call it" },
-  running: { cls: "run", word: "running" },
-};
+// The words and colours come from verdict.js (the server's verdict state).
 export function verdictWord(r) {
-  const st = r && r.verdict && r.verdict.state;
-  if (st && VERDICT_WORD[st]) return VERDICT_WORD[st];
-  // A state this build doesn't know yet: amber, never a guessed pass/fail.
-  if (st) return { cls: "warn", word: (r.verdict.label || st).toLowerCase() };
-  return r && r.success ? VERDICT_WORD.passed : VERDICT_WORD.failed;
+  const v = verdictOfRun(r);
+  return { cls: v.cls, word: v.word };
 }
 function verdict(r) {
   if (state.status && state.status.running && !r.success && isNewest(r) && ctx.normDir(r._design) === ctx.normDir(state.designDir)) {
-    return VERDICT_WORD.running;
+    return runVerdict("running");
   }
-  return verdictWord(r);
+  return verdictOfRun(r);
 }
 
 function when(r) {

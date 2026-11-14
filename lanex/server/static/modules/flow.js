@@ -1,4 +1,4 @@
-// flow.js — the Flow page (rail "Flow", data-tab "pipeline"): one run, stage by stage.
+// flow.js — the Flow page (id "flow"): one run, stage by stage.
 //
 //   head      what happened, first: the live step, why it stopped (failure
 //             card), or the run report card when it finished
@@ -25,7 +25,7 @@ import { state } from "./state.js";
 import { icon } from "./icons.js";
 import { toast } from "./toast.js";
 import * as ctx from "./context.js";
-import { mountRunBar } from "./runbar.js";
+import { setLive } from "./runbar.js";
 import * as FS from "./flowstages.js";
 import * as AM from "./analytics-model.js";
 import { LogView } from "./logview.js";
@@ -87,7 +87,7 @@ if (typeof document !== "undefined") {
   // A refusal is said once: leaving Flow puts it away.
   document.addEventListener("g:tab_activated", (e) => {
     const tab = e.detail && e.detail.tab;
-    if (tab !== "pipeline" && state.runStart && state.runStart.error) state.runStart = null;
+    if (tab !== "flow" && state.runStart && state.runStart.error) state.runStart = null;
   });
 }
 
@@ -103,7 +103,7 @@ export async function renderFlow() {
   // before it has been asked. A later open keeps what it showed meanwhile.
   if (state.runStart && !live) paint();
   else if (!F.loaded && !F.job) {
-    F.job = loadingStart($("sec-pipeline"), { skeleton: pageSkeleton("pipeline"), hasContent: () => !!state.runStart });
+    F.job = loadingStart($("sec-flow"), { skeleton: pageSkeleton("flow"), hasContent: () => !!state.runStart });
   }
   await ctx.loadRuns().catch(() => {});
   F.loaded = true;
@@ -128,7 +128,7 @@ export async function renderFlow() {
   await load(tok);
 }
 
-// A link to a step or a stage (nav.js go("pipeline", { step }) / { stage }).
+// A link to a step or a stage (nav.js go("flow", { step }) / { stage }).
 // The page may still be loading the run: the list scrolls there once its
 // rows exist (paintSteps).
 export async function revealInFlow(p) {
@@ -212,7 +212,7 @@ function schedule() {
   F.raf = requestAnimationFrame(() => { F.raf = 0; paint(); });
 }
 
-const visible = () => $("sec-pipeline")?.classList.contains("section-active");
+const visible = () => $("sec-flow")?.classList.contains("section-active");
 
 function liveTag() {
   if (!(state.status && state.status.running)) return "";
@@ -381,7 +381,7 @@ function setHTML(el, html) {
 }
 
 function paint() {
-  const sec = $("sec-pipeline");
+  const sec = $("sec-flow");
   if (!sec) return;
   // Before the run list has come back once there is nothing true to draw
   // ("No run yet" would be a guess): the skeleton stays.
@@ -431,7 +431,7 @@ function emptyHtml() {
 // refused it.
 function startHtml(rs) {
   if (rs.error) {
-    const from = rs.from && rs.from !== "pipeline" ? rs.from : "setup";
+    const from = rs.from && rs.from !== "flow" ? rs.from : "setup";
     const label = document.querySelector('.side-tab[data-tab="' + from + '"] .label')?.textContent.trim() || "Setup";
     return "<div class='an-verdict fl-hero is-fail' role='alert'><div class='an-verdict-main'>" +
       "<div class='an-eyebrow'>Run</div><h2 class='an-title'>The run didn't start</h2>" +
@@ -1047,8 +1047,11 @@ export function stepLabel(id) {
 function wireOnce() {
   if (F.wired) return;
   F.wired = true;
-  const sec = $("sec-pipeline");
-  F.rb = mountRunBar($("flow-runbar"), { baseline: true, live: () => (F.live ? F.tag : "") });
+  const sec = $("sec-flow");
+  // The run in view is in the top bar; while Flow shows the run that is
+  // going, that field shows it, marked live.
+  setLive(() => (visible() && F.live ? F.tag : ""));
+  F.rb = document.getElementById("top-runbar")?._rb || null;
   F.log = new LogView($("fl-log"), { follow: false });
   ctx.onContext((d) => {
     if (!visible() || d.why === "loaded" || d.why === "settled") return;

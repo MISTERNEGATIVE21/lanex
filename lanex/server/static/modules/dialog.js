@@ -1,12 +1,19 @@
 // dialog.js — in-app modal dialogs (replace native alert/confirm/prompt).
 //
 // Native dialogs are unstyled, block the event loop, can't show rich context,
-// and are poor for touch/accessibility. These are themed, focus-trapped, Esc-to-
-// cancel, and Promise-based. Zero dependency. Use:
+// and are poor for touch/accessibility. These are themed and Promise-based,
+// and they open through overlay.js like every overlay: focus is trapped, Esc
+// closes only the dialog (not the sheet under it), focus returns to the opener,
+// and the dialog is named by its title. A destructive dialog opens with focus
+// on Cancel, so a reflexive Enter never deletes. Use:
 //   await confirmDialog({ title, body, confirmText, danger })   → boolean
 //   await promptDialog({ title, label, defaultValue })          → string|null
 //   await alertDialog({ title, body })                          → void
 //   await confirmTyped({ title, body, phrase })                 → boolean (must type phrase)
+
+import { openLayer, closeLayer } from "./overlay.js";
+
+let _seq = 0;
 
 function _host() {
   let h = document.getElementById("app-dialog-host");
@@ -21,48 +28,51 @@ function _host() {
 function _open({ title, bodyHtml, buttons, onMount }) {
   return new Promise((resolve) => {
     const host = _host();
-    const prevFocus = document.activeElement;
     const back = document.createElement("div");
     back.className = "dlg-backdrop";
-    back.setAttribute("role", "dialog");
-    back.setAttribute("aria-modal", "true");
+    const tid = "dlg-title-" + (++_seq);
     back.innerHTML =
       "<div class='dlg' role='document'>" +
-      "<div class='dlg-head'>" + (title || "") + "</div>" +
+      "<div class='dlg-head' id='" + tid + "'>" + (title || "") + "</div>" +
       "<div class='dlg-body'>" + (bodyHtml || "") + "</div>" +
       "<div class='dlg-actions'></div>" +
       "</div>";
     const actions = back.querySelector(".dlg-actions");
-    const close = (val) => {
+    let result, done = false;
+    // Every way out (a button, Esc, the scrim) ends here, once.
+    const finish = () => {
+      if (done) return;
+      done = true;
       try { back.remove(); } catch (_e) {}
-      try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_e) {}
-      resolve(val);
+      resolve(result);
     };
+    const close = (val) => { result = val; closeLayer(back); finish(); };
+    let danger = false;
     (buttons || []).forEach((b) => {
       const btn = document.createElement("button");
-      btn.className = "btn " + (b.cls || "btn-ghost");
+      // Cancel and the plain choices are default buttons; the action is the
+      // primary one, or the red one when it destroys something.
+      const cls = b.cls === "btn-ghost" ? "" : (b.cls || "");
+      if (/btn-warn|btn-danger/.test(cls)) danger = true;
+      btn.className = ("btn " + cls).trim();
       btn.textContent = b.label;
       btn.addEventListener("click", () => close(b.value));
       actions.appendChild(btn);
     });
+    // A press on the scrim cancels, like Esc.
     back.addEventListener("mousedown", (e) => { if (e.target === back) close(undefined); });
     host.appendChild(back);
-    // Focus trap + Esc.
-    const focusables = () => Array.from(back.querySelectorAll("button, input, textarea, [tabindex]"))
-      .filter((el) => !el.disabled && el.offsetParent !== null);
-    back.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") { e.preventDefault(); close(undefined); return; }
-      if (e.key === "Tab") {
-        const f = focusables();
-        if (!f.length) return;
-        const i = f.indexOf(document.activeElement);
-        if (e.shiftKey && (i <= 0)) { e.preventDefault(); f[f.length - 1].focus(); }
-        else if (!e.shiftKey && (i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
-      }
-    });
     if (onMount) onMount(back, close);
-    const f = focusables();
-    if (f.length) f[f.length - 1].focus();
+    openLayer(back, {
+      kind: "dialog", labelledBy: tid, onClose: finish,
+      focus: () => {
+        const field = back.querySelector(".dlg-body input:not([type=checkbox]):not([type=radio]), .dlg-body select, .dlg-body textarea");
+        if (field) return field;
+        const btns = Array.from(actions.querySelectorAll("button")).filter((b) => !b.disabled);
+        // Destructive: Cancel has the focus. Otherwise the action does.
+        return danger ? btns[0] : btns[btns.length - 1];
+      },
+    });
   });
 }
 

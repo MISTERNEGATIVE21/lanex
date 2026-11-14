@@ -1,0 +1,253 @@
+/* tokens.css — every colour, size, radius and layer LanEx uses.
+ *
+ * The rules (docs/ui-redesign.md, section 4):
+ *   - depth is five tones of one hue; panels have no shadow, nothing glows;
+ *   - one accent, for the primary action, links, focus and selection;
+ *   - green, amber and red are verdicts only; layer colours live in the layout;
+ *   - six text sizes, a 4 px spacing step, two radii, one border weight.
+ *
+ * Declared on body too: the legacy aliases at the bottom must resolve where
+ * body.theme-light redefines the tones, not once at :root.
+ */
+:root, body {
+  /* ---- tones ---- */
+  --tone-0: #080b11;          /* rail, status line, wells, canvas ground */
+  --tone-1: #0c1017;          /* page */
+  --tone-2: #121822;          /* panel, table, input */
+  --tone-3: #19212e;          /* raised: menu, popover, hover */
+  --tone-4: #222d3e;          /* pressed, selected */
+  --line: #242f40;            /* the one border */
+  --line-strong: #34435b;     /* a floating layer's edge, a hovered edge */
+  --line-ctl: #63738f;        /* form-control outline: 3:1 on tones 0 to 3 */
+  --scrim: rgba(4, 6, 10, 0.62);
+
+  /* ---- text ---- */
+  --text: #c6d0df;
+  --text-strong: #f2f6fc;
+  --text-muted: #8a97ab;
+  --text-faint: #6e7c94;
+
+  /* ---- accent ---- */
+  --accent: #2f6fe0;          /* the action fill (white on it: 4.7:1) */
+  --accent-hover: #2861cc;
+  --accent-text: #6cabff;     /* links, focus ring, selected marks */
+  --accent-soft: color-mix(in srgb, #4da3ff 14%, transparent);
+  --on-accent: #ffffff;
+
+  /* ---- verdicts ---- */
+  --pass: #3ebd7e;
+  --warn: #e2a630;
+  --fail: #f26a72;
+  --pass-soft: color-mix(in srgb, var(--pass) 14%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
+  --fail-soft: color-mix(in srgb, var(--fail) 14%, transparent);
+  --fail-fill: #d83c44;       /* a destructive button (white on it: 4.5:1) */
+  --fail-fill-hover: #c2333b;
+
+  /* ---- the process-layer palette: layout canvas, 3D, layer list, charts ---- */
+  --poly: #d6446f;
+  --li:   #8ea6c4;
+  --met1: #4da3ff;
+  --met2: #e879c9;
+  --met3: #36d399;
+  --met4: #f2c14e;
+  --met5: #ff7a45;
+  --chart-1: #378ee9; --chart-2: #d164b4; --chart-3: #e05e26; --chart-4: #7d6cdb; --chart-5: #009e92;
+  --canvas: #ffffff;          /* GDS renders assume a white backdrop */
+  --canvas-dark: #000;
+
+  /* ---- syntax (Code) ---- */
+  --syntax-kw: #ff7a93;
+  --syntax-com: #6e7c94;
+  --syntax-str: #9fd0ff;
+  --syntax-num: #6cabff;
+  --syntax-pp: #e879c9;
+
+  /* ---- type ---- */
+  --sans: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --fs-1: 12px;               /* captions, table headers, meta */
+  --fs-2: 13px;               /* controls, tables, lists: the default */
+  --fs-3: 14px;               /* reading text */
+  --fs-4: 16px;               /* panel and section titles */
+  --fs-5: 20px;               /* page title, the key number */
+  --fs-6: 28px;               /* the one headline of an empty or first-run state */
+  --lh-tight: 1.3;
+  --lh-read: 1.5;
+
+  /* ---- space ---- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  /* ---- shape ---- */
+  --r-1: 4px;                 /* controls, chips */
+  --r-2: 6px;                 /* panels, menus, dialogs */
+  --r-round: 999px;           /* status dots and the switch only */
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+
+  /* ---- control metrics (density changes these, nothing else) ---- */
+  --ctl-h: 32px;
+  --ctl-h-sm: 26px;
+  --row-h: 32px;
+  --pad: var(--s-4);          /* panel padding */
+  --page-pad: var(--s-5);     /* the work area's side padding */
+
+  /* ---- frame ---- */
+  --topbar-h: 44px;
+  --status-h: 28px;
+  --rail-w: 68px;
+  --read-w: 72ch;             /* prose */
+  --form-w: 720px;            /* forms */
+  --page-w: 1440px;           /* a page's content, unless it is a table or a canvas */
+
+  /* ---- layers ---- */
+  --z-sticky: 10;
+  --z-chrome: 100;
+  --z-drawer: 500;
+  --z-overlay: 600;
+  --z-toast: 900;
+  --z-splash: 1000;
+
+  /* ---- motion ---- */
+  --dur-1: 120ms;             /* hover, press */
+  --dur-2: 160ms;             /* overlays */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  color-scheme: dark;
+}
+
+body.theme-light {
+  --tone-0: #e9edf3;
+  --tone-1: #f3f5f9;
+  --tone-2: #ffffff;
+  --tone-3: #eef1f6;
+  --tone-4: #e1e6ee;
+  --line: #d3dae5;
+  --line-strong: #b3bfd0;
+  --line-ctl: #6c7c93;
+  --scrim: rgba(20, 30, 48, 0.38);
+
+  --text: #2a3547;
+  --text-strong: #0c1524;
+  --text-muted: #566378;
+  --text-faint: #707d92;
+
+  --accent: #2259c7;
+  --accent-hover: #1c4db0;
+  --accent-text: #1d52bd;
+  --accent-soft: color-mix(in srgb, #2259c7 10%, transparent);
+
+  --pass: #136c3f;
+  --warn: #855604;
+  --fail: #b82931;
+  --pass-soft: color-mix(in srgb, var(--pass) 10%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 12%, transparent);
+  --fail-soft: color-mix(in srgb, var(--fail) 10%, transparent);
+  --fail-fill: #c22e36;
+  --fail-fill-hover: #a9252d;
+
+  --poly: #c01f56;
+  --li:   #5b738f;
+  --met1: #1f6fe0;
+  --met2: #b8409a;
+  --met3: #128a59;
+  --met4: #a9760a;
+  --met5: #d2581f;
+  --chart-1: #1775ce; --chart-2: #af4595; --chart-3: #c44400; --chart-4: #7260cd; --chart-5: #00897d;
+
+  --syntax-kw: #c01f56;
+  --syntax-com: #707d92;
+  --syntax-str: #0a3069;
+  --syntax-num: #0550ae;
+  --syntax-pp: #b8409a;
+
+  --shadow-float: 0 12px 32px rgba(20, 40, 70, 0.16), 0 2px 6px rgba(20, 40, 70, 0.10);
+  color-scheme: light;
+}
+
+/* Compact spacing (Settings): how much fits, not how big it is drawn. */
+body.density-compact {
+  --ctl-h: 28px;
+  --ctl-h-sm: 24px;
+  --row-h: 28px;
+  --pad: var(--s-3);
+  --page-pad: var(--s-4);
+}
+
+/* ------------------------------------------------------------------
+ * Legacy names. Page stylesheets written before the redesign use these;
+ * each is an alias of a token above and goes when its last user does.
+ * ------------------------------------------------------------------ */
+:root, body {
+  --bg: var(--tone-1);
+  --bg-2: var(--tone-0);
+  --surface: var(--tone-2);
+  --surface-2: var(--tone-3);
+  --surface-3: var(--tone-4);
+  --border: var(--line);
+  --border-strong: var(--line-strong);
+  --hover: var(--accent-soft);
+  --text-disabled: var(--text-faint);
+  --accent-2: var(--accent-hover);
+  --accent-3: var(--accent-hover);
+  --accent-glow: transparent;
+  --pending: var(--text-muted);
+  --info: var(--accent-text);
+  --info-soft: var(--accent-soft);
+  --on-status: #ffffff;
+  --on-warn: #000;
+  --on-pass: #000;
+  --focus: var(--accent-text);
+  --accent-cyan: var(--accent-text);
+  --wafer: var(--tone-1);
+  --wafer-2: var(--tone-0);
+  --die: var(--tone-2);
+  --die-2: var(--tone-3);
+  --die-3: var(--tone-4);
+  --seal: var(--line);
+  --seal-strong: var(--line-strong);
+  --mark: var(--line-strong);
+  --ink: var(--text);
+  --ink-strong: var(--text-strong);
+  --ink-2: var(--text-muted);
+  --ink-3: var(--text-faint);
+  --met1-hi: var(--accent-text);
+  --met1-lo: var(--accent);
+  --met1-band: var(--accent-soft);
+  --met3-band: var(--pass-soft);
+  --met4-band: var(--warn-soft);
+  --poly-band: var(--fail-soft);
+  --on-met: #06121f;
+  --r-sm: var(--r-1);
+  --r-md: var(--r-1);
+  --r-lg: var(--r-2);
+  --r-xl: var(--r-2);
+  --r-pill: var(--r-round);
+  --radius: var(--r-1);
+  --t-xs: var(--fs-1);
+  --t-sm: var(--fs-2);
+  --t-md: var(--fs-3);
+  --t-lg: var(--fs-4);
+  --t-xl: var(--fs-5);
+  --t-2xl: var(--fs-6);
+  --t-3xl: var(--fs-6);
+  --display: var(--sans);
+  --cond: var(--sans);
+  --sh-1: none;
+  --sh-2: var(--shadow-float);
+  --sh-3: var(--shadow-float);
+  --z-modal: var(--z-overlay);
+  --z-banner: 700;
+  --z-palette: 800;
+  --dur-3: var(--dur-2);
+  --dur-4: 600ms;
+  --ease-out: var(--ease);
+  --ease-in-out: var(--ease);
+}
+body.theme-light { --on-met: #ffffff; }

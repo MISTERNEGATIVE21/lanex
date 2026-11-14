@@ -10,7 +10,6 @@ import { renderPreflight, freshPreflight, preflightNow, runBlocker } from "./pre
 import { go } from "./nav.js";
 import { currentTab } from "./tabs.js";
 import { icon } from "./icons.js";
-import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
 import * as FS from "./flowstages.js";
 
@@ -147,9 +146,6 @@ function wireSetupActions() {
 export function setupSetup() {
   setupFolderBrowser();
   renderRecentDesigns();
-  // Page header links; the Constraints categories have their own tabs inside
-  // that card (config.js), so they never crowd this bar.
-  wireJump(document.getElementById("sec-setup"));
   wireSetupActions();
   import("./projectcard.js").then((m) => m.wireDesignRow()).catch(() => {});
   import("./mostused.js").then((m) => m.wireSettings()).catch(() => {});
@@ -862,7 +858,7 @@ function startRefused(reason, extra = {}) {
   state.runStart = s;
   document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "refused" } }));
   // Flow says it when it shows the run; elsewhere a toast does.
-  const onFlow = document.getElementById("sec-pipeline")?.classList.contains("section-active");
+  const onFlow = document.getElementById("sec-flow")?.classList.contains("section-active");
   if (!onFlow && !extra.mismatch) toast.show("Run refused: " + s.error.reason, "error");
 }
 
@@ -968,7 +964,7 @@ async function onRunClick({ show = false, fixed = false } = {}) {
   // The page first (it reads the scroll position while nothing has changed
   // yet, so no forced layout), then the button and Flow's "Starting".
   const from = currentTab();
-  if (showFlow) go("pipeline", {}, { link: false });
+  if (showFlow) go("flow", {}, { link: false });
   beginStart(from, showFlow);
   const checkP = fresh ? null : preflightNow();
   if (checkP) checkP.catch(() => {});
@@ -1004,10 +1000,10 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     state.previewedConfigHash = null;
     const tag = res.tag || payload.tag || null;
     document.dispatchEvent(new CustomEvent("g:run_started", { detail: { tag } }));
-    if (!showFlow && currentTab() !== "pipeline") {
+    if (!showFlow && currentTab() !== "flow") {
       toast.show((payload.tag ? "Run " + payload.tag + " started" : "The run started") +
         ". It keeps going in the background; the status bar shows how far it is.", "info", 7000,
-        { label: "Watch it", run: () => go("pipeline") });
+        { label: "Watch it", run: () => go("flow") });
     }
     // The check that ran beside the start: say so only if it found something.
     if (checkP) {

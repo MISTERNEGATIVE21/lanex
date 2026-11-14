@@ -76,8 +76,8 @@ def test_long_dialog_body_scrolls_and_close_stays_visible(tmp_path: Path) -> Non
         pytest.skip("no Chromium-family browser on this machine — the CSS "
                     "layout regression needs a real renderer")
     page = tmp_path / "dlg.html"
-    page.write_text(_HARNESS.format(styles=(_STATIC / "styles.css").as_uri(),
-                                    features=(_STATIC / "features.css").as_uri()))
+    page.write_text(_HARNESS.format(styles=(_STATIC / "tokens.css").as_uri(),
+                                    features=(_STATIC / "ui.css").as_uri()))
     out = subprocess.run(
         [browser, "--headless", "--disable-gpu", "--no-sandbox",
          "--window-size=1280,800", "--dump-dom", page.as_uri()],
@@ -100,7 +100,7 @@ def test_customdialog_uses_dlg_xl_not_the_folder_browser_class() -> None:
     assert 'classList.add("dlg-xl")' in dialog_js
     assert 'classList.add("dlg-wide")' not in dialog_js, \
         ".dlg-wide is the folder browser's variant: fixed height + hidden body overflow"
-    css = (_STATIC / "features.css").read_text()
+    css = (_STATIC / "ui.css").read_text()
     assert ".dlg-xl .dlg-body" in css
     m = re.search(r"\.dlg-xl \.dlg-body\s*\{([^}]*)\}", css)
     assert m and "overflow: auto" in m.group(1), \

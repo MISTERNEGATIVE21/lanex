@@ -180,7 +180,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     host_disp = f"[{args.host}]" if ":" in args.host else args.host
     url = f"http://{host_disp}:{port}/"
     # The window opens straight on the cockpit, the same page the Windows
-    # launcher opens. /landing is still served for anyone who links to it.
+    # launcher opens.
     home_url = url
     _print_url(url)
     if args.design_dir:

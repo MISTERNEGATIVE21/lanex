@@ -18,7 +18,7 @@ import { api } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
-import { wireJump } from "./jumpnav.js";
+import { setupViews, showView, revealIn } from "./views.js";
 import * as M from "./cells-model.js";
 import * as CV from "./cells-view.js";
 import * as runCtx from "./context.js";
@@ -81,7 +81,7 @@ function ctx() {
     pdk: S.pdk, scl: S.scl, lib: S.lib, byName: S.byName,
     projectPdk: state.selectedPdk, projectScl: state.selectedScl,
     reload: () => load(S.pdk, S.scl, S.sel, { keepScroll: true }),
-    openCell: (n) => { select(n, { scroll: true }); document.getElementById("cl-library")?.scrollIntoView({ behavior: "smooth", block: "start" }); },
+    openCell: (n) => { select(n, { scroll: true }); showView("cells", "cells"); },
     setUserExcluded,
   };
 }
@@ -120,7 +120,7 @@ function paintPicker(want) {
 }
 
 function wire(sec) {
-  wireJump(sec);
+  setupViews("cells", { first: "cells" });
   sec.addEventListener("change", (e) => {
     if (e.target.id === "cl-libpick") {
       const [pdk, scl] = e.target.value.split("|");
@@ -134,7 +134,7 @@ function wire(sec) {
   });
   sec.addEventListener("click", (e) => {
     const jump = e.target.closest("[data-cl-jump]");
-    if (jump) { document.getElementById(jump.dataset.clJump)?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    if (jump) { e.preventDefault(); revealIn(jump.dataset.clJump); }
   });
   // A config change elsewhere (Settings card, All settings) can change the
   // exclusions or roles; a finished run changes usage.
@@ -283,7 +283,7 @@ function paintSummary() {
     if (b.dataset.clFilter === "used") { S.view.used = true; S.view.hideEx = false; }
     if (b.dataset.clFilter === "usable") { S.view.hideEx = true; S.view.used = false; if (S.view.cat === "physical") S.view.cat = ""; }
     saveView(); paintFilters(); paintList();
-    document.getElementById("cl-library")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showView("cells", "cells");
   }));
 }
 

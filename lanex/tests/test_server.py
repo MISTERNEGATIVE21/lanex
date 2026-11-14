@@ -117,52 +117,31 @@ def test_vendor_assets_cacheable_first_party_no_store(server):
     assert a.headers.get("ETag")
 
 
-def test_landing_page(server):
-    # /landing serves the home screen. It is separate from the cockpit boot
-    # flow ("/" still serves index.html directly). These assertions lock the
-    # landing's *contract* — not its visual markup — so a redesign of the page
-    # never breaks CI as long as the contract holds.
-    resp = urllib.request.urlopen(f"http://127.0.0.1:{server}/landing")
-    assert resp.status == 200
-    assert "text/html" in resp.headers.get("Content-Type", "")
-    body = resp.read().decode("utf-8")
-    assert "LanEx" in body
+def test_app_page_assets_resolve(server):
+    # "/" serves the app. The old home screen (/landing) is gone; its address
+    # opens the app so an installed shortcut or bookmark still works.
+    root = urllib.request.urlopen(f"http://127.0.0.1:{server}/")
+    assert root.status == 200
+    assert "text/html" in root.headers.get("Content-Type", "")
+    body = root.read().decode("utf-8", errors="replace")
+    assert "LanEx" in body and "cockpit" in body.lower()
+    old = urllib.request.urlopen(f"http://127.0.0.1:{server}/landing")
+    assert old.status == 200
+    assert old.read().decode("utf-8", errors="replace") == body
 
-    # 1) At least one CTA hands off to the cockpit root (Setup tab is default).
-    assert "data-launch" in body and 'href="/"' in body
-
-    # 2) The home-screen opt-out contract with the launcher: the pre-paint
-    #    redirect keys off `ll.landing`, and the opt-out checkbox exists so the
-    #    user can set it. The shared `ll.theme` key carries the theme across.
-    assert "ll.landing" in body
-    assert 'id="skip-next"' in body
-    assert "ll.theme" in body
-
-    # 3) Offline / air-gap rule: assets come from the app's own /static tree,
-    #    never a CDN, and never the source site's page-relative paths. This
-    #    guards the exact regression class of shipping a landing that only
-    #    works when online or when served from the marketing repo's root.
-    assert "/static/landing.css" in body and "/static/landing.js" in body
+    # Offline rule: every asset comes from the app's own /static tree.
     assert "fonts.googleapis" not in body and "fonts.gstatic" not in body
-    for bad in ('href="assets/', 'src="assets/', 'href="style.css', 'src="script.js'):
-        assert bad not in body, f"landing references a page-relative asset: {bad}"
 
-    # 4) Link-check: every local /static/* asset the landing references must
-    #    actually resolve. This is the foolproof part — a broken favicon/font/
-    #    logo/manifest path can never merge, whatever the page looks like.
+    # Link-check: every local /static/* asset the page references must resolve,
+    # so a broken stylesheet, font, logo or manifest path can never merge.
     refs = set(re.findall(r'(?:href|src)="(/static/[^"?#]+)"', body))
-    assert refs, "landing referenced no /static assets — extraction likely broke"
+    assert refs, "the app page referenced no /static assets"
     for ref in sorted(refs):
         try:
             r = urllib.request.urlopen(f"http://127.0.0.1:{server}{ref}")
             assert r.status == 200, f"{ref} -> {r.status}"
         except urllib.error.HTTPError as ex:  # pragma: no cover - failure path
-            raise AssertionError(f"landing asset {ref} did not resolve: {ex.code}")
-
-    # 5) The cockpit root must be untouched by the landing.
-    root = urllib.request.urlopen(f"http://127.0.0.1:{server}/")
-    assert root.status == 200
-    assert "cockpit" in root.read().decode("utf-8", errors="replace").lower()
+            raise AssertionError(f"asset {ref} did not resolve: {ex.code}")
 
 
 def test_variables_endpoint_returns_list(server):

@@ -382,7 +382,7 @@ async function pointRun() {
 async function beatFlow() {
   if (!state.status || !state.status.running) {
     // Reopened after the run ended (or before it started): nothing to watch.
-    go("pipeline", {}, { link: false });
+    go("flow", {}, { link: false });
     // The end of the run may have been missed (LanEx restarted, the window
     // was closed): the newest run's verdict says how it went. "running" is
     // the server's word for a live run, so a run still going is watched.
@@ -404,7 +404,7 @@ async function beatFlow() {
 }
 
 async function runFailed(detail) {
-  go("pipeline", {}, { link: false });
+  go("flow", {}, { link: false });
   const card = await waitFor(".fl-fail", 8000);
   const stopped = !!(detail && detail.cancelled);
   point({
