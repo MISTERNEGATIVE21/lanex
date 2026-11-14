@@ -1,5 +1,16 @@
 # LanEx UI redesign (2026-11-15)
 
+> **Direction changed on 2026-11-15, after the first build.** The owner saw the flat
+> Project page and rejected the restyle. The scope is now: **the LanEx look stays
+> (sharper, never a new style); the Setup page is left alone; polished tabs get light
+> fixes; weak or missing things (Runs, sweeps, Compare, Settings, overlays) get the
+> full effort.** Section 1 (the audit) still holds. Sections 3 to 8 describe the
+> rejected direction and are to be rewritten. What "the LanEx look" means: big bold
+> Barlow text, blue-tinted near-black surfaces with blue borders, glow and depth (rail
+> spine and via, gradient Run button, lit card edges), spaced mono caps labels, the
+> grid texture and the layer-colour hairline. Clutter to remove is duplicated content
+> (repeated verdict cards, duplicate controls, chip walls), not style.
+
 Branch `claude/ui-redesign-2026-11-90b33b`, cut from `main` at b3664e0 (v1.0.0).
 Read with `docs/audit-2026-11-15.md` (sections 6 and 10) and `PRODUCT.md`.
 

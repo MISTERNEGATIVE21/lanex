@@ -409,13 +409,13 @@ function paintLastRun(facts) {
   const el = document.getElementById("proj-lastrun");
   if (!el) return;
   const last = facts && facts.last_run;
-  if (!facts || !facts.runs || !last) { el.innerHTML = "No runs yet."; return; }
+  const n = document.getElementById("pj-runs-sum");
+  if (n) n.textContent = facts && facts.runs ? String(facts.runs) : "";
+  if (!facts || !facts.runs || !last) { el.textContent = "No runs yet."; return; }
   // The newest folder of a run still going has no final/ yet: that is not
   // "didn't finish".
   const going = state.status && state.status.running;
-  el.innerHTML = (going ? "A run is going now" : "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at))) +
-    " · <button type='button' class='linklike' data-open='runs'>" +
-    (facts.runs === 1 ? "View it" : "View all " + facts.runs + " runs") + "</button>";
+  el.textContent = going ? "A run is going now." : "Last run " + (last.finished ? "finished" : "didn't finish") + " " + ago(last.at) + ".";
 }
 
 // Only the "Last run" line, read again (after a run ends).

@@ -105,8 +105,8 @@ function whereShort(d) {
   return parts.slice(-2).join(sep) || full;
 }
 
-// The project list on the Setup page: every project LanEx knows about, the
-// open one marked. Clicking a row opens it.
+// The recent list on the Project page (shown while no project is open): every
+// project LanEx knows about. Clicking a row opens it.
 let _hubSeq = 0;
 // Rows keep the place they had when the page loaded: opening a project marks
 // it where it is instead of jumping it to the top (the top-bar menu is the
@@ -127,13 +127,10 @@ export async function renderHubRows() {
   const dirs = stableOrder(await knownProjects());
   if (seq !== _hubSeq) return;   // a newer render is on its way
   const scroll = host.scrollTop;
-  // First run, nothing anywhere yet: the start tiles get the whole card.
-  document.getElementById("setup-design")?.classList.toggle("no-projects", !dirs.length);
-  if (!dirs.length) {
-    host.innerHTML = "<p class='hub-none'>No projects yet. New projects go in <code>" +
-      fmt.escape(displayPath((_defaults && _defaults.projects_dir) || "")) + "</code>.</p>";
-    return;
-  }
+  // First run, nothing anywhere yet: no list to show.
+  const box = document.getElementById("pj-recent");
+  if (box) box.hidden = !dirs.length;
+  if (!dirs.length) { host.innerHTML = ""; return; }
   host.innerHTML = dirs.map((d) => {
     const cur = d === state.designDir;
     return "<button class='hub-row" + (cur ? " is-current" : "") + "' data-dir='" + fmt.escape(d) + "'" +
@@ -152,7 +149,7 @@ function wireHub() {
     const row = e.target.closest(".hub-row");
     if (row) switchProject(row.dataset.dir);
   });
-  const sec = document.getElementById("setup-design");
+  const sec = document.getElementById("sec-setup");
   sec?.addEventListener("click", (e) => {
     const b = e.target.closest("[data-open]");
     if (!b) return;
