@@ -656,6 +656,66 @@ check("compare + DSE never index the metric/config table by tag (N1 regression)"
   }
 });
 
+check("compare: a delta says how far a number moved, and whether that is better", () => {
+  const up = { higher_is_better: true, direction_known: true }, down = { higher_is_better: false, direction_known: true };
+  assert.deepEqual(cmp.deltaOf(4.1, 2.362, up, "ns"), { text: "+1.74 ns", cls: "is-better" });
+  assert.deepEqual(cmp.deltaOf(10367.1, 8769, down, "µm²"), { text: "+18 %", cls: "is-worse" });
+  assert.equal(cmp.deltaOf(5, 5, down).text, "same");
+  assert.equal(cmp.deltaOf(1226, 842, null).cls, "", "no known direction: no colour");
+  assert.equal(cmp.deltaOf(1226, 842, { higher_is_better: true, direction_known: false }).cls, "", "an unknown direction is never coloured");
+  // Text values and missing ones have no delta (never a fabricated 0).
+  assert.equal(cmp.deltaOf("96.6 × 107.32", 5, up), null);
+  assert.equal(cmp.deltaOf(undefined, 5, up), null);
+  // The delta rides in the cell, after the value; the exact value stays in the title.
+  const cell = cmp.summaryCellHtml({ value: 1234.7, unit: "µm" }, cmp.deltaOf(1234.7, 1000, down, "µm"));
+  assert.match(cell, /title='1234\.7'/);
+  assert.match(cell, /class='cmp-d is-worse'>\+23 %</);
+});
+
+check("overlays: one stack; the frame's menus, sheets and dialogs all open through it", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["shell.js", "dialog.js", "runbar.js", "palette.js", "wizard.js", "fs.js", "fixsheet.js", "sweeps.js", "runs.js", "layout.js", "autoconfig.js", "compare.js"]) {
+    assert.match(src(f), /from "\.\/overlay\.js"/, f + " opens an overlay without the stack");
+  }
+  // Their own Escape handling is gone: Esc closes the top layer, in overlay.js.
+  for (const f of ["wizard.js", "fs.js", "fixsheet.js", "sweeps.js", "autoconfig.js", "runbar.js"]) {
+    assert.doesNotMatch(src(f), /e\.key === "Escape"/, f + " still closes itself on Escape, beside the stack");
+  }
+  const ov = src("overlay.js");
+  assert.match(ov, /remove\(t, "esc"\)/, "Esc must close only the top layer");
+  assert.match(ov, /layer\.kind !== "menu" && layer\.kind !== "popover"/, "a menu owns nothing: closing it must not close what its item opened");
+  // A destructive dialog opens with focus on Cancel.
+  assert.match(src("dialog.js"), /return danger \? btns\[0\] : btns\[btns\.length - 1\]/);
+});
+
+const VD = await import(toUrl(resolve(MOD, "verdict.js")));
+check("verdict: the server's words win, an unknown state is amber, never a guessed pass", () => {
+  assert.deepEqual(VD.verdictOfRun({ verdict: { state: "passed", label: "Clean" } }), { state: "passed", cls: "pass", word: "Clean" });
+  assert.equal(VD.verdictOfRun({ verdict: { state: "stopped", label: "Stopped after step 37" } }).word, "Stopped after step 37");
+  assert.equal(VD.verdictOfRun({ verdict: { state: "brand-new" } }).cls, "warn");
+  assert.equal(VD.verdictOfRun({ success: false }).cls, "fail");
+  assert.equal(VD.verdictOfRun({ success: true }, { live: true }).cls, "run");
+});
+
+const PREFS_MOD = await import(toUrl(resolve(MOD, "prefs.js")));
+check("settings: every preference is in the registry, with the key its module reads", () => {
+  const keys = Object.fromEntries(PREFS_MOD.PREFS.map((p) => [p.id, p.key]));
+  assert.equal(keys.theme, "ll.theme");
+  assert.equal(keys.engine, "ll.runMode");
+  assert.equal(keys.showFlow, "ll.showFlowOnRun");
+  assert.equal(keys.notify, "ll.notifyRuns");
+  assert.equal(keys.chime, "ll.runChime");
+  assert.equal(keys.lintOnSave, "ll.lintOnSave");
+  assert.equal(keys.density, "ll.density");
+  // Dark stays the default look; System is a choice.
+  assert.equal(PREFS_MOD.pref("theme").def, "dark");
+  assert.deepEqual(PREFS_MOD.pref("theme").options.map((o) => o[0]), ["dark", "light", "system"]);
+  // Single-key shortcuts can be turned off (WCAG 2.1.4), and hotkeys.js honours it.
+  assert.match(readFileSync(resolve(MOD, "hotkeys.js"), "utf8"), /if \(!singleKeysOn\(\)\) return;/);
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  assert.ok(html.includes('data-tab="settings"') && html.includes('id="sec-settings"'), "the Settings page and its rail entry");
+});
+
 // ------------------------------------------------ SSE gap resync (N3)
 // A dropped stream that reconnects past events the server's ring already
 // evicted must re-hydrate the live pipeline from /api/run/status — never sit on

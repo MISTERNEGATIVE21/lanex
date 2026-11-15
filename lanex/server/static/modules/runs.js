@@ -1,22 +1,26 @@
-// runs.js — the Runs page: one dense, sortable table of every run, where runs
-// are managed, compared and swept. A row is one run; a sweep is one collapsible
-// parent row with its points under it (sweeps.js draws the sheet and summary).
+// runs.js — the Runs page: one sortable table of every run, where runs are
+// managed, compared and swept. A row is one run; a sweep is one parent row
+// that lines up with the columns (the best number of its clean runs in each)
+// and opens to its summary and its points (sweeps.js draws the sheet and the
+// summary).
 //
 //   click a row        it becomes the run every results page shows
-//   open a row (▸)     its report card and one row of actions
+//   open a row (▸)     the run panel beside the table: how it ended, its
+//                      numbers against the baseline, its settings and actions
 //   ★                  the design's baseline: every number is coloured better
 //                      or worse than it (direction from the metric registry)
 //   tick 2–6 rows      Compare (Analytics › Compare, pre-filled) or Delete
 
 import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
-import { confirmDialog, alertDialog, checklistDialog, choiceDialog, customDialog, holdFocus } from "./dialog.js";
+import { confirmDialog, alertDialog, checklistDialog, choiceDialog, customDialog } from "./dialog.js";
+import { openLayer, closeLayer, isLayerOpen, layerCount } from "./overlay.js";
 import { toast } from "./toast.js";
 import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, setBaseline, contextRun, contextDesign, onContext, designLabel } from "./context.js";
 import { go } from "./nav.js";
 import * as FS from "./flowstages.js";
 import { icon } from "./icons.js";
-import { reportCardHtml, fmtDur } from "./reportcard.js";
+import { verdictOf as cardVerdict, warningsHtml, fmtDur } from "./reportcard.js";
 import { localeNum, localeTime, localeDate } from "./intlcache.js";
 import { loadingStart, pageSkeleton } from "./loading.js";
 
@@ -84,6 +88,8 @@ const COLS = [
   { id: "changed", label: "Changed vs baseline", sort: (r) => (CHANGES.get(keyOf(r)) || []).length, def: true },
   { id: "note", label: "Note", sort: (r) => r.note || "", def: 2100 },
 ];
+// The column heads: one line each, short enough that none wraps.
+const HEADS = { die: "Die", cells: "Std cells", checks: "Checks", changed: "Changed" };
 const VERDICT_ORDER = { running: 0, passed: 1, warning: 2, incomplete: 3, stopped: 4, failed: 5 };
 const signed = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2);
 const grp = (v) => localeNum(Math.round(v));
@@ -92,13 +98,35 @@ const COLS_KEY = "ll.runsCols", SORT_KEY = "ll.runsSort", BASE_KEY = "ll.runsBas
 function visibleCols(scope) {
   const saved = safeStorage.getJSON(COLS_KEY, null);
   return COLS.filter((c) => (c.allOnly ? scope === "all" : true) &&
-    (c.fixed || (saved && saved[c.id] != null ? saved[c.id] : defOn(c))));
+    (c.fixed || (saved && saved[c.id] != null ? saved[c.id] : defOn(c) && !_autoHide.has(c.id))));
+}
+// Columns that fit: when the default set is wider than the room the table
+// has, the least needed ones step aside, in this order (never a column the
+// person turned on themselves; Columns brings any of them back).
+const DROP_ORDER = ["note", "origin", "pdk", "changed", "tns", "hold", "die", "runtime", "util", "power", "checks", "cells", "when"];
+let _autoHide = new Set(), _autoKey = "";
+function fitColumns(table, scope) {
+  const wrap = document.getElementById("rn-wrap");
+  const saved = safeStorage.getJSON(COLS_KEY, null) || {};
+  const key = scope + "|" + (wrap ? wrap.clientWidth : 0) + "|" + JSON.stringify(saved);
+  if (key !== _autoKey) {
+    _autoKey = key;
+    if (_autoHide.size) { _autoHide = new Set(); _model.cols = visibleCols(scope); paintTable(table, _model); }
+  }
+  for (let i = 0; wrap && i < DROP_ORDER.length && wrap.scrollWidth > wrap.clientWidth + 1; i++) {
+    const next = DROP_ORDER.find((id) => _model.cols.some((c) => c.id === id) && saved[id] !== true);
+    if (!next) break;
+    _autoHide.add(next);
+    _model.cols = visibleCols(scope);
+    paintTable(table, _model);
+  }
 }
 // A column whose default is a width shows by default only when the table has
 // that much room, so the default set fits the screen (1366: the essentials).
 function defOn(c) {
   if (typeof c.def !== "number") return !!c.def;
-  const w = document.getElementById("sec-runs")?.clientWidth || window.innerWidth;
+  // The room the table has (less when the run panel sits beside it).
+  const w = (document.querySelector("#sec-runs .rn-main")?.clientWidth || document.getElementById("sec-runs")?.clientWidth || window.innerWidth) + 30;
   return w >= c.def - 120;
 }
 
@@ -199,14 +227,23 @@ function wire() {
   if (fi) fi.addEventListener("input", () => { F.q = fi.value.toLowerCase(); renderRuns({ cached: true }); });
   document.getElementById("runs-import")?.addEventListener("click", () => importRunFlow());
   document.getElementById("runs-new-sweep")?.addEventListener("click", () => import("./sweeps.js").then((m) => m.openSweepSheet()));
+  // The column picker: a popover on the overlay stack (Esc, an outside press).
   const cb = document.getElementById("rn-cols-btn"), cp = document.getElementById("rn-cols");
   cb?.addEventListener("click", (e) => {
     e.stopPropagation();
-    cp.hidden = !cp.hidden; cb.setAttribute("aria-expanded", cp.hidden ? "false" : "true");
-    if (!cp.hidden) paintColPicker();
+    if (isLayerOpen(cp)) { closeLayer(cp); return; }
+    cp.hidden = false;
+    paintColPicker();
+    openLayer(cp, { kind: "popover", owner: cb, onClose: () => { cp.hidden = true; }, focus: () => cp.querySelector("input") });
   });
-  document.addEventListener("click", (e) => { if (cp && !cp.hidden && !e.target.closest(".rn-cols-wrap")) { cp.hidden = true; cb.setAttribute("aria-expanded", "false"); } });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && cp && !cp.hidden) { cp.hidden = true; cb.setAttribute("aria-expanded", "false"); } });
+  // Esc closes the run panel when nothing is open above it.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented || !_open || layerCount()) return;
+    if (!document.getElementById("sec-runs")?.classList.contains("section-active")) return;
+    const t = e.target;
+    if (t && t.matches && t.matches("input[type=search]") && t.value) return;
+    closeSide();
+  });
   // A sweep running anywhere shows its progress here.
   // Default columns follow the room the table has.
   let rz = 0;
@@ -220,9 +257,9 @@ function paintColPicker() {
   const cp = document.getElementById("rn-cols");
   const saved = safeStorage.getJSON(COLS_KEY, {}) || {};
   cp.innerHTML = "<div class='rn-cols-h'>Columns</div>" + COLS.filter((c) => !c.fixed && !c.allOnly).map((c) => {
-    const on = saved[c.id] != null ? saved[c.id] : defOn(c);
+    const on = saved[c.id] != null ? saved[c.id] : defOn(c) && !_autoHide.has(c.id);
     return "<label class='rn-col-opt'><input type='checkbox' data-col='" + c.id + "'" + (on ? " checked" : "") + "/> " + esc(c.label) + "</label>";
-  }).join("") + "<button class='btn btn-ghost btn-xs' data-cols-reset>Reset</button>";
+  }).join("") + "<button class='btn btn-ghost btn-sm' data-cols-reset>Reset to default</button>";
   cp.querySelectorAll("input[data-col]").forEach((i) => i.addEventListener("change", () => {
     const m = safeStorage.getJSON(COLS_KEY, {}) || {};
     m[i.dataset.col] = i.checked;
@@ -234,17 +271,19 @@ function paintColPicker() {
 
 // Segmented filter chips (no native <select>), counts from the unfiltered list.
 function paintChips(runs) {
-  const chip = (host, key, opts) => {
+  const chip = (host, key, all) => {
     const el = document.getElementById(host);
     if (!el) return;
-    el.hidden = opts.length <= 2;
+    // A choice with nothing behind it is left out (unless it is the one in force).
+    const opts = all.filter(([v, , n]) => v === "" || n == null || n > 0 || F[key] === v);
+    el.hidden = opts.length <= 1 || (opts.length <= 2 && key !== "status");
     el.innerHTML = opts.map(([v, label, n]) =>
       "<button class='rn-segb" + (F[key] === v ? " is-on" : "") + "' data-v='" + esc(v) + "' aria-pressed='" + (F[key] === v) + "'>" +
       esc(label) + (n != null ? " <span class='rn-n'>" + n + "</span>" : "") + "</button>").join("");
     el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { F[key] = b.dataset.v; renderRuns({ cached: true }); }));
   };
   const cnt = (fn) => runs.filter(fn).length;
-  chip("rn-status", "status", [["", "All", runs.length], ["passed", "Passed", cnt((r) => verdictOf(r).state === "passed")],
+  chip("rn-status", "status", [["", "All", runs.length], ["passed", "Clean", cnt((r) => verdictOf(r).state === "passed")],
     ["warning", "Warnings", cnt((r) => verdictOf(r).state === "warning")], ["failed", "Failed", cnt((r) => verdictOf(r).state === "failed")], ["stopped", "Stopped", cnt((r) => /stopped|incomplete/.test(verdictOf(r).state))],
     ["pinned", "Pinned", cnt((r) => r.pinned)]]);
   chip("rn-origin", "origin", [["", "Any origin", null], ["manual", "Manual", cnt((r) => originText(r) === "manual")],
@@ -313,8 +352,9 @@ export async function renderRuns({ cached = false } = {}) {
   const empty = document.getElementById("rn-empty"), wrap = document.getElementById("rn-wrap");
   const title = document.getElementById("rn-title");
   if (title) title.textContent = scope === "all" ? "Every run of every design you've opened" : (state.designDir ? "Every run of " + designLabel(state.designDir) : "Runs");
+  const foot = document.getElementById("rn-foot");
   if (runs === null) {
-    wrap.hidden = true; empty.hidden = false;
+    wrap.hidden = true; empty.hidden = false; if (foot) foot.hidden = true;
     empty.innerHTML = "<h3>Couldn't load your runs</h3><p>LanEx didn't answer in time. Trying again…</p>";
     setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000);
     return;
@@ -324,8 +364,9 @@ export async function renderRuns({ cached = false } = {}) {
   if (scope !== "all") state.runs = runs;
   paintChips(runs);
   paintLive();
+  syncSide();
   if (!runs.length) {
-    wrap.hidden = true; empty.hidden = false;
+    wrap.hidden = true; empty.hidden = false; if (foot) foot.hidden = true;
     empty.innerHTML = state.designDir || scope === "all"
       ? "<h3>No runs yet</h3><p>Run the flow once and every run appears here, one row each, with its timing, area, power and checks.</p>" +
         "<button class='btn btn-primary' data-go='setup'>Go to Setup</button>"
@@ -335,8 +376,14 @@ export async function renderRuns({ cached = false } = {}) {
   }
   const shown = runs.filter(matches);
   if (!shown.length) {
-    wrap.hidden = true; empty.hidden = false;
-    empty.innerHTML = "<h3>No runs match</h3><p>Clear the search or the filters to see all " + runs.length + " runs.</p>";
+    wrap.hidden = true; empty.hidden = false; if (foot) foot.hidden = true;
+    empty.innerHTML = "<h3>No runs match</h3><p>Nothing fits the search and filters. There are " + runs.length + " runs in all.</p>" +
+      "<button class='btn' id='rn-clear-filters'>Clear the filters</button>";
+    empty.querySelector("#rn-clear-filters").onclick = () => {
+      F.q = F.status = F.origin = F.pdk = "";
+      const fi = document.getElementById("runs-filter"); if (fi) fi.value = "";
+      renderRuns({ cached: true });
+    };
     syncSelection();
     return;
   }
@@ -345,7 +392,9 @@ export async function renderRuns({ cached = false } = {}) {
   _baseMemo = new Map();
   _model = { items: buildItems(sortRuns(shown)), cols, a: 0, b: 0, windowed: false };
   paintTable(table, _model);
+  fitColumns(table, scope);
   wireTable(table, runs);
+  paintFoot(runs, shown);
   syncSelection();
   paintViewing();
   explainFailed(runs);
@@ -359,13 +408,27 @@ function note(text) {
   el.textContent = text || "";
 }
 
+// The line under the table: how many, and what the colours mean.
+function paintFoot(runs, shown) {
+  const foot = document.getElementById("rn-foot");
+  if (!foot) return;
+  foot.hidden = false;
+  const sweeps = new Set(shown.map((r) => { const sw = sweepOf(r); return sw ? normDir(r._design) + "|" + sw.id : ""; }).filter(Boolean)).size;
+  const n = shown.length === runs.length ? runs.length + " run" + (runs.length === 1 ? "" : "s") : shown.length + " of " + runs.length + " runs";
+  const base = getRunScope() === "all" ? "" : baselineTag(state.designDir);
+  foot.innerHTML = "<span>" + n + (sweeps ? " · " + sweeps + " sweep" + (sweeps === 1 ? "" : "s") : "") + "</span>" +
+    (base
+      ? "<span>Baseline <code>" + esc(base) + "</code></span><span class='rn-key'><i style='background:var(--pass)'></i>better than it</span><span class='rn-key'><i style='background:var(--fail)'></i>worse</span>"
+      : "<span>Star a run to make it the baseline: every number is then coloured better or worse than it.</span>");
+}
+
 function headHtml(cols) {
   const th = (c) => {
     const on = _sort.col === c.id;
     return "<th scope='col' class='rn-th rn-c-" + c.id + (c.dir != null || c.get ? " is-num" : "") + "'" +
       (on ? " aria-sort='" + (_sort.dir > 0 ? "ascending" : "descending") + "'" : "") +
       "><button class='rn-sort" + (on ? " is-on" : "") + "' data-sort='" + c.id + "' title='" + esc(c.tip || "Sort by " + c.label) + "'>" +
-      esc(c.label) + (c.unit ? " <small>" + esc(c.unit) + "</small>" : "") +
+      esc(HEADS[c.id] || c.label) + (c.unit ? " <small>" + esc(c.unit) + "</small>" : "") +
       "<span class='rn-arrow' aria-hidden='true'>" + (on ? (_sort.dir > 0 ? "▲" : "▼") : "") + "</span></button></th>";
   };
   return "<thead><tr><th class='rn-th rn-c-pick'><span class='sr-only'>Select</span></th>" +
@@ -440,8 +503,8 @@ function scrollerOf(table) {
 function estimate(it) {
   const h = _heights.get(it.key);
   if (h != null) return h;
-  if (it.group) return it.open ? _rowH + 160 : _rowH;
-  return _rowH + (originOf(it.run).kind === "fix" ? 17 : 0) + (_open === it.key ? 320 : 0);
+  if (it.group) return it.open ? _rowH + 240 : _rowH;
+  return _rowH + (originOf(it.run).kind === "fix" ? 17 : 0);
 }
 
 function prefix(m) {
@@ -509,7 +572,7 @@ function measure(table, m) {
     const it = m.items[i];
     if (!it || !h) continue;
     _heights.set(it.key, h);
-    if (!it.group && _open !== it.key && originOf(it.run).kind !== "fix") _rowH = h;
+    if (!it.group && originOf(it.run).kind !== "fix") _rowH = h;
   }
 }
 
@@ -549,8 +612,8 @@ function moveWindow(table, m, a, b) {
     const vi = tr.dataset.vi;
     if (vi == null || keep(+vi)) continue;
     const it = m.items[+vi];
-    // An open report or a sweep's summary keeps its rows (and what they show).
-    if (it && ((it.group && it.open) || (!it.group && _open === it.key))) {
+    // An open sweep's summary keeps its rows (and what they show).
+    if (it && it.group && it.open) {
       const list = _stash.get(it.key) || [];
       list.push(tr);
       _stash.set(it.key, list);
@@ -561,7 +624,7 @@ function moveWindow(table, m, a, b) {
   const ins = (anchor, where, from, to) => {
     if (from >= to) return;
     anchor.insertAdjacentHTML(where, htmlOf(m, from, to));
-    // Kept rows (an open report, a sweep's summary) go back where they belong.
+    // Kept rows (a sweep's summary) go back where they belong.
     for (let k = from; k < to; k++) restore(tb, m, k);
   };
   if (overlap) {
@@ -594,7 +657,7 @@ function restore(tb, m, k) {
   it._kept = true;
 }
 
-// After rows are drawn: sweep summaries and the open report card.
+// After rows are drawn: the open sweeps' summaries.
 function afterInsert(table, m, from, to, only = null) {
   for (let k = from; k < to; k++) {
     if (only && !only.has(k)) continue;
@@ -605,7 +668,6 @@ function afterInsert(table, m, from, to, only = null) {
       const g = it.group.runs;
       if (el && g.length) import("./sweeps.js").then((mod) => mod.paintSweepSummary(el, it.group.sw, g, { verdictOf, failCode, baseline: baselineTag(g[0]._design) }));
     }
-    if (!it.group && _open === it.key) paintCard(it.run);
   }
 }
 
@@ -628,7 +690,7 @@ function nameWidthKey(it, cols) {
   const r = it.run;
   const vals = it.child ? pointValues(r, it.child) : null;
   return r.tag.length + (vals ? valuesText(vals).length * 0.9 + 1 : 0) + (r.pinned ? 2 : 0) + (r.imported ? 9 : 0) +
-    (r.note && !cols.some((c) => c.id === "note") ? 2 : 0) + (isViewingRun(r) ? 7 : 0);
+    (r.note && !cols.some((c) => c.id === "note") ? 2 : 0) + (isViewingRun(r) ? 7 : 0) + (vals ? 3 : 0);
 }
 function isViewingRun(r) { return r.tag === contextRun() && normDir(r._design) === normDir(contextDesign()); }
 
@@ -645,7 +707,7 @@ function sizerHtml(m) {
   };
   top.set("_lineage", []); top.set("_sweep", []);
   for (const it of m.items) {
-    if (it.group) { push("_sweep", sweepRowHtml(it.group, cols, it.gk, false).replace(/<[^>]*>/g, "").length, it); continue; }
+    if (it.group) { push("_sweep", sweepNameText(it.group).length, it); continue; }
     for (const c of cols) push(c.id, c.id === "name" ? nameWidthKey(it, cols) : cellWidthKey(c, it), it);
     if (originOf(it.run).kind === "fix") push("_lineage", lineageHtml(it.run).replace(/<[^>]*>/g, "").length, it);
   }
@@ -731,7 +793,7 @@ function cellHtml(c, r, base) {
     // flagged (verdict.drc_disagree), with Verify's DRC section one click away.
     const dd = r.verdict && r.verdict.drc_disagree;
     if (!k.total && dd && dd.markers) {
-      return "<td class='rn-c-checks is-num'><span class='rn-clean'>clean</span> <button class='rn-drcflag' data-act='drc' style='color:var(--warn);background:none;border:0;padding:0;cursor:pointer;font:inherit' title='" +
+      return "<td class='rn-c-checks is-num'><span class='rn-clean'>clean</span> <button class='rn-drcflag' data-act='drc' title='" +
         esc("The DRC report files list " + dd.markers + " markers but LibreLane's metric says 0. Open Verify's Design rules.") + "'>· report: " + dd.markers + "</button></td>";
     }
     if (!k.total) return "<td class='rn-c-checks is-num'><span class='rn-clean'>clean</span></td>";
@@ -766,14 +828,11 @@ function rowHtml(r, cols, { child = null } = {}) {
   const isBase = baselineTag(r._design) === r.tag;
   const name = nameCellHtml(r, cols, child);
   const cells = cols.map((c) => (c.id === "name" ? name : cellHtml(c, r, base))).join("");
-  const n = cols.length + 2;
-  return "<tr class='rn-row" + (child ? " is-child" : "") + (_picked.has(k) ? " is-picked" : "") + "' data-key='" + esc(k) + "' data-tag='" + esc(r.tag) + "' data-design='" + esc(r._design || "") + "'>" +
+  return "<tr class='rn-row" + (child ? " is-child" : "") + (_picked.has(k) ? " is-picked" : "") + (_open === k ? " is-open" : "") + "' data-key='" + esc(k) + "' data-tag='" + esc(r.tag) + "' data-design='" + esc(r._design || "") + "'>" +
     "<td class='rn-c-pick'><input type='checkbox' class='rn-pick' aria-label='Select " + esc(r.tag) + "'" + (_picked.has(k) ? " checked" : "") + "/></td>" +
     "<td class='rn-c-base'><button class='rn-star" + (isBase ? " is-on" : "") + "' data-act='base' aria-pressed='" + isBase + "' title='" +
       (isBase ? "The baseline of " + esc(designLabel(r._design)) + ". Click to clear." : "Make this the baseline") + "'>" + icon("star", { size: 13 }) + "</button></td>" +
-    cells + "</tr>" +
-    (_open === k ? "<tr class='rn-detail' data-detail='" + esc(k) + "'><td colspan='" + n + "'><div class='rn-card' id='rn-card'>" +
-      "<p class='muted'>Reading the run…</p></div></td></tr>" : "");
+    cells + "</tr>";
 }
 
 // viewing: show the "shown" chip as the row that has it would (sizer rows only).
@@ -781,45 +840,80 @@ function nameCellHtml(r, cols, child, viewing = false) {
   const k = keyOf(r);
   const vals = child ? pointValues(r, child) : null;
   return "<td class='rn-c-name'><div class='rn-name'>" +
-    "<button class='rn-exp' data-act='expand' aria-expanded='" + (_open === k) + "' title='Report and actions' aria-label='Report and actions for " + esc(r.tag) + "'>" + icon("chevron", { size: 12 }) + "</button>" +
+    "<button class='rn-exp' data-act='expand' aria-expanded='" + (_open === k) + "' title='Numbers, settings and actions' aria-label='Details of " + esc(r.tag) + "'>" + icon("chevron", { size: 12 }) + "</button>" +
     "<span class='rn-tag'>" + esc(r.tag) + "</span>" +
-    (vals ? "<span class='rn-val'>" + esc(valuesText(vals)) + "</span>" : "") +
+    (vals ? Object.entries(vals).map(([kk, x]) => "<span class='rn-kv'>" + esc(kk) + " <b>" + esc(x) + "</b></span>").join("") : "") +
     (r.pinned ? "<span class='rn-pin' title='Pinned'>" + icon("star", { size: 11 }) + "</span>" : "") +
     (r.imported ? "<span class='rn-chip'>imported</span>" : "") +
     (r.note && !cols.some((c) => c.id === "note") ? "<span class='rn-hasnote' title='" + esc(r.note) + "'>" + icon("file", { size: 11 }) + "</span>" : "") +
     "<span class='rn-viewing' title='Flow, Layout, Analytics and Verify show this run'" + (viewing ? " style='display:inline-block'" : "") + ">shown</span></div>" + lineageHtml(r) + "</td>";
 }
 
-function sweepRowHtml(g, cols, gk, open) {
-  const sw = g.sw, rs = g.runs;
-  const axes = (sw.axes || []).map((a) => {
+// "FP_CORE_UTIL 40–70" (a range when the values are numbers), axes joined by ×.
+function sweepAxesText(sw) {
+  return (sw.axes || []).map((a) => {
     const vs = (a.values || []).map(String);
     const nums = vs.map(Number);
     const range = nums.every(Number.isFinite) && vs.length > 2 ? Math.min(...nums) + "–" + Math.max(...nums) : vs.join(", ");
     return a.var + " " + range;
   }).join(" × ") || "settings";
+}
+const sweepNameText = (g) => "Sweep " + sweepAxesText(g.sw) + " 00";
+
+// A sweep's row lines up with the columns: how many runs and how they went
+// under Result, and under each number the best of its clean runs (hover says
+// which run). Its runs, and the summary, show when it is open.
+function sweepRowHtml(g, cols, gk, open) {
+  const sw = g.sw, rs = g.runs;
   const failed = rs.filter((r) => verdictOf(r).state === "failed");
   const reasons = [...new Set(failed.map((r) => failCode(r)).filter(Boolean))];
   const passed = rs.filter((r) => verdictOf(r).state === "passed");
-  const bestW = passed.map((r) => km(r, "timing__setup__ws")).filter((v) => v != null);
   const running = rs.some((r) => verdictOf(r).state === "running");
   // Fewer runs than planned: say why (a Stop, or "stop at the first clean").
   const short = Number.isFinite(sw.count) && rs.length < sw.count;
   const stopped = rs.some((r) => verdictOf(r).state === "stopped");
-  const n = cols.length + 2;
-  return "<tr class='rn-sweep" + (open ? " is-open" : "") + "' data-group='" + esc(gk) + "'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" +
-    "<td colspan='" + (n - 2) + "'><div class='rn-sw'>" +
-    "<button class='rn-exp' data-act='group' aria-expanded='" + open + "' aria-label='Show the runs of this sweep'>" + icon("chevron", { size: 12 }) + "</button>" +
-    "<b>Sweep " + esc(axes) + "</b><span class='rn-sw-m'>" + rs.length + (short ? " of " + sw.count : "") + " run" + ((short ? sw.count : rs.length) === 1 ? "" : "s") +
-    (running ? " · running" : short ? (stopped ? " · you stopped it" : sw.stop_when_good && passed.length ? " · stopped at the first clean run" : "") : "") +
-    (failed.length ? " · <span class='rn-bad'>" + failed.length + " failed" + (reasons.length ? " (" + esc(reasons.join(", ")) + ")" : "") + "</span>" : "") +
-    (bestW.length ? " · best WNS " + esc(signed(Math.max(...bestW))) + " ns" : "") + "</span>" +
+  const why = running ? "Running now" : short ? (stopped ? "You stopped it" : sw.stop_when_good && passed.length ? "Stopped at the first clean run" : "") : "";
+  const tone = running ? "live" : failed.length && !passed.length ? "fail" : failed.length || (short && stopped) ? "warn" : passed.length ? "pass" : "warn";
+  const count = rs.length + (short ? " of " + sw.count : "") + " run" + ((short ? sw.count : rs.length) === 1 ? "" : "s");
+  const cell = (c) => {
+    if (c.id === "name") {
+      return "<td class='rn-c-name'><div class='rn-name'>" +
+        "<button class='rn-exp' data-act='group' aria-expanded='" + open + "' aria-label='" + (open ? "Hide" : "Show") + " the runs of this sweep'>" + icon("chevron", { size: 12 }) + "</button>" +
+        "<span class='rn-swtag'>Sweep</span><span class='rn-sw-axes'>" + esc(sweepAxesText(sw)) + "</span></div></td>";
+    }
+    if (c.id === "verdict") {
+      return "<td class='rn-c-verdict'" + (why ? " title='" + esc(why) + "'" : "") + "><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(count) +
+        (failed.length ? "<span class='rn-sw-n'>· <span class='rn-bad'>" + failed.length + " failed</span></span>" : why && !running ? "<span class='rn-sw-n'>· " + esc(stopped ? "stopped" : "first clean") + "</span>" : "") + "</span></td>";
+    }
     // An old manifest's time had no zone: the server read it as its own clock
     // (dse.load_sweeps) and says so; the dotted line shows it is assumed.
-    "<span class='rn-sw-when" + (sw.created_at_note ? " is-assumed" : "") + "'" +
-      (sw.created_at_note ? " title='" + esc(sw.created_at_note) + "'" : "") + ">" + esc(when(sw.created_at)) + "</span>" +
-    "<button class='btn btn-ghost btn-xs' data-act='sweep-summary'>Summary</button></div>" +
-    (open ? "<div class='rn-sw-sum' data-sum='" + esc(gk) + "'></div>" : "") + "</td></tr>";
+    if (c.id === "when") {
+      return "<td class='rn-c-when'><span class='rn-sw-when" + (sw.created_at_note ? " is-assumed" : "") + "'" +
+        (sw.created_at_note ? " title='" + esc(sw.created_at_note) + "'" : "") + ">" + esc(when(sw.created_at)) + "</span></td>";
+    }
+    if (c.id === "origin") return "<td class='rn-c-origin'>sweep</td>";
+    if (c.id === "design") return "<td class='rn-c-design'>" + esc(designLabel(rs[0] && rs[0]._design)) + "</td>";
+    if (c.id === "checks") {
+      if (failed.length) return "<td class='rn-c-checks is-num'><span class='rn-bad'>" + esc(reasons.length ? "failed: " + reasons.join(", ") : failed.length + " failed") + "</span></td>";
+      const ks = passed.map(checksOf).filter(Boolean);
+      return "<td class='rn-c-checks is-num'>" + (ks.length && ks.every((k) => !k.total) ? "<span class='rn-clean'>clean</span>" : "") + "</td>";
+    }
+    if (c.id === "runtime") {
+      const t = rs.map((r) => num(r.wall_time_s)).filter((v) => v != null);
+      return "<td class='rn-c-runtime is-num rn-best'" + (t.length ? " title='" + esc("All " + rs.length + " runs together") + "'" : "") + ">" + (t.length ? esc(fmtDur(t.reduce((a, b) => a + b, 0))) : "") + "</td>";
+    }
+    if (c.dir && c.get) {
+      let best = null;
+      for (const r of passed) { const v = c.get(r); if (v != null && (!best || (c.dir > 0 ? v > best.v : v < best.v))) best = { v, r }; }
+      if (!best) return "<td class='rn-c-" + c.id + " is-num'></td>";
+      return "<td class='rn-c-" + c.id + " is-num rn-best' title='" + esc("Best of this sweep's clean runs: " + best.r.tag) + "'>" + esc(c.f ? c.f(best.v) : best.v) + "</td>";
+    }
+    return "<td class='rn-c-" + c.id + (c.get ? " is-num" : "") + "'></td>";
+  };
+  const n = cols.length + 2;
+  return "<tr class='rn-sweep" + (open ? " is-open" : "") + "' data-group='" + esc(gk) + "'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" +
+    cols.map(cell).join("") + "</tr>" +
+    (open ? "<tr class='rn-sweep-sum'><td colspan='" + n + "'><div class='rn-sw-sum' data-sum='" + esc(gk) + "'></div></td></tr>" : "");
 }
 
 // "DPL-0036": the error code in the failed run's reason, else its stage.
@@ -862,10 +956,9 @@ function wireTable(table, runs) {
   }));
   table.onclick = (e) => {
     const t = e.target;
-    if (t.closest(".rn-card")) return;
+    if (t.closest("tr.rn-sweep-sum")) return;
     const grp = t.closest("tr.rn-sweep");
     if (grp) {
-      if (t.closest(".rn-sw-sum")) return;
       const gk = grp.dataset.group;
       if (_openSweeps.has(gk)) _openSweeps.delete(gk); else _openSweeps.add(gk);
       safeStorage.setJSON(OPEN_KEY, [..._openSweeps]);
@@ -898,16 +991,17 @@ function wireTable(table, runs) {
     // The DRC "report disagrees" flag: this run, in Verify's Design rules.
     if (act === "drc") { e.stopPropagation(); Promise.resolve(setRun(r.tag, r._design)).then(() => go("verify", { section: "vf-drc" })); return; }
     setRun(r.tag, r._design);
+    // The run panel follows the row you click while it is open.
+    if (_open && _open !== keyOf(r)) openSide(r);
   };
-  table.ondblclick = (e) => { const r = rowOf(e.target, runs); if (r && !e.target.closest(".rn-card, .rn-pick, [data-act]")) toggleOpen(r); };
-  // The open report card and the open sweeps' summaries: paintTable / afterInsert.
+  table.ondblclick = (e) => { const r = rowOf(e.target, runs); if (r && !e.target.closest(".rn-pick, [data-act]")) toggleOpen(r); };
+  // The open sweeps' summaries: paintTable / afterInsert.
 }
 
 function toggleOpen(r) {
-  const k = keyOf(r);
-  _open = _open === k ? null : k;
-  if (_open) setRun(r.tag, r._design);
-  renderRuns({ cached: true });
+  if (_open === keyOf(r)) { closeSide(); return; }
+  setRun(r.tag, r._design);
+  openSide(r);
 }
 
 let _viewingKey = "";
@@ -931,7 +1025,7 @@ function syncSelection() {
   const n = _picked.size;
   bar.hidden = n === 0;
   if (!n) return;
-  bar.innerHTML = "<b>" + n + " selected</b>" +
+  bar.innerHTML = "<b>" + n + " run" + (n === 1 ? "" : "s") + " selected</b>" +
     "<button class='btn btn-primary btn-sm' data-sel='compare'" + (n < 2 ? " disabled title='Pick at least two'" : "") + ">" + icon("diff", { size: 13 }) + " Compare</button>" +
     "<button class='btn btn-ghost btn-sm' data-sel='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
     "<button class='btn btn-ghost btn-sm' data-sel='clear'>Clear</button>" +
@@ -1021,7 +1115,7 @@ async function paintLive() {
   el.innerHTML = "<span class='rn-live-dot' aria-hidden='true'></span><b>Sweep running</b> · run " + Math.min(done + 1, st.total || done + 1) + " of " + (st.total || "?") +
     (st.running ? " · <code>" + esc(st.running) + "</code>" : "") +
     ((st.failed || []).length ? " · <span class='rn-bad'>" + st.failed.length + " failed</span>" : "") +
-    "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-go='pipeline'>Watch in Flow</button>" +
+    "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-go='pipeline'>" + icon("flow", { size: 13 }) + " Watch in Flow</button>" +
     "<button class='btn btn-ghost btn-sm' id='rn-sweep-stop'>" + icon("stop", { size: 13 }) + " Stop sweep</button>";
   el.querySelector("#rn-sweep-stop").onclick = async () => {
     if (!(await confirmDialog({ title: "Stop the sweep?", confirmText: "Stop sweep", danger: true,
@@ -1032,49 +1126,176 @@ async function paintLive() {
   if (!_poll) _poll = setInterval(() => { if (document.getElementById("sec-runs")?.classList.contains("section-active")) paintLive(); }, 4000);
 }
 
-// ------------------------------------------------------------------ report card
-async function paintCard(r) {
-  const host = document.getElementById("rn-card");
-  if (!host || !r) return;
+// ------------------------------------------------------------------ the run panel
+// One run, beside the table: how it ended, its numbers against the baseline,
+// where it came from, and everything you can do with it. On a narrow window
+// it sits over the table's right side (runs.css).
+const SIDE_NUMS = ["wns", "tns", "hold", "die", "cells", "util", "power", "runtime"];
+const sideEl = () => document.getElementById("rn-side");
+let _sideRow = null, _sideSeq = 0;
+
+function markOpen() {
+  document.querySelectorAll("#runs-table tr.rn-row").forEach((tr) => {
+    const on = tr.dataset.key === _open;
+    tr.classList.toggle("is-open", on);
+    tr.querySelector(".rn-exp")?.setAttribute("aria-expanded", on ? "true" : "false");
+  });
+}
+
+function openSide(r) {
+  const el = sideEl();
+  if (!el || !r) return;
+  const was = !!_open;
+  _open = keyOf(r);
+  _sideRow = r;
+  el.hidden = false;
+  document.getElementById("rn-split")?.classList.add("has-side");
+  // The table has less room now: its default columns follow.
+  if (!was) renderRuns({ cached: true }); else markOpen();
+  paintSide(r);
+}
+
+function closeSide() {
+  const el = sideEl();
+  if (!_open && (!el || el.hidden)) return;
+  _open = null; _sideRow = null; _sideSeq++;
+  if (el) { el.hidden = true; el.innerHTML = ""; }
+  document.getElementById("rn-split")?.classList.remove("has-side");
+  if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns({ cached: true }); else markOpen();
+}
+
+// After a render: the open run may be gone, or its row may be a fresh one
+// (pinned, renamed note); the baseline or the settings read may have changed.
+function syncSide() {
+  if (!_open) return;
+  const r = _shown.runs.find((x) => keyOf(x) === _open);
+  if (!r) { closeSide(); return; }
+  const host = sideEl();
+  if (r !== _sideRow && !(host && host.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA")) { paintSide(r); return; }
   const base = baselineRowFor(r);
-  const active = normDir(r._design) === normDir(state.designDir);
-  let rx = RX.get(keyOf(r));
-  // Verify's reading of the run, for the verdict words (the same as Flow and Verify).
-  const [rx2, vfr] = await Promise.all([
-    rx || !active ? Promise.resolve(rx || null) : api.runExplain(r.tag, base ? base.tag : undefined).catch(() => null),
-    active && (r.success || (r.verdict && r.verdict.state !== "running")) ? api.verify(r.tag).catch(() => null) : Promise.resolve(null),
-  ]);
-  rx = rx2;
-  const vf = vfr && (vfr.verdict ? vfr : vfr.data && vfr.data.verdict ? vfr.data : null);
-  if (document.getElementById("rn-card") !== host) return;
-  let card;
+  const nums = host && host.querySelector("#rn-side-nums");
+  if (nums) nums.innerHTML = sideNumsHtml(r, base);
+  const ch = host && host.querySelector("#rn-side-set");
+  if (ch) ch.innerHTML = sideSettingsHtml(r);
+}
+
+function deltaHtml(c, v, b, r) {
+  if (b == null || !/passed|warning/.test(verdictOf(r).state)) return "<span class='rn-d'></span>";
+  const d = v - b;
+  const same = Math.abs(d) <= Math.max(Math.abs(b) * 5e-4, c.id === "runtime" ? 1 : 0.005);
+  if (same) return "<span class='rn-d'>same</span>";
+  const sign = d > 0 ? "+" : "−";
+  const text = c.unit === "ns" ? sign + Math.abs(d).toFixed(2) + " ns"
+    : c.id === "runtime" ? sign + fmtDur(Math.abs(d))
+    : c.id === "util" ? sign + Math.abs(d).toFixed(1) + " pt"
+    : sign + Math.abs((d / (b || 1)) * 100).toFixed(1) + " %";
+  const cls = !c.dir ? "" : (d > 0) === (c.dir > 0) ? " is-better" : " is-worse";
+  return "<span class='rn-d" + cls + "' title='" + esc("Baseline: " + (c.f ? c.f(b) : b) + (c.unit ? " " + c.unit : "")) + "'>" + esc(text) + "</span>";
+}
+
+function sideNumsHtml(r, base) {
+  const rows = COLS.filter((c) => SIDE_NUMS.includes(c.id)).map((c) => {
+    const v = c.get(r);
+    if (v == null) return "";
+    const neg = c.unit === "ns" && v < 0 ? " class='is-neg'" : "";
+    const exact = c.id === "runtime" ? fmtDur(v) : String(Number(v.toPrecision(6))) + (c.unit ? " " + c.unit : "");
+    return "<div class='rn-num'><dt title='" + esc(c.tip || "") + "'>" + esc(c.label) + "</dt><dd" + neg + " title='" + esc(exact) + "'>" + esc(c.f ? c.f(v) : v) +
+      (c.unit ? "<small>" + esc(c.unit) + "</small>" : "") + "</dd>" + (base ? deltaHtml(c, v, c.get(base), r) : "<span class='rn-d'></span>") + "</div>";
+  }).join("");
+  const k = checksOf(r);
+  const checks = !k ? "" : "<div class='rn-num'><dt title='Design-rule errors (worst of Magic, KLayout and the router), LVS errors and antenna violations'>DRC · LVS · Antenna</dt><dd class='" +
+    (k.total ? "is-neg" : "") + "'>" + (k.total ? esc([k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean).join(" · ")) : "<span class='rn-clean'>clean</span>") + "</dd><span class='rn-d'></span></div>";
+  if (!rows && !checks) return "<p class='rn-side-line muted'>This run ended before it had numbers to show.</p>";
+  return "<h4 class='rn-side-h'>Numbers" + (base ? " <small>against the baseline <code>" + esc(base.tag) + "</code></small>" : "") + "</h4><dl class='rn-nums'>" + rows + checks + "</dl>";
+}
+
+// Where the run came from and which settings it changed.
+function sideSettingsHtml(r) {
+  const o = originOf(r), sw = sweepOf(r);
+  let from = "";
+  if (o.kind === "fix") {
+    const ch = (o.changes || []).map((c) => "<li>" + esc(c.var) + " <i>" + esc(c.from) + " →</i> " + esc(c.to) + "</li>").join("");
+    from = "<p class='rn-side-line'>A fix of <code>" + esc(o.parent) + "</code>" + (o.stage ? ", resumed at " + esc(FS.stageLabel(o.stage)) : "") + (ch ? " with:" : ".") + "</p>" +
+      (ch ? "<ul class='rn-changes'>" + ch + "</ul>" : "");
+  } else if (sw) {
+    const vals = pointValues(r, sw);
+    from = "<p class='rn-side-line'>A point of the sweep " + esc(sweepAxesText(sw)) + (vals ? ":" : ".") + "</p>" +
+      (vals ? "<ul class='rn-changes'>" + Object.entries(vals).map(([k, x]) => "<li>" + esc(k) + " <i>=</i> " + esc(x) + "</li>").join("") + "</ul>" : "");
+  } else if (r.imported) from = "<p class='rn-side-line'>Imported from elsewhere.</p>";
+  const bt = baselineTag(r._design);
+  let changed = "";
+  if (bt && bt !== r.tag) {
+    const ch = CHANGES.get(keyOf(r));
+    changed = "<h4 class='rn-side-h' style='margin-top:14px'>Changed <small>against the baseline</small></h4>" +
+      (!ch ? "<p class='rn-side-line muted'>Reading the settings…</p>"
+        : !ch.length ? "<p class='rn-side-line muted'>The same settings as the baseline.</p>"
+        : "<ul class='rn-changes'>" + ch.map((x) => "<li>" + esc(x.var) + " <i>" + esc(x.from) + " →</i> " + esc(x.to) + "</li>").join("") + "</ul>");
+  } else if (bt === r.tag) changed = "<p class='rn-side-line muted' style='margin-top:6px'>This run is the baseline.</p>";
+  if (!from && !changed) return "";
+  return (from ? "<h4 class='rn-side-h'>Where it came from</h4>" + from : "") + changed;
+}
+
+// How it ended, in the words Flow and Verify use for the same run.
+function sideTopHtml(r, rx, vf) {
+  const v = verdictOf(r);
+  const tone = VERDICT_TONE[v.state] || "warn";
+  let title = v.label || v.state, why = "", act = "", extra = "";
+  const flowBtn = (label) => "<button class='btn btn-primary btn-sm' data-ra='flow'>" + icon("flow", { size: 13 }) + " " + label + "</button>";
   if (rx && (rx.kind === "clean" || rx.kind === "checks-failed")) {
-    // Flow's report card, fed with this run's final metrics (and the baseline's).
-    card = reportCardHtml({ tag: r.tag, rx, vf, steps: [{ metrics: r.key_metrics || {}, secs: r.wall_time_s || 0 }],
-      stages: [], base: base ? base.tag : "", baseRs: base ? { steps: [{ changed: base.key_metrics || {}, runtime_s: base.wall_time_s || 0 }] } : null });
-  } else {
-    const v = verdictOf(r);
-    const c = (rx && rx.card) || {};
+    const cv = cardVerdict(vf, rx);
+    if (cv) { title = rx.kind === "checks-failed" ? "The layout is done, but " + (cv.short || "checks failed") : cv.title; why = cv.sub || ""; }
+    // Verify didn't answer (another design, or it failed): don't promise a reading.
+    if (!vf && /Reading the sign-off checks/.test(why)) why = "No step failed. Open Verify for the sign-off checks.";
+    if (rx.kind === "checks-failed") act = "<button class='btn btn-primary btn-sm' data-ra='verify'>" + icon("alert", { size: 13 }) + " Show the problems</button>";
+    if (rx.warnings && rx.warnings.total) extra = warningsHtml(rx.warnings);
+  } else if (rx) {
+    const c = rx.card || {};
     // Flow's wording: "You stopped this run" only when it was cancelled; a run
     // that just ended early (no error, no Stop) may have lost LanEx mid-run.
-    const cancelled = !!rx && rx.kind === "stopped";
+    const cancelled = rx.kind === "stopped";
     const early = !cancelled && (v.state === "stopped" || v.state === "incomplete");
-    const at = rx && rx.step ? (rx.step.id || rx.step.dir) + (rx.step.n ? " (step " + rx.step.n + ")" : "") : "";
-    const title = cancelled ? "You stopped this run" : early ? "This run ended before the last step"
-      : c.title ? c.title : v.label;
-    const lede = c.plain ? c.plain
+    const at = rx.step ? (rx.step.id || rx.step.dir) + (rx.step.n ? " (step " + rx.step.n + ")" : "") : "";
+    title = cancelled ? "You stopped this run" : early ? "This run ended before the last step" : c.title ? c.title : title;
+    why = c.plain ? c.plain
       : cancelled ? (at ? "It stopped at " + at + ". " : "") + "Everything before it is kept; run again whenever you're ready."
       : early ? (at ? "Its folder ends at " + at + " with no error" : "It has no error") + ": LanEx may have been closed while it ran. Run it again to finish."
       : at ? "It stopped at " + at + "." : "";
-    card = "<div class='an-verdict fl-hero is-" + (VERDICT_TONE[v.state] === "pass" ? "pass" : v.state === "failed" ? "fail" : "warn") + "'><div class='an-verdict-main'>" +
-      "<div class='an-eyebrow'>Run " + esc(r.tag) + "</div><h2 class='an-title'>" + esc(title) + "</h2>" +
-      (lede ? "<p class='an-lede'>" + esc(lede) + "</p>" : "") +
-      "</div><div class='an-verdict-act'>" + (v.state === "failed" ? "<button class='btn btn-primary btn-sm' data-go='pipeline'>" + icon("flow", { size: 13 }) + " Why, and how to fix it</button>" : "") + "</div></div>";
-  }
-  host.innerHTML = lineageHtml(r) + card + actionsHtml(r) + "<div class='rn-note-row'><label class='muted' for='rn-note-ta'>Note</label>" +
-    "<textarea id='rn-note-ta' class='rn-note-ta' rows='2' placeholder='What you tried, what you saw…'></textarea></div>";
-  // Verify didn't answer (another design, or it failed): don't promise a reading.
-  if (!vf) host.querySelectorAll(".an-lede").forEach((p) => { if (/Reading the sign-off checks/.test(p.textContent)) p.textContent = "No step failed. Open Verify for the sign-off checks."; });
+    if (v.state === "failed") act = flowBtn("Why, and how to fix it");
+  } else if (v.state === "failed") act = flowBtn("Why, and how to fix it");
+  return "<div class='rn-side-verdict is-" + tone + "'><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(title) + "</span>" +
+    (why ? "<p>" + esc(why) + "</p>" : "") + act + extra + "</div>";
+}
+
+function sideHtml(r, base) {
+  const b = (id, label, ic, cls = "btn-ghost") => "<button class='btn " + cls + " btn-sm' data-ra='" + id + "'>" + (ic ? icon(ic, { size: 13 }) + " " : "") + esc(label) + "</button>";
+  const d = r.started_at ? new Date(r.started_at) : null;
+  const meta = [d && !isNaN(d) ? localeDate(d, [], { day: "numeric", month: "short", year: "numeric" }) + ", " + localeTime(d, [], { hour: "2-digit", minute: "2-digit" }) : "",
+    [r.pdk, r.scl].filter(Boolean).join(" / "), getRunScope() === "all" ? designLabel(r._design) : ""].filter(Boolean).join(" · ");
+  return "<div class='rn-side-head'><div><div class='an-eyebrow'>Run</div><h3 class='rn-side-tag'>" + esc(r.tag) + "</h3>" +
+    (meta ? "<div class='rn-side-meta'>" + esc(meta) + "</div>" : "") + "</div>" +
+    "<button class='iconbtn' data-side='close' aria-label='Close the run details (Esc)' title='Close (Esc)'>" + icon("x", { size: 16 }) + "</button></div>" +
+    "<div class='rn-side-body'>" +
+    "<div id='rn-side-top'>" + sideTopHtml(r, RX.get(keyOf(r)) || null, null) + "</div>" +
+    "<section id='rn-side-nums'>" + sideNumsHtml(r, base) + "</section>" +
+    "<section id='rn-side-set'>" + sideSettingsHtml(r) + "</section>" +
+    "<section><h4 class='rn-side-h'>Open this run in</h4><div class='rn-open-in'>" +
+      b("flow", "Flow", "flow", "") + b("layout", "Layout", "grid", "") + b("analytics", "Analytics", "chart", "") + b("verify", "Verify", "check", "") + "</div></section>" +
+    "<section><h4 class='rn-side-h'>Actions</h4><div class='rn-actions'>" +
+      b("again", "Run again with changes", "play") + b("cmd", "Copy command", "command") + b("pin", r.pinned ? "Unpin" : "Pin", "star") +
+      b("bundle", "Bundle…", "download") + b("export", "Report…", "file") + b("files", "Files", "folder") + b("delete", "Delete…", "trash", "btn-ghost rn-del") + "</div></section>" +
+    "<section><h4 class='rn-side-h'><label for='rn-note-ta'>Note</label></h4>" +
+    "<textarea id='rn-note-ta' class='rn-note-ta' rows='2' placeholder='What you tried, what you saw…'></textarea></section>" +
+    "</div>";
+}
+
+async function paintSide(r) {
+  const host = sideEl();
+  if (!host || !r) return;
+  const my = ++_sideSeq;
+  _sideRow = r;
+  const base = baselineRowFor(r);
+  const active = normDir(r._design) === normDir(state.designDir);
+  host.innerHTML = sideHtml(r, base);
   const ta = host.querySelector("#rn-note-ta");
   ta.value = r.note || "";
   ta.addEventListener("blur", async () => {
@@ -1082,16 +1303,22 @@ async function paintCard(r) {
     try { await focusDesign(r._design); await api.setRunNote(r.tag, ta.value); r.note = ta.value; toast.show("Note saved.", "success", 2500); }
     catch (ex) { toast.show("Couldn't save the note: " + (ex.message || ex), "error"); }
   });
-  host.querySelectorAll("[data-ra]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); runAction(b.dataset.ra, r); }));
-}
-
-function actionsHtml(r) {
-  const b = (id, label, ic, cls = "btn-ghost") => "<button class='btn " + cls + " btn-sm' data-ra='" + id + "'>" + (ic ? icon(ic, { size: 13 }) + " " : "") + esc(label) + "</button>";
-  return "<div class='rn-actions'>" +
-    "<span class='rn-act-g'>" + b("flow", "Flow", "flow") + b("layout", "Layout", "grid") + b("analytics", "Analytics", "chart") + b("verify", "Verify", "check") + "</span>" +
-    "<span class='rn-act-g'>" + b("again", "Run again with changes", "play") + b("cmd", "Copy command", "command") + "</span>" +
-    "<span class='rn-act-g'>" + b("pin", r.pinned ? "Unpin" : "Pin", "star") + b("bundle", "Bundle", "download") + b("export", "Report", "file") + b("files", "Files", "folder") + "</span>" +
-    "<span class='rn-act-g'>" + b("delete", "Delete", "trash", "btn-ghost rn-del") + "</span></div>";
+  host.querySelector("[data-side='close']").addEventListener("click", () => closeSide());
+  host.onclick = (e) => {
+    const b = e.target.closest("[data-ra]");
+    if (b) { e.stopPropagation(); runAction(b.dataset.ra, r); }
+  };
+  // How it ended, in Flow's and Verify's words (the same reading both use).
+  let rx = RX.get(keyOf(r));
+  const [rx2, vfr] = await Promise.all([
+    rx || !active ? Promise.resolve(rx || null) : api.runExplain(r.tag, base ? base.tag : undefined).catch(() => null),
+    active && (r.success || (r.verdict && r.verdict.state !== "running")) ? api.verify(r.tag).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (my !== _sideSeq || _open !== keyOf(r)) return;
+  rx = rx2;
+  const vf = vfr && (vfr.verdict ? vfr : vfr.data && vfr.data.verdict ? vfr.data : null);
+  const top = host.querySelector("#rn-side-top");
+  if (top) top.innerHTML = sideTopHtml(r, rx, vf);
 }
 
 async function runAction(id, r) {
@@ -1408,15 +1635,14 @@ function filesOverlay() {
   ov.innerHTML =
     "<div class='smodal' role='dialog' aria-modal='true' aria-labelledby='files-title'>" +
     "  <div class='smodal-head'><span class='smodal-title' id='files-title'>Files</span>" +
-    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='files-close' aria-label='Close the file list'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
+    "  <span class='smodal-spacer'></span><button class='iconbtn' id='files-close' aria-label='Close the file list'><svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "  <div class='smodal-log' id='files-body' style='white-space:normal'></div>" +
     "</div>";
   document.body.appendChild(ov);
-  // Closing puts focus back where it was (holdFocus also keeps Tab inside).
-  const hide = () => { ov.hidden = true; if (ov._release) { const r = ov._release; ov._release = null; r(); } };
+  // A dialog on the overlay stack: Esc closes it, Tab stays inside, focus returns.
+  const hide = () => { closeLayer(ov); ov.hidden = true; };
   ov.addEventListener("click", (e) => { if (e.target === ov) hide(); });
   ov.querySelector("#files-close").addEventListener("click", hide);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ov.hidden) hide(); });
   _filesOverlay = ov;
   return ov;
 }
@@ -1431,8 +1657,7 @@ function fmtBytes(n) {
 async function showFilesModal(tag) {
   const ov = filesOverlay();
   ov.hidden = false;
-  if (!ov._release) ov._release = holdFocus(ov.querySelector(".smodal"));
-  ov.querySelector("#files-close").focus({ preventScroll: true });
+  openLayer(ov, { kind: "dialog", labelledBy: "files-title", onClose: () => { ov.hidden = true; }, focus: () => ov.querySelector("#files-close") });
   ov.querySelector("#files-title").textContent = "Files: " + tag;
   const body = ov.querySelector("#files-body");
   body.textContent = "loading…";

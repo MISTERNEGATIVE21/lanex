@@ -541,30 +541,38 @@
     <section class="section rn" id="sec-runs">
       <header class="an-head rn-head"><div><div class="an-eyebrow">Runs</div>
         <h2 class="an-title" id="rn-title">Every run, side by side</h2>
-        <p class="an-lede">One row per run. Click a row to show it on Flow, Layout, Analytics and Verify; open it for its report and actions. Star one as the baseline and every number is coloured better or worse than it. Tick two to six to compare them.</p></div>
+        <p class="an-lede">Click a run to show it on every page. Open it for its numbers and actions. Tick two to six to compare them.</p></div>
         <div class="an-head-act rn-head-act">
           <button class="btn btn-ghost" id="runs-import" title="Adopt a run folder or a LanEx bundle (.zip) from elsewhere">Import…</button>
-          <button class="btn btn-primary" id="runs-new-sweep" title="Run the same design with a setting at several values">New sweep</button>
+          <button class="btn btn-primary" id="runs-new-sweep" title="Run the same design with a setting at several values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New sweep</button>
         </div>
       </header>
-      <div class="rn-tools" role="toolbar" aria-label="Filter runs">
-        <div class="rn-seg" role="group" aria-label="Show runs from">
-          <button class="rn-segb runs-scope" data-scope="design">This design</button>
-          <button class="rn-segb runs-scope" data-scope="all" title="Runs of every design you've opened recently">All designs</button>
-        </div>
-        <input type="search" id="runs-filter" class="rn-q" placeholder="Search name, PDK, note, setting…" aria-label="Search runs"/>
-        <div class="rn-seg" role="group" aria-label="Status" id="rn-status"></div>
-        <div class="rn-seg" role="group" aria-label="Origin" id="rn-origin"></div>
-        <div class="rn-seg" role="group" aria-label="PDK" id="rn-pdk"></div>
-        <span class="rn-spacer"></span>
-        <div class="rn-cols-wrap"><button class="btn btn-ghost btn-sm" id="rn-cols-btn" aria-expanded="false">Columns</button>
-          <div class="rn-cols" id="rn-cols" hidden></div></div>
-      </div>
       <div class="rn-live" id="rn-live" hidden></div>
-      <div class="rn-selbar" id="rn-selbar" hidden></div>
-      <p class="muted rn-note" id="runs-note" role="status" hidden></p>
-      <div class="rn-wrap" id="rn-wrap"><table class="rn-table" id="runs-table"></table></div>
-      <div class="an-empty empty" id="rn-empty" hidden></div>
+      <div class="rn-split" id="rn-split">
+        <div class="rn-main">
+          <div class="rn-panel">
+            <div class="rn-tools" role="toolbar" aria-label="Filter runs">
+              <div class="rn-seg" role="group" aria-label="Show runs from">
+                <button class="rn-segb runs-scope" data-scope="design">This design</button>
+                <button class="rn-segb runs-scope" data-scope="all" title="Runs of every design you've opened recently">All designs</button>
+              </div>
+              <input type="search" id="runs-filter" class="rn-q" placeholder="Search name, setting, note…" aria-label="Search runs"/>
+              <div class="rn-seg" role="group" aria-label="Result" id="rn-status"></div>
+              <div class="rn-seg" role="group" aria-label="Origin" id="rn-origin"></div>
+              <div class="rn-seg" role="group" aria-label="PDK" id="rn-pdk"></div>
+              <span class="rn-spacer"></span>
+              <div class="rn-cols-wrap"><button class="btn btn-ghost" id="rn-cols-btn" aria-haspopup="true" aria-expanded="false">Columns</button>
+                <div class="rn-cols" id="rn-cols" hidden></div></div>
+            </div>
+            <div class="rn-selbar" id="rn-selbar" hidden></div>
+            <p class="muted rn-note" id="runs-note" role="status" hidden></p>
+            <div class="rn-wrap" id="rn-wrap"><table class="rn-table" id="runs-table"></table></div>
+            <div class="an-empty empty" id="rn-empty" hidden></div>
+            <div class="rn-foot" id="rn-foot" hidden></div>
+          </div>
+        </div>
+        <aside class="rn-side" id="rn-side" aria-label="Run details" hidden></aside>
+      </div>
     </section>
 
     <!-- Settings: every preference in one place (modules/settings.js) -->
@@ -797,7 +805,7 @@
         </div>
         <div class="an-sec" id="analytics-compare">
           <header class="an-head"><div><div class="an-eyebrow">Compare</div><h2 class="an-title">Put several runs side by side</h2>
-            <p class="an-lede">Pick two or more runs, from any design you have opened, to see which settings differ and how every metric moved.</p></div></header>
+            <p class="an-lede">Up to six runs, from any design you have opened. The first is the reference: every other number shows how far it moved.</p></div></header>
           <div class="an-card an-card-wide" id="compare-body"><p class="muted">Loading runs from every design you have opened…</p></div>
         </div>
         <div class="an-sec" id="an-all">

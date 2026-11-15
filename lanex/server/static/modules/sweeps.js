@@ -11,7 +11,8 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
-import { confirmDialog, holdFocus } from "./dialog.js";
+import { confirmDialog } from "./dialog.js";
+import { openLayer, closeLayer } from "./overlay.js";
 import { fmtDur } from "./reportcard.js";
 import * as FS from "./flowstages.js";
 import { localeNum } from "./intlcache.js";
@@ -73,8 +74,9 @@ export async function openSweepSheet(goal, { values } = {}) {
   pickGoal(GOALS.some((g) => g.id === goal) ? goal : S.goal);
   if (values && S.axes[0]) { S.axes[0].values = values; paintAxes(); }
   S.el.hidden = false;
-  // Tab stays in the sheet (it is aria-modal); closing puts focus back.
-  if (!S.release) S.release = holdFocus(S.el.querySelector(".sw-sheet"));
+  // A dialog on the overlay stack: Tab stays in the sheet, Esc closes it (and
+  // only it), closing puts focus back.
+  openLayer(S.el, { kind: "dialog", labelledBy: "sw-title", onClose: hideSheet, focus: () => S.el.querySelector(".sw-goal.is-on") });
   requestAnimationFrame(() => S.el.classList.add("is-open"));
   if (!S.vars) {
     try { const v = await api.variables(); S.vars = (v && (v.data || v)) || []; } catch (_e) { S.vars = state.variables || []; }
@@ -86,7 +88,12 @@ export async function openSweepSheet(goal, { values } = {}) {
 
 export function closeSweepSheet() {
   if (!S.el) return;
-  if (S.release) { const r = S.release; S.release = null; r(); }
+  closeLayer(S.el);
+  hideSheet();
+}
+
+function hideSheet() {
+  if (!S.el) return;
   S.el.classList.remove("is-open");
   setTimeout(() => { if (S.el && !S.el.classList.contains("is-open")) S.el.hidden = true; }, 180);
 }
@@ -99,13 +106,13 @@ function build() {
     "<aside class='sw-sheet' role='dialog' aria-modal='true' aria-labelledby='sw-title'>" +
     "<header class='sw-head'><div><div class='an-eyebrow'>New sweep</div><h2 class='an-title' id='sw-title'>Run this design at several settings</h2>" +
     "<p class='an-lede'>One full run per point, one after another. Fix the RTL and the constraints first: a sweep finds a better setting, it doesn't fix a design. Keep it small.</p></div>" +
-    "<button class='btn btn-ghost btn-sm sw-x' data-sw='close' aria-label='Close'>" + icon("x", { size: 14 }) + "</button></header>" +
+    "<button class='iconbtn sw-x' data-sw='close' aria-label='Close'>" + icon("x", { size: 16 }) + "</button></header>" +
     "<div class='sw-body'>" +
     "<div class='sw-lbl'>What are you after?</div><div class='sw-goals' role='radiogroup'>" +
     GOALS.map((g) => "<button class='sw-goal' role='radio' data-goal='" + g.id + "'><b>" + esc(g.title) + "</b><span>" + esc(g.sub) + "</span></button>").join("") + "</div>" +
-    "<div class='sw-lbl'>Settings and values <span class='muted'>(a list like 35, 50, 65, or start:stop:step like 35:65:15)</span></div>" +
+    "<div class='sw-lbl'>Settings and values <span class='muted'>A list like 35, 50, 65, or start:stop:step like 35:65:15.</span></div>" +
     "<div id='sw-axes'></div><datalist id='sw-vars'></datalist>" +
-    "<button class='btn btn-ghost btn-xs' data-sw='add'>" + icon("plus", { size: 12 }) + " Another setting</button>" +
+    "<button class='btn btn-ghost btn-sm' data-sw='add'>" + icon("plus", { size: 12 }) + " Another setting</button>" +
     "<div class='sw-mode' id='sw-mode' hidden><span class='sw-lbl'>Combine</span>" +
     "<label><input type='radio' name='sw-mode' value='grid' checked/> Every combination</label>" +
     "<label><input type='radio' name='sw-mode' value='list'/> Paired, value by value</label></div>" +
@@ -125,7 +132,6 @@ function build() {
     else if (b.dataset.goal) pickGoal(b.dataset.goal);
     else if (b.dataset.rm != null) { S.axes.splice(+b.dataset.rm, 1); if (!S.axes.length) S.axes.push({ var: "", values: "" }); paintAxes(); }
   });
-  el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeSweepSheet(); } });
   el.querySelectorAll("input[name='sw-mode']").forEach((r) => r.addEventListener("change", () => { S.mode = r.value; paintEst(); }));
   el.querySelector("#sw-stop").addEventListener("change", (e) => { S.stop = e.target.checked; });
   el.querySelector("#sw-start").addEventListener("click", start);
@@ -155,7 +161,7 @@ function paintAxes() {
     "<div class='sw-axis'><input class='sw-var' list='sw-vars' data-i='" + i + "' placeholder='Setting, e.g. FP_CORE_UTIL' value='" + esc(a.var) + "' aria-label='Setting " + (i + 1) + "' spellcheck='false'/>" +
     "<input class='sw-vals' data-i='" + i + "' placeholder='" + (a.var === "CLOCK_PERIOD" ? "e.g. 10, 9, 8" : "e.g. 35, 50, 65") + "' value='" + esc(a.values) + "' aria-label='Values for setting " + (i + 1) + "' spellcheck='false'/>" +
     "<span class='sw-n' data-n='" + i + "'></span>" +
-    (S.axes.length > 1 ? "<button class='btn btn-ghost btn-xs' data-rm='" + i + "' aria-label='Remove'>" + icon("x", { size: 12 }) + "</button>" : "") + "</div>").join("");
+    (S.axes.length > 1 ? "<button class='iconbtn iconbtn-sm' data-rm='" + i + "' aria-label='Remove this setting'>" + icon("x", { size: 13 }) + "</button>" : "") + "</div>").join("");
   host.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", () => {
     const a = S.axes[+inp.dataset.i];
     if (inp.classList.contains("sw-var")) a.var = inp.value.trim().toUpperCase(); else a.values = inp.value;
@@ -236,30 +242,34 @@ async function start() {
 }
 
 // ------------------------------------------------------------------ summary
-// A sweep's summary: best for timing, best for area, what failed and where,
-// a small trade-off plot, and "Use this configuration".
+// A sweep's summary, under its row: the best point for timing and for area
+// (each with "Use this configuration"), what failed and why, and a picture of
+// the trend: slack and area against the swept value when one number was
+// swept, else area against slack for every point.
 export function paintSweepSummary(el, sw, runs, { verdictOf, failCode }) {
-  const pts = runs.map((r) => ({ r, v: valuesOf(r, sw), ok: verdictOf(r).state === "passed",
+  const pts = runs.map((r) => ({ r, v: valuesOf(r, sw), ok: verdictOf(r).state === "passed", failed: verdictOf(r).state === "failed",
     wns: num(r, "timing__setup__ws"), area: num(r, "design__instance__area__stdcell") }));
   const passed = pts.filter((p) => p.ok);
-  const failed = pts.filter((p) => verdictOf(p.r).state === "failed");
+  const failed = pts.filter((p) => p.failed);
   const bestT = passed.filter((p) => p.wns != null).sort((a, b) => b.wns - a.wns)[0];
   const bestA = passed.filter((p) => p.area != null).sort((a, b) => a.area - b.area)[0];
   const tile = (label, p, val) => !p ? "" :
     "<div class='sw-best'><div class='sw-best-k'>" + esc(label) + "</div><div class='sw-best-v'><code>" + esc(p.r.tag) + "</code></div>" +
     "<div class='sw-best-m'" + fmt.titleAttr(val.raw) + ">" + esc(val.text) + "</div>" +
-    (p.v ? "<button class='btn btn-ghost btn-xs' data-use='" + esc(p.r.tag) + "'>Use this configuration</button>" : "") + "</div>";
-  const failTxt = failed.length
-    ? failed.length + " failed: " + failed.map((p) => esc(p.r.tag) + (failCode(p.r) ? " (" + esc(failCode(p.r)) + ")" : "")).join(", ")
-    : "None failed.";
-  el.innerHTML = "<div class='sw-sum'>" +
+    (p.v ? "<button class='btn btn-sm' data-use='" + esc(p.r.tag) + "' title='" + esc("Write " + Object.entries(p.v).map(([k, x]) => k + " = " + x).join(", ") + " into the design's config") + "'>Use this configuration</button>" : "") + "</div>";
+  const failTile = failed.length
+    ? "<div class='sw-best is-fail'><div class='sw-best-k'>" + failed.length + " failed</div><div class='sw-best-m'>" +
+      failed.map((p) => "<code>" + esc(p.r.tag) + "</code>" + (failCode(p.r) ? " at " + esc(failCode(p.r)) : "")).join("<br>") + "</div></div>"
+    : "";
+  const plots = plotsHtml(pts, sw);
+  el.innerHTML = "<div class='sw-sum" + (plots ? "" : " no-plot") + "'><div>" +
     "<div class='sw-bests'>" +
     tile("Best for timing", bestT, bestT ? { raw: bestT.wns, text: "setup WNS " + (bestT.wns >= 0 ? "+" : "") + fmt.metric(bestT.wns) + " ns" } : null) +
     tile("Best for area", bestA, bestA ? { raw: bestA.area, text: "std-cell area " + fmt.metric(bestA.area) + " µm²" } : null) +
-    "<div class='sw-best is-fail'><div class='sw-best-k'>Failed</div><div class='sw-best-m'>" + failTxt + "</div></div>" +
-    "</div>" + plotSvg(pts) +
-    "<div class='sw-sum-act'><button class='btn btn-ghost btn-sm' data-cmp>" + icon("diff", { size: 13 }) + " Compare these runs</button>" +
-    (passed.length ? "" : "<span class='muted'>No point finished clean. Open a failed one for why, or fix the design before sweeping again.</span>") + "</div></div>";
+    failTile + "</div>" +
+    "<div class='sw-sum-act'><button class='btn btn-ghost btn-sm' data-cmp" + (runs.length < 2 ? " disabled title='A sweep with one run has nothing to compare'" : "") + ">" + icon("diff", { size: 13 }) + " Compare these runs</button>" +
+    (passed.length ? "" : "<span class='muted'>No point finished clean. Open a failed one for why, or fix the design before sweeping again.</span>") + "</div></div>" +
+    plots + "</div>";
   el.querySelectorAll("[data-use]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); useConfig(pts.find((p) => p.r.tag === b.dataset.use)); }));
   el.querySelector("[data-cmp]").addEventListener("click", async (e) => {
     e.stopPropagation();
@@ -278,14 +288,65 @@ function valuesOf(r, sw) {
   return null;
 }
 
+const tick = (v) => (Math.abs(v) >= 100 ? localeNum(Math.round(v)) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
+const pad = (lo, hi) => { const d = (hi - lo) || Math.abs(hi) * 0.1 || 1; return [lo - d * 0.14, hi + d * 0.14]; };
+
+// The pictures of a sweep. One number swept: two small charts, slack and area
+// against it (a failed point is a cross on the axis). Otherwise the trade-off:
+// area against slack for every point.
+function plotsHtml(pts, sw) {
+  const axes = sw.axes || [];
+  const one = axes.length === 1 ? axes[0].var : "";
+  const xs = one ? pts.map((p) => (p.v ? Number(p.v[one]) : NaN)) : [];
+  if (one && xs.every(Number.isFinite) && new Set(xs).size > 1) {
+    const P = pts.map((p, i) => ({ ...p, x: xs[i] })).sort((a, b) => a.x - b.x);
+    const a = trendSvg(P, one, "wns", "Setup WNS", "ns", 1);
+    const b = trendSvg(P, one, "area", "Std-cell area", "µm²", -1);
+    return a || b ? "<div class='sw-plots'>" + a + b + "</div>" : "";
+  }
+  const t = tradeSvg(pts);
+  return t ? "<div class='sw-plots'>" + t + "</div>" : "";
+}
+
+// One metric against the swept value: a line through the finished points, the
+// best one green, failed ones a red cross on the x axis.
+function trendSvg(P, xvar, key, label, unit, dir) {
+  const D = P.filter((p) => p[key] != null);
+  if (D.length < 2) return "";
+  const W = 320, H = 180, L = 52, R = 14, T = 12, B = 34;
+  const [x0, x1] = pad(Math.min(...P.map((p) => p.x)), Math.max(...P.map((p) => p.x)));
+  const [y0, y1] = pad(Math.min(...D.map((p) => p[key])), Math.max(...D.map((p) => p[key])));
+  const X = (v) => L + (v - x0) / (x1 - x0) * (W - L - R), Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  const best = D.filter((p) => p.ok).sort((a, b) => (dir > 0 ? b[key] - a[key] : a[key] - b[key]))[0];
+  const line = "<polyline class='sw-line' points='" + D.map((p) => X(p.x).toFixed(1) + "," + Y(p[key]).toFixed(1)).join(" ") + "'/>";
+  const dots = P.map((p) => {
+    const cx = X(p.x).toFixed(1);
+    if (p[key] == null) {
+      const cy = H - B;
+      return "<g class='sw-pt is-fail'><title>" + esc(p.r.tag + ": " + xvar + " " + p.x + (p.failed ? ", failed" : ", no result")) + "</title>" +
+        "<path d='M" + (cx - 4) + " " + (cy - 4) + "l8 8M" + (+cx + 4) + " " + (cy - 4) + "l-8 8'/></g>";
+    }
+    const cy = Y(p[key]).toFixed(1);
+    return "<g class='sw-pt" + (p === best ? " is-best" : "") + (p.ok ? "" : " is-fail") + "'><title>" + esc(p.r.tag + ": " + xvar + " " + p.x + ", " + label.toLowerCase() + " " + p[key] + " " + unit) + "</title>" +
+      "<circle cx='" + cx + "' cy='" + cy + "' r='4.5'/></g>";
+  }).join("");
+  const xt = P.map((p) => "<text class='sw-tk' x='" + X(p.x).toFixed(1) + "' y='" + (H - B + 14) + "' text-anchor='middle'>" + esc(String(p.x)) + "</text>").join("");
+  const zero = key === "wns" && y0 < 0 && y1 > 0 ? "<line class='sw-zero' x1='" + L + "' x2='" + (W - R) + "' y1='" + Y(0).toFixed(1) + "' y2='" + Y(0).toFixed(1) + "'/>" : "";
+  return "<figure class='sw-plot'><figcaption><b>" + esc(label) + "</b> (" + esc(unit) + ") by " + esc(xvar) + "</figcaption>" +
+    "<svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='" + esc(label + " for each value of " + xvar) + "'>" +
+    "<line class='sw-gridl' x1='" + L + "' x2='" + (W - R) + "' y1='" + T + "' y2='" + T + "'/>" +
+    "<line class='sw-ax' x1='" + L + "' x2='" + L + "' y1='" + T + "' y2='" + (H - B) + "'/><line class='sw-ax' x1='" + L + "' x2='" + (W - R) + "' y1='" + (H - B) + "' y2='" + (H - B) + "'/>" + zero +
+    "<text class='sw-tk' x='" + (L - 6) + "' y='" + (T + 4) + "' text-anchor='end'>" + tick(y1) + "</text><text class='sw-tk' x='" + (L - 6) + "' y='" + (H - B) + "' text-anchor='end'>" + tick(y0) + "</text>" +
+    xt + "<text class='sw-axl' x='" + ((L + W - R) / 2) + "' y='" + (H - 4) + "' text-anchor='middle'>" + esc(xvar) + "</text>" + line + dots + "</svg></figure>";
+}
+
 // Std-cell area (x) against setup WNS (y). Axes span the data (not from 0),
 // points labelled by their value, a label dropped when it would overlap.
-function plotSvg(pts) {
+function tradeSvg(pts) {
   const P = pts.filter((p) => p.wns != null && p.area != null);
   if (P.length < 2) return "";
   const W = 460, H = 200, L = 64, R = 16, T = 14, B = 38;
   const xs = P.map((p) => p.area), ys = P.map((p) => p.wns);
-  const pad = (lo, hi) => { const d = (hi - lo) || Math.abs(hi) * 0.1 || 1; return [lo - d * 0.12, hi + d * 0.12]; };
   const [x0, x1] = pad(Math.min(...xs), Math.max(...xs)), [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
   const X = (v) => L + (v - x0) / (x1 - x0) * (W - L - R), Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
   const placed = [];
@@ -300,8 +361,7 @@ function plotSvg(pts) {
       (hit ? "" : "<text x='" + cx.toFixed(1) + "' y='" + (cy - 10).toFixed(1) + "' text-anchor='middle'>" + esc(lab) + "</text>") + "</g>";
   }).join("");
   const zero = y0 < 0 && y1 > 0 ? "<line class='sw-zero' x1='" + L + "' x2='" + (W - R) + "' y1='" + Y(0).toFixed(1) + "' y2='" + Y(0).toFixed(1) + "'/>" : "";
-  const tick = (v) => (Math.abs(v) >= 100 ? localeNum(Math.round(v)) : v.toFixed(2));
-  return "<figure class='sw-plot'><svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Std-cell area against setup slack for each point'>" +
+  return "<figure class='sw-plot'><figcaption><b>Area against slack</b>, one dot per run</figcaption><svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Std-cell area against setup slack for each point'>" +
     "<line class='sw-ax' x1='" + L + "' x2='" + L + "' y1='" + T + "' y2='" + (H - B) + "'/><line class='sw-ax' x1='" + L + "' x2='" + (W - R) + "' y1='" + (H - B) + "' y2='" + (H - B) + "'/>" + zero +
     "<text class='sw-tk' x='" + (L - 6) + "' y='" + (T + 4) + "' text-anchor='end'>" + tick(y1) + "</text><text class='sw-tk' x='" + (L - 6) + "' y='" + (H - B) + "' text-anchor='end'>" + tick(y0) + "</text>" +
     "<text class='sw-tk' x='" + L + "' y='" + (H - B + 14) + "'>" + tick(x0) + "</text><text class='sw-tk' x='" + (W - R) + "' y='" + (H - B + 14) + "' text-anchor='end'>" + tick(x1) + "</text>" +
