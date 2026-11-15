@@ -52,11 +52,11 @@ const CATALOG = {
     title: "Runs",
     goal: "Every run of the design in one table: find, compare and sweep runs, and pick the one the results pages show.",
     how: [
-      "One row per run: result, origin (manual, sweep, fix of another run), setup and hold slack, die and std-cell area, utilisation, power in mW, DRC, LVS and antenna, and runtime. Click a heading to sort; Columns picks what shows.",
-      "Click a row to show that run on Flow, Layout, Analytics and Verify. The chevron opens its report card and actions: open it on a page, run again with changes, copy its command, pin, bundle, files, delete.",
-      "Star a run as the baseline: every number turns green or red against it, and Changed vs baseline lists the settings that differ.",
+      "One row per run: result, setup and hold slack, die and std-cell area, utilisation, power in mW, checks (DRC, LVS and antenna) and runtime. Click a heading to sort. Columns that do not fit the window step aside; Columns brings any of them back.",
+      "Click a row to show that run on Flow, Layout, Analytics and Verify. The chevron (or a double-click) opens its details beside the table: how it ended, its numbers against the baseline, where it came from, the settings it changed, and its actions (open it on a page, run again with changes, copy its command, pin, bundle, report, files, delete). Esc closes the panel.",
+      "Star a run as the baseline: every number turns green or red against it, and the panel lists the settings that differ.",
       "Tick two to six runs, then Compare: Analytics opens its Compare section with them picked.",
-      "New sweep runs the design at several values of one to three settings, one run per point. A sweep folds into one row; Summary shows the best for timing and for area, what failed and where, and Use this configuration.",
+      "New sweep runs the design at several values of one to three settings, one run per point. A sweep is one row: how many runs and how they went, and under each number the best of its clean runs. Open it for its points (each shows the value it tried), the best for timing and for area with Use this configuration, what failed and where, and a chart of the trend.",
     ],
     samples: [
       { key: "Sweep values", sample: "35, 50, 65  or  35:65:15" },
@@ -65,7 +65,7 @@ const CATALOG = {
     pitfalls: [
       "Sweep after the RTL and constraints are right. A sweep finds a better setting; it does not fix a design, and two or three values usually show the trend.",
       "Each sweep point is a full RTL-to-GDS run. A 3 x 3 grid is nine runs.",
-      "Passed means LibreLane finished with every check clean. LanEx is not a sign-off tool.",
+      "Clean means LibreLane finished with every check passing. LanEx is not a sign-off tool.",
     ],
   },
   layout: {
@@ -112,6 +112,7 @@ const CATALOG = {
       "Timing shows setup and hold side by side, slack in every PVT corner (the outlined row is the worst), and how slack moved at each timing check from synthesis to signoff.",
       "Area, Power and Routing break those numbers down: floorplan to scale, area by cell type, the cells used, power split, IR drop per supply net, wire and router convergence.",
       "Flow shows the design at the end of each stage, where the runtime went, and tool warnings by message code. History plots the same numbers over this design's runs; click a point to open that run.",
+      "Compare puts up to six runs side by side, from any design you have opened. The first is the reference (the star on another run makes it the reference): every number shows how far it moved, green when better and red when worse. Settings that differ come first; the metric table shows only the metrics that differ until you ask for all.",
       "All metrics lists every value with its raw key. Rows with corners or nets open with the arrow. The magnifier opens the tool's own file at that line.",
     ],
     pitfalls: [
