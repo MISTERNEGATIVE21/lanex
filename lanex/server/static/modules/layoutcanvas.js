@@ -69,12 +69,14 @@ export class LayoutCanvas {
 
   fit(render = true) {
     if (!this.bbox) return;
-    this.zoomToBox(this.bbox, 0.075, render);   // room for the I/O names round the die
+    // Room for the I/O names round the die; above and below, also for the
+    // toolbar and the scale bar that float over the canvas (a short window).
+    this.zoomToBox(this.bbox, 0.075, render, Math.max(0.075, 66 / Math.max(this.H, 1)));
   }
 
-  zoomToBox(b, pad = 0.12, render = true) {
+  zoomToBox(b, pad = 0.12, render = true, padY = pad) {
     const bw = Math.max(b[2] - b[0], 1e-3), bh = Math.max(b[3] - b[1], 1e-3);
-    const px = this.W * (1 - 2 * pad), py = this.H * (1 - 2 * pad);
+    const px = this.W * (1 - 2 * pad), py = this.H * (1 - 2 * padY);
     this.cx = (b[0] + b[2]) / 2;
     this.cy = (b[1] + b[3]) / 2;
     this.scale = this._clampScale(Math.max(bw / Math.max(px, 10), bh / Math.max(py, 10)));

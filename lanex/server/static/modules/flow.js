@@ -810,7 +810,7 @@ function rowHtml(s) {
   return "<button class='fl-step' data-step='" + esc(s.id) + "'>" +
     "<span class='vf-mark'></span>" +
     "<span class='fl-step-no'>" + stepNo(s) + "</span>" +
-    "<span class='fl-step-name'>" + esc(stepLabel(s.id)) + "</span>" +
+    "<span class='fl-step-name' title='" + esc(stepLabel(s.id)) + "'>" + esc(stepLabel(s.id)) + "</span>" +
     "<span class='fl-step-tool' style='--tool:" + (TOOL[tool] || "var(--text-muted)") + "'>" + esc(TOOL_LABEL[tool] || tool) + "</span>" +
     "<span class='fl-step-time'></span></button>";
 }

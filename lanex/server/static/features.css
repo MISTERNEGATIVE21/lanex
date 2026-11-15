@@ -551,3 +551,37 @@
 /* Below 900px the status bar is too tight even for the short form — hide it
    there (scoped to the status bar; the landing footer keeps its disclaimer). */
 @media (max-width: 900px) { footer.status .status-disclaimer { display: none; } }
+
+/* ---- Dialog polish ------------------------------------------------------- */
+/* Section names inside a dialog are the app's small mono caps labels. */
+.dlg-body h4 {
+  margin: var(--s-5) 0 var(--s-2); font-family: var(--mono); font-size: 11px; font-weight: 500;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--met1);
+}
+body.theme-light .dlg-body h4 { color: var(--accent); }
+.dlg-body h4:first-child { margin-top: 0; }
+.dlg-body .fs-order { line-height: 1.55; }
+.dlg-body .fs-order li { margin-bottom: 4px; }
+/* The "where does this come from" magnifier: a quiet icon, not a boxed button. */
+.dlg-body .prov-btn {
+  height: 24px; width: 24px; padding: 0; margin-left: 4px; vertical-align: middle;
+  background: transparent; border-color: transparent; color: var(--text-muted); opacity: 1;
+}
+.dlg-body .prov-btn:hover { color: var(--met1); border-color: var(--border); background: var(--surface-2); box-shadow: none; }
+.dlg-body .cc-table td, .dlg-body .cc-table th { padding-top: 7px; padding-bottom: 7px; vertical-align: middle; }
+.dlg-body .fs-note .btn { margin-left: 6px; height: 28px; padding: 0 10px; font-size: 13px; }
+
+/* Folder browser: the places to jump to are chips in one row, not file rows. */
+#fs-roots { display: flex; flex-wrap: wrap; gap: 6px; }
+.fs-roots-pill { flex: 0 0 auto; width: auto; font-size: 12.5px; }
+.filesel-row .size { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Auto-config: labels in the app's mono caps, the footer on one baseline. */
+.ac-body { padding: var(--s-4); }
+.ac-detected dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; color: var(--met1); }
+body.theme-light .ac-detected dt { color: var(--accent); }
+.ac-detected div { border-radius: var(--r-md); padding: 10px 12px; }
+.ac-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+.ac-actions { align-items: flex-end; }
+.ac-fmt { display: flex; align-items: center; gap: 8px; }
+.ac-fmt select { min-width: 150px; }

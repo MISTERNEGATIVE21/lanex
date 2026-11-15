@@ -203,7 +203,7 @@ function paintList(entries) {
       "<span class='name'>" + safe + "</span>" +
       (e.is_dir
         ? ""
-        : "<span class='size'>" + fmt.metric(e.size) + " B</span>");
+        : "<span class='size'" + fmt.titleAttr(e.size) + ">" + fileSize(e.size) + "</span>");
     if (e.is_dir) {
       row.addEventListener("click", () => fetchDir(e.path));
     } else if (_pick && _pick.file && _wanted(e.path)) {
@@ -247,6 +247,16 @@ function useCurrentFolder() {
   closeModal();
   // Trigger a load + scan:
   document.getElementById("btn-set-design").click();
+}
+
+// 85 B, 9.3 kB, 1.2 MB: a file's size the way a file manager shows it.
+function fileSize(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "";
+  if (n < 1000) return n + " B";
+  const units = ["kB", "MB", "GB", "TB"];
+  let v = n, i = -1;
+  do { v /= 1000; i++; } while (v >= 1000 && i < units.length - 1);
+  return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + " " + units[i];
 }
 
 // A testbench drives a design in simulation and must never be synthesized.

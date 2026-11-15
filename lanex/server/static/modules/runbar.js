@@ -205,7 +205,10 @@ function paintPick(btn, row, { empty, hint = "" }) {
   const mark = btn.querySelector(".rb-mark");
   mark.className = "rb-mark" + (row ? " is-" + verdict(row).cls : " is-none");
   btn.querySelector(".rb-name").textContent = row ? row.tag : empty;
-  btn.querySelector(".rb-meta").textContent = row ? verdict(row).word + " · " + when(row) : hint;
+  // In the field, a run of today shows its time alone, so the line is not cut
+  // short; the list (and the hover) say "today".
+  btn.querySelector(".rb-meta").textContent = row ? verdict(row).word + " · " + when(row).replace(/^today /, "") : hint;
+  btn.title = row ? row.tag + " · " + verdict(row).word + " · " + when(row) : "";
   const all = ctx.getRunScope() === "all";
   btn.querySelector(".rb-tags").innerHTML =
     (row && all && ctx.normDir(row._design) !== ctx.normDir(state.designDir) ? "<span class='rb-tag'>" + esc(ctx.designLabel(row._design)) + "</span>" : "") +

@@ -74,17 +74,17 @@ export async function openAutoConfigModal(designDir) {
   const backdrop = document.createElement("div");
   backdrop.className = "smodal-backdrop";
   backdrop.innerHTML =
-    "<div class='smodal ac-modal'>" +
+    "<div class='smodal ac-modal' role='dialog' aria-modal='true' aria-labelledby='ac-title'>" +
     "<div class='smodal-head'>" +
-    "<span class='smodal-title'>Auto-generate config</span>" +
+    "<span class='smodal-title' id='ac-title'>Auto-generate config</span>" +
     "<span class='smodal-spacer'></span>" +
-    "<button class='btn btn-ghost' id='ac-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>" +
+    "<button class='iconbtn' id='ac-close' aria-label='Close'><svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>" +
     "</div>" +
     "<div class='ac-body'>" +
     "<p class='hint'>Detected from your RTL. Edit the JSON below if anything is wrong, then write it.</p>" +
     detected +
     (notes ? "<ul class='ac-notes'>" + notes + "</ul>" : "") +
-    "<label class='ac-label'>config.json (editable)</label>" +
+    "<label class='ac-label' for='ac-json'>The config, as it will be written (you can edit it)</label>" +
     "<textarea id='ac-json' class='ac-json' spellcheck='false'></textarea>" +
     "<div class='ac-actions'>" +
     "<label class='ac-fmt'>Format <select id='ac-format'>" +

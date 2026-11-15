@@ -241,6 +241,11 @@ body.theme-light .fl-stage.is-running .fl-stage-h b { color: var(--accent); }
   transition: background-color var(--dur-3) var(--ease-out);
 }
 .fl-step:hover { background: var(--hover); }
+.fl-steps { container-type: inline-size; }
+@container (max-width: 400px) {
+  .fl-step { grid-template-columns: 12px 22px minmax(0, 1fr) auto; }
+  .fl-step-tool { display: none; }
+}
 .fl-step-no { font: 11px var(--mono); color: var(--text-disabled); font-variant-numeric: tabular-nums; }
 .fl-step-name { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fl-step-tool { font: 11px var(--mono); letter-spacing: 0.04em; color: color-mix(in srgb, var(--tool, var(--text-muted)) 85%, var(--text)); white-space: nowrap; }

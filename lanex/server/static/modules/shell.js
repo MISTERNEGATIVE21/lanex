@@ -84,9 +84,9 @@ async function renderRecents() {
   const shown = dirs.slice(0, RECENT_IN_MENU);
   host.innerHTML = shown.map((d) =>
     "<button class='menu-item project-row" + (d === state.designDir ? " is-current" : "") +
-    "' role='menuitem' data-dir='" + fmt.escape(d) + "'>" +
+    "' role='menuitem' data-dir='" + fmt.escape(d) + "' title='" + fmt.escape(displayPath(d)) + "'>" +
     "<span class='via' aria-hidden='true'></span>" +
-    "<span class='mi-text'><b>" + fmt.escape(baseName(d)) + "</b><small>" + fmt.escape(displayPath(d)) + "</small></span>" +
+    "<span class='mi-text'><b>" + fmt.escape(baseName(d)) + "</b><small>" + fmt.escape(whereShort(d)) + "</small></span>" +
     "</button>").join("") +
     "<button class='menu-item project-more' role='menuitem' id='btn-manage-projects'>" +
     (dirs.length > RECENT_IN_MENU ? "All " + dirs.length + " projects…" : "Manage projects…") + "</button>";
