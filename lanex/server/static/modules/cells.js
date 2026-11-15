@@ -422,7 +422,7 @@ function paintList() {
       "<span class='cl-fam-top'><span class='cl-fam-name'>" + esc(f.fam) + "</span>" +
         (f.lib ? "<span class='cl-fam-lib' title='From the sister library " + esc(f.lib) + "'>" + esc(f.lib.replace(/^[a-z0-9]+_/, "")) + "</span>" : "") +
         "<span class='cl-drives'>" + drives + "</span></span>" +
-      "<span class='cl-fam-desc" + (f.descGenerated ? " is-gen" : "") + "'>" + esc(f.desc) + "</span>" + bar +
+      "<span class='cl-fam-desc" + (f.descGenerated ? " is-gen" : "") + "' title='" + esc(f.desc) + "'>" + esc(f.desc) + "</span>" + bar +
       "</div>";
   }).join("");
 }
