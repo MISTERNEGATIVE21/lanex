@@ -19,6 +19,7 @@ import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { icon } from "./icons.js";
 import { toast } from "./toast.js";
+import { openLayer, closeLayer } from "./overlay.js";
 import * as FS from "./flowstages.js";
 import { forgetProblems } from "./problems.js";
 
@@ -36,13 +37,22 @@ export function openFixSheet({ tag, variable, to = "", title = "", why = "" }) {
   S.el.hidden = false;
   paint();
   replan(0);
+  // A side sheet on the overlay stack: Esc closes it (after any dialog above
+  // it); a press on the page does not, since it may hold a typed value.
+  openLayer(S.el, { kind: "sheet", labelledBy: "fx-title", onClose: hideSheet, outside: false, focus: false });
   requestAnimationFrame(() => S.el.querySelector("[data-fx-value]")?.focus());
+}
+
+function hideSheet() {
+  if (!S.el) return;
+  S.el.hidden = true;
+  S.tok++;
 }
 
 export function closeFixSheet() {
   if (!S.el) return;
-  S.el.hidden = true;
-  S.tok++;
+  closeLayer(S.el);
+  hideSheet();
 }
 
 // Every Apply… button (problems.js fixRowHtml) opens the sheet.
@@ -88,9 +98,6 @@ function build() {
     if (e.target.matches("[data-fx-value]")) { S.value = e.target.value; replan(350); }
   });
   el.addEventListener("toggle", (e) => { if (e.target.matches(".fx-cmd")) S.showCmd = e.target.open; }, true);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && S.el && !S.el.hidden && !document.querySelector(".dlg-backdrop:not([hidden])")) closeFixSheet();
-  });
 }
 
 // ------------------------------------------------------------------ plan

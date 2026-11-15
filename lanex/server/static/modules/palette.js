@@ -14,7 +14,7 @@ import { toggleDensity } from "./density.js";
 import { toggleRunMode } from "./runmode.js";
 import { icon } from "./icons.js";
 import { api } from "./api.js";
-import { holdFocus } from "./dialog.js";
+import { openLayer, closeLayer } from "./overlay.js";
 import { state, safeStorage } from "./state.js";
 import { contextRun, contextRuns, contextBaseline, contextDesign, setRun, loadRuns } from "./context.js";
 import { parseQuery, rank, oneLine, pushRecent, PREFIXES, whenLocal } from "./palettemodel.js";
@@ -60,6 +60,7 @@ function actions() {
     goTo("analytics", "Analytics", "chart"),
     goTo("verify", "Verify", "check"),
     goTo("tools", "Tools", "tools"),
+    goTo("settings", "Settings", "gear"),
     A("run", "Run the flow", "Run", "play", () => click("btn-run-global"), "Ctrl Enter"),
     A("stop", "Stop the run", "Run", "stop", () => click("btn-cancel"), "s"),
     A("resume", "Resume / next step", "Run", "play", () => click("btn-resume")),
@@ -322,8 +323,9 @@ export async function openPalette(initial = "") {
   _sel = 0;
   refresh();
   _el.hidden = false;
-  // Tab stays in the panel (aria-modal); closing puts focus back.
-  if (!_release) _release = holdFocus(_el.querySelector(".cmdk-panel"));
+  // A dialog on the overlay stack: Tab stays in the panel, Esc closes it,
+  // closing puts focus back.
+  openLayer(_el, { kind: "dialog", onClose: () => { _el.hidden = true; }, focus: () => _input });
   requestAnimationFrame(() => _input.focus());
   // Settings, runs, files and the glossary arrive a moment later: fold them in.
   await loadData();
@@ -333,10 +335,10 @@ export async function openPalette(initial = "") {
 }
 
 export function close() {
-  if (_el) _el.hidden = true;
-  if (_release) { const r = _release; _release = null; r(); }
+  if (!_el) return;
+  closeLayer(_el);
+  _el.hidden = true;
 }
-let _release = null;
 
 export function setupPalette() {
   window.addEventListener("keydown", (e) => {

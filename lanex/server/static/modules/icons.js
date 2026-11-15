@@ -53,6 +53,8 @@ const P = {
   upload: "M12 15V4M7 8l5-5 5 5M5 20h14",                // upload / import a file
   importIn: "M12 4v11M7 11l5 5 5-5M5 20h14",             // import a run into the app
   minus: "M5 12h14",                                      // zoom-out / collapse
+  gear: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",   // settings (sliders)
+  more: "M5 12h.01M12 12h.01M19 12h.01",                 // overflow menu
 };
 
 export function icon(name, { size = 18, stroke = 1.5 } = {}) {

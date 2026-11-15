@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="/static/cells.css" />
   <link rel="stylesheet" href="/static/tools.css" />
   <link rel="stylesheet" href="/static/runs.css" />
+  <link rel="stylesheet" href="/static/settings.css" />
   <link rel="stylesheet" href="/static/vendor/driverjs/driver.css" />
   <link rel="stylesheet" href="/static/guide.css" />
   <link rel="stylesheet" href="/static/skeleton.css" />
@@ -30,37 +31,38 @@
   <link rel="modulepreload" href="/static/app.js" />
   <link rel="modulepreload" href="/static/modules/api.js" />
   <link rel="modulepreload" href="/static/modules/state.js" />
+  <link rel="modulepreload" href="/static/modules/tabs.js" />
+  <link rel="modulepreload" href="/static/modules/nav.js" />
+  <link rel="modulepreload" href="/static/modules/icons.js" />
+  <link rel="modulepreload" href="/static/modules/context.js" />
   <link rel="modulepreload" href="/static/modules/setup.js" />
   <link rel="modulepreload" href="/static/modules/config.js" />
+  <link rel="modulepreload" href="/static/modules/toast.js" />
+  <link rel="modulepreload" href="/static/modules/jumpnav.js" />
   <link rel="modulepreload" href="/static/modules/fs.js" />
+  <link rel="modulepreload" href="/static/modules/overlay.js" />
   <link rel="modulepreload" href="/static/modules/preflight.js" />
-  <link rel="modulepreload" href="/static/modules/nav.js" />
-  <link rel="modulepreload" href="/static/modules/tabs.js" />
-  <link rel="modulepreload" href="/static/modules/context.js" />
+  <link rel="modulepreload" href="/static/modules/pdkinfo.js" />
+  <link rel="modulepreload" href="/static/modules/flowstages.js" />
+  <link rel="modulepreload" href="/static/modules/theme.js" />
+  <link rel="modulepreload" href="/static/modules/hotkeys.js" />
+  <link rel="modulepreload" href="/static/modules/density.js" />
+  <link rel="modulepreload" href="/static/modules/prefs.js" />
   <link rel="modulepreload" href="/static/modules/shell.js" />
+  <link rel="modulepreload" href="/static/modules/zoom.js" />
   <link rel="modulepreload" href="/static/modules/palette.js" />
+  <link rel="modulepreload" href="/static/modules/runmode.js" />
   <link rel="modulepreload" href="/static/modules/palettemodel.js" />
   <link rel="modulepreload" href="/static/modules/help.js" />
-  <link rel="modulepreload" href="/static/modules/wizard.js" />
   <link rel="modulepreload" href="/static/modules/runend.js" />
   <link rel="modulepreload" href="/static/modules/reportcard.js" />
   <link rel="modulepreload" href="/static/modules/verify-model.js" />
   <link rel="modulepreload" href="/static/modules/problems.js" />
-  <link rel="modulepreload" href="/static/modules/dialog.js" />
-  <link rel="modulepreload" href="/static/modules/loading.js" />
-  <link rel="modulepreload" href="/static/modules/zoom.js" />
-  <link rel="modulepreload" href="/static/modules/hotkeys.js" />
-  <link rel="modulepreload" href="/static/modules/density.js" />
-  <link rel="modulepreload" href="/static/modules/jumpnav.js" />
-  <link rel="modulepreload" href="/static/modules/flowstages.js" />
-  <link rel="modulepreload" href="/static/modules/icons.js" />
-  <link rel="modulepreload" href="/static/modules/toast.js" />
-  <link rel="modulepreload" href="/static/modules/tooltip.js" />
-  <link rel="modulepreload" href="/static/modules/pdkinfo.js" />
-  <link rel="modulepreload" href="/static/modules/fullscreen.js" />
-  <link rel="modulepreload" href="/static/modules/runmode.js" />
   <link rel="modulepreload" href="/static/modules/logs.js" />
-  <link rel="modulepreload" href="/static/modules/theme.js" />
+  <link rel="modulepreload" href="/static/modules/loading.js" />
+  <link rel="modulepreload" href="/static/modules/wizard.js" />
+  <link rel="modulepreload" href="/static/modules/fullscreen.js" />
+  <link rel="modulepreload" href="/static/modules/tooltip.js" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -73,6 +75,16 @@
   <meta name="google" content="notranslate" />
 </head>
 <body class="theme-dark">
+  <!-- The theme, before anything paints (theme.js keeps it after that). -->
+  <script>
+    try {
+      var t = localStorage.getItem("ll.theme");
+      if (t === "light" || (t === "system" && window.matchMedia("(prefers-color-scheme: light)").matches)) {
+        document.body.classList.remove("theme-dark");
+        document.body.classList.add("theme-light");
+      }
+    } catch (_e) {}
+  </script>
   <!-- Splash: covers the whole window until boot() finishes. -->
   <div class="splash" id="splash">
     <div class="splash-inner">
@@ -230,10 +242,13 @@
           <span class="ico"></span><span class="label">Verify</span>
         </button>
       </div>
-      <div class="rail-group rail-foot" style="--n:1">
+      <div class="rail-group rail-foot" style="--n:2">
         <span class="rail-label">System</span>
         <button class="side-tab" data-tab="tools" data-tip="Install or check EDA tools and PDKs">
           <span class="ico"></span><span class="label">Tools</span>
+        </button>
+        <button class="side-tab" data-tab="settings" data-tip="Theme, size, run and editor preferences, shortcuts">
+          <span class="ico"></span><span class="label">Settings</span>
         </button>
       </div>
     </nav>
@@ -550,6 +565,15 @@
       <p class="muted rn-note" id="runs-note" role="status" hidden></p>
       <div class="rn-wrap" id="rn-wrap"><table class="rn-table" id="runs-table"></table></div>
       <div class="an-empty empty" id="rn-empty" hidden></div>
+    </section>
+
+    <!-- Settings: every preference in one place (modules/settings.js) -->
+    <section class="section st" id="sec-settings">
+      <header class="an-head"><div><div class="an-eyebrow">Settings</div>
+        <h2 class="an-title">How LanEx looks and behaves</h2>
+        <p class="an-lede">Kept on this computer. Nothing here changes your projects or your runs.</p></div>
+      </header>
+      <div class="st-body" id="settings-body"></div>
     </section>
 
     <!-- RTL IDE (embedded) -->

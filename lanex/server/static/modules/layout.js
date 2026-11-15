@@ -17,6 +17,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
+import { openLayer, closeLayer } from "./overlay.js";
 import { icon } from "./icons.js";
 import * as ctx from "./context.js";
 import { mountRunBar } from "./runbar.js";
@@ -1338,23 +1339,18 @@ async function openTool(tool) {
 function wireMenu(btnId, menuId, onPick, onOpen) {
   const btn = $(btnId), menu = $(menuId);
   if (!btn || !menu) return;
-  const close = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  // A menu on the overlay stack (overlay.js): Esc, arrows, an outside press
+  // and focus return are the same as every menu in the app.
+  const hide = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.setAttribute("aria-expanded", "false");
   btn.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const open = menu.hidden;
-    document.querySelectorAll(".lx-menu").forEach((m) => { m.hidden = true; });
-    if (open) { if (onOpen) await onOpen(menu); menu.hidden = false; btn.setAttribute("aria-expanded", "true"); menu.querySelector("button")?.focus(); }
-    else close();
+    if (!menu.hidden) { closeLayer(menu); return; }
+    if (onOpen) await onOpen(menu);
+    menu.hidden = false;
+    openLayer(menu, { kind: "menu", owner: btn, onClose: hide });
   });
-  menu.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { close(); onPick(b); } });
-  menu.addEventListener("keydown", (e) => {
-    const items = [...menu.querySelectorAll("button")];
-    const i = items.indexOf(document.activeElement);
-    if (e.key === "Escape") { close(); btn.focus(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
-  });
-  document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) close(); });
+  menu.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { closeLayer(menu); onPick(b); } });
 }
 
 async function fillCommands(menu) {

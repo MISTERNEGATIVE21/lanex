@@ -4,6 +4,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
+import { openLayer, closeLayer } from "./overlay.js";
 
 let _overlay = null;
 let _templates = [];
@@ -14,13 +15,8 @@ const X_ICON = "<svg viewBox='0 0 24 24' width='16' height='16' fill='none' stro
 
 function close() {
   if (!_overlay) return;
+  closeLayer(_overlay);
   _overlay.hidden = true;
-  document.removeEventListener("keydown", onKey);
-}
-
-function onKey(e) {
-  // The folder picker sits on top of us; let it own Esc while it's open.
-  if (e.key === "Escape" && document.getElementById("fs-modal")?.hidden !== false) close();
 }
 
 function overlay() {
@@ -50,7 +46,9 @@ function steps(n) {
 export async function openWizard({ template = "" } = {}) {
   const ov = overlay();
   ov.hidden = false;
-  document.addEventListener("keydown", onKey);
+  // A dialog on the overlay stack: Esc closes the top layer only, so the
+  // folder picker above it closes first.
+  openLayer(ov, { kind: "dialog", labelledBy: "wiz-title", onClose: () => { ov.hidden = true; }, focus: false });
   _parent = "";
   const body = ov.querySelector("#wiz-body");
   body.innerHTML = steps(1) + "<p class='muted'>Loading templates…</p>";

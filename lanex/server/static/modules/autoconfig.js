@@ -5,6 +5,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
+import { openLayer, closeLayer } from "./overlay.js";
 import { icon } from "./icons.js";
 
 // Show or hide the "no config — auto-generate" banner for a design dir, based
@@ -101,13 +102,11 @@ export async function openAutoConfigModal(designDir) {
   const ta = backdrop.querySelector("#ac-json");
   ta.value = JSON.stringify(cfg, null, 2);
 
-  const close = () => backdrop.remove();
+  const close = () => { closeLayer(backdrop); backdrop.remove(); };
   backdrop.querySelector("#ac-close")?.addEventListener("click", close);
   backdrop.querySelector("#ac-cancel")?.addEventListener("click", close);
   backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
-  document.addEventListener("keydown", function esc(e) {
-    if (e.key === "Escape") { close(); document.removeEventListener("keydown", esc); }
-  });
+  openLayer(backdrop, { kind: "dialog", onClose: () => backdrop.remove(), focus: () => ta });
 
   backdrop.querySelector("#ac-write")?.addEventListener("click", async () => {
     const errEl = backdrop.querySelector("#ac-error");

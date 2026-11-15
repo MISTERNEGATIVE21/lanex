@@ -1,0 +1,73 @@
+/* settings.css — the Settings page (modules/settings.js).
+ * Same language as Analytics and Setup: gradient cards with the thin accent
+ * line on top, mono uppercase card names, plain rows: what it is on the left,
+ * the control on the right. */
+
+.st-body {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4);
+  align-items: start; max-width: 1480px; padding-bottom: var(--s-6);
+}
+@media (max-width: 1180px) { .st-body { grid-template-columns: 1fr; max-width: 760px; } }
+.st-col { display: flex; flex-direction: column; gap: var(--s-4); min-width: 0; }
+
+.st-card { padding: var(--s-4) var(--s-5) var(--s-2); }
+.st-card-h {
+  margin: 0 0 var(--s-1); font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--met1);
+}
+body.theme-light .st-card-h { color: var(--accent); }
+
+.st-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-5);
+  min-height: 60px; padding: 12px 0; border-top: 1px solid var(--border);
+}
+.st-card-h + .st-row { border-top: 0; }
+.st-row-l { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.st-row-t { font-size: 15px; font-weight: 600; color: var(--text-strong); }
+.st-row-h { font-size: 13.5px; line-height: 1.45; color: var(--text-muted); max-width: 58ch; text-wrap: pretty; }
+.st-row-c { flex: none; display: flex; align-items: center; gap: var(--s-2); }
+
+/* Choice: the segmented control, a little taller here. */
+.st-seg .seg-btn { height: 32px; padding: 0 14px; font-size: 13.5px; }
+.st-seg .seg-btn.is-active { color: var(--text-strong); box-shadow: inset 0 -2px 0 var(--met1); }
+body.theme-light .st-seg .seg-btn.is-active { color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* On / off. */
+.st-switch {
+  position: relative; flex: none; width: 44px; height: 24px; padding: 0; cursor: pointer;
+  background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 12px;
+  transition: background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.st-switch span {
+  position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--text-muted); transition: transform 0.14s ease, background 0.14s ease;
+}
+.st-switch:hover { border-color: var(--accent); }
+.st-switch[aria-checked="true"] {
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%);
+  border-color: var(--accent-2); box-shadow: 0 0 12px var(--accent-soft);
+}
+.st-switch[aria-checked="true"] span { transform: translateX(20px); background: #fff; }
+.st-switch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.st-zoom { display: inline-flex; align-items: center; gap: 6px; }
+.st-zoom output { min-width: 48px; text-align: center; font-family: var(--mono); font-size: 13px; color: var(--text-strong); }
+.st-zoom .btn.is-on { border-color: var(--accent); background: var(--accent-soft); color: var(--text-strong); }
+
+.st-keys { border-top: 1px solid var(--border); padding: 12px 0 var(--s-2); }
+.st-keys summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--met1); }
+body.theme-light .st-keys summary { color: var(--accent); }
+.st-keys summary:hover { color: var(--text-strong); }
+.st-keys[open] summary { margin-bottom: var(--s-2); }
+.st-keys-h {
+  margin: var(--s-4) 0 var(--s-1); font-family: var(--mono); font-size: 11px; font-weight: 500;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
+}
+
+#st-about { padding-bottom: var(--s-3); }
+#st-about .about-facts { margin-top: var(--s-2); }
+.st-acts { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .st-switch, .st-switch span { transition: none; }
+}

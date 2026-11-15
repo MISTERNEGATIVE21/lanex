@@ -17,6 +17,8 @@ import { state } from "./state.js";
 import { icon } from "./icons.js";
 import * as ctx from "./context.js";
 import { fmtDur } from "./reportcard.js";
+import { verdictOfRun, runVerdict } from "./verdict.js";
+import { openLayer, closeLayer } from "./overlay.js";
 
 const esc = (s) => fmt.escape(String(s ?? ""));
 let _seq = 0;
@@ -58,18 +60,19 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
     const cur = S.items.findIndex((it) => it.cur);
     S.active = cur >= 0 ? cur : 0;
     paintActive();
-    (pop.querySelector(".rb-q") || pop.querySelector(".rb-list")).focus();
-    setTimeout(() => document.addEventListener("pointerdown", outside, true), 0);
+    // One overlay behaviour (overlay.js): Esc and an outside press close it,
+    // focus goes back to the field.
+    closeLayer(pop);
+    openLayer(pop, { kind: "popover", owner: btn, onClose: hide, focus: () => pop.querySelector(".rb-q") || pop.querySelector(".rb-list") });
+  };
+  const hide = () => {
+    pop.hidden = true;
+    host.querySelectorAll(".rb-pick").forEach((x) => x.setAttribute("aria-expanded", "false"));
   };
   const close = (focusBack = true) => {
     if (pop.hidden) return;
-    pop.hidden = true;
-    document.removeEventListener("pointerdown", outside, true);
-    const btn = host.querySelector("[data-rb='" + S.which + "']");
-    host.querySelectorAll(".rb-pick").forEach((x) => x.setAttribute("aria-expanded", "false"));
-    if (focusBack && btn) btn.focus();
+    closeLayer(pop, focusBack ? "api" : "outside");
   };
-  const outside = (e) => { if (!host.contains(e.target)) close(false); };
 
   const fill = () => {
     const runs = ctx.contextRuns();
@@ -171,8 +174,7 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
       return;
     }
     const n = (S.visible || []).length;
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); S.active = Math.min(n - 1, S.active + 1); paintActive(); }
+    if (e.key === "ArrowDown") { e.preventDefault(); S.active = Math.min(n - 1, S.active + 1); paintActive(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); S.active = Math.max(0, S.active - 1); paintActive(); }
     else if (e.key === "Home" && !e.target.classList.contains("rb-q")) { e.preventDefault(); S.active = 0; paintActive(); }
     else if (e.key === "End" && !e.target.classList.contains("rb-q")) { e.preventDefault(); S.active = n - 1; paintActive(); }
@@ -263,30 +265,16 @@ function isNewest(r) {
   return !!same.length && same[0].tag === r.tag;
 }
 
-// The Runs tab's words: a run passed or failed; the newest run of the active
-// design is "running" while the flow is live.
-// The words come from the run's verdict (the server's, the same one Verify
-// shows): passed / failed / stopped / incomplete / running.
-const VERDICT_WORD = {
-  passed: { cls: "pass", word: "passed" },
-  warning: { cls: "warn", word: "finished, with problems" },
-  failed: { cls: "fail", word: "failed" },
-  stopped: { cls: "warn", word: "stopped" },
-  incomplete: { cls: "warn", word: "not enough to call it" },
-  running: { cls: "run", word: "running" },
-};
+// The words and colours come from verdict.js (the server's verdict).
 export function verdictWord(r) {
-  const st = r && r.verdict && r.verdict.state;
-  if (st && VERDICT_WORD[st]) return VERDICT_WORD[st];
-  // A state this build doesn't know yet: amber, never a guessed pass/fail.
-  if (st) return { cls: "warn", word: (r.verdict.label || st).toLowerCase() };
-  return r && r.success ? VERDICT_WORD.passed : VERDICT_WORD.failed;
+  const v = verdictOfRun(r);
+  return { cls: v.cls, word: v.word };
 }
 function verdict(r) {
   if (state.status && state.status.running && !r.success && isNewest(r) && ctx.normDir(r._design) === ctx.normDir(state.designDir)) {
-    return VERDICT_WORD.running;
+    return runVerdict("running");
   }
-  return verdictWord(r);
+  return verdictOfRun(r);
 }
 
 function when(r) {

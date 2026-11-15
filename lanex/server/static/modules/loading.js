@@ -64,6 +64,7 @@ export function pageSkeleton(tab) {
     case "cells": return skel.hero({ lede: 2, actions: 0 }) + skel.cards(3) + skel.rows(6, 4);
     case "ide": return skel.panes(420);
     case "tools": return skel.hero({ lede: 1, actions: 1 }) + skel.cards(3);
+    case "settings": return skel.hero({ lede: 1, actions: 0 }) + skel.cards(2);
     case "setup": return skel.hero({ lede: 2, actions: 2 }) + skel.cards(2);
     default: return skel.hero() + skel.rows(5, 3);
   }

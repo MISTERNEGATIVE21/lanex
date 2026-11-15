@@ -38,8 +38,9 @@ const PAGES = {
   layout: () => import("./modules/layout.js"),
   cells: () => import("./modules/cells.js"),
   ide: () => import("./modules/ide/main.js"),
+  settings: () => import("./modules/settings.js"),
 };
-const TAB_PAGE = { pipeline: "flow", runs: "runs", tools: "tools", analytics: "analytics", verify: "verify", layout: "layout", cells: "cells", ide: "ide" };
+const TAB_PAGE = { pipeline: "flow", runs: "runs", tools: "tools", analytics: "analytics", verify: "verify", layout: "layout", cells: "cells", ide: "ide", settings: "settings" };
 const _mods = {};      // name -> the module, once loaded
 const _modP = {};      // name -> its loading promise
 function page(name) {
@@ -68,7 +69,7 @@ function prefetch(names) {
 const TAB_ICONS = {
   setup: "folder", pipeline: "flow", runs: "clock",
   ide: "code", tools: "tools", analytics: "chart", verify: "check",
-  dse: "beaker", layout: "grid", cells: "layers", manual: "command",
+  dse: "beaker", layout: "grid", cells: "layers", manual: "command", settings: "gear",
 };
 function paintNavIcons() {
   document.querySelectorAll(".side-tab").forEach((tab) => {
@@ -652,6 +653,7 @@ const RENDER = {
   layout: (m) => m.renderLayout(),
   verify: (m) => m.renderVerify(),
   cells: (m) => m.renderCells(),
+  settings: (m) => m.renderSettings(),
 };
 document.addEventListener("g:tab_activated", (e) => {
   const tab = e.detail?.tab;

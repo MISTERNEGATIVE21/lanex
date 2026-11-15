@@ -4,6 +4,7 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { icon } from "./icons.js";
 import { toast } from "./toast.js";
+import { openLayer, closeLayer } from "./overlay.js";
 
 let _curPath = "";
 const _checked = new Set();
@@ -43,28 +44,22 @@ export function setupFolderBrowser() {
   document.getElementById("filesel-extras")?.addEventListener("input", commitSelection);
 }
 
-// Esc-to-close + basic focus handling so the file browser matches the a11y of
-// the dialog.js modals (G2a). Kept lightweight: one keydown listener, removed on
-// close, plus a focus trap that wraps Tab within the modal.
-function _fsKeydown(e) {
-  const modal = document.getElementById("fs-modal");
-  if (!modal || modal.hidden) return;
-  if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
-  if (e.key !== "Tab") return;
-  const focusable = modal.querySelectorAll(
-    'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])');
-  if (!focusable.length) return;
-  const first = focusable[0], last = focusable[focusable.length - 1];
-  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-}
-
-
+// The folder browser is a dialog on the overlay stack (overlay.js): Esc closes
+// it and nothing under it, Tab stays inside, focus goes back to the opener.
 function closeModal() {
+  closeLayer(document.getElementById("fs-modal"));
+  _modalClosed();
+}
+// Every way out ends here (a button, Esc through the stack).
+function _modalClosed() {
   const modal = document.getElementById("fs-modal");
   modal.hidden = true;
-  document.removeEventListener("keydown", _fsKeydown);
   if (_pick) { const p = _pick; _pick = null; p.resolve(null); _labelModal(); }
+}
+function _showModal() {
+  const modal = document.getElementById("fs-modal");
+  modal.hidden = false;
+  openLayer(modal, { kind: "dialog", labelledBy: "fs-modal-title", onClose: _modalClosed, focus: false });
 }
 
 const _FOLDER_HINT = "Click a folder to open it. Type a path to jump directly. When you're in the right folder, press the blue button.";
@@ -132,9 +127,7 @@ export function browseFolder({ title = "Choose a folder", use = "Choose this fol
   return new Promise((resolve) => {
     _pick = { resolve, file, exts: exts.map((x) => String(x).toLowerCase()) };
     _labelModal(title, use, hint);
-    const modal = document.getElementById("fs-modal");
-    modal.hidden = false;
-    document.addEventListener("keydown", _fsKeydown);
+    _showModal();
     loadRoots().then(async () => {
       await fetchDir(seed || (await defaultSeed()) || "/");
       document.getElementById("fs-path")?.focus();
@@ -238,17 +231,14 @@ function useCurrentFolder() {
       return;
     }
     const p = _pick; _pick = null;
-    document.getElementById("fs-modal").hidden = true;
-    document.removeEventListener("keydown", _fsKeydown);
+    closeModal();
     _labelModal();
     p.resolve(v);
     return;
   }
   if (_pick) {
     const p = _pick; _pick = null;
-    const modal = document.getElementById("fs-modal");
-    modal.hidden = true;
-    document.removeEventListener("keydown", _fsKeydown);
+    closeModal();
     _labelModal();
     p.resolve(_curPath);
     return;

@@ -1,6 +1,8 @@
 // hotkeys.js — global keyboard shortcuts + the single source of truth for the
 // Shortcuts tab of the help sheet (so the list and the handlers can never drift).
 import { toggleDensity } from "./density.js";
+import { toggleTheme } from "./theme.js";
+import { singleKeysOn } from "./prefs.js";
 import { go, railKeys } from "./nav.js";
 import { state } from "./state.js";
 import { currentTab } from "./tabs.js";
@@ -72,6 +74,8 @@ export function setupHotkeys() {
     if (e.defaultPrevented || (e.target && (e.target.isContentEditable ||
         (e.target.closest && e.target.closest(".cm-editor, .wv"))))) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Single-key shortcuts can be turned off in Settings (WCAG 2.1.4).
+    if (!singleKeysOn()) return;
     // In the RTL IDE (its explorer, tabs, panels) a press meant for the code
     // easily lands on a button instead; there r and s must not start or stop
     // the RTL-to-GDS run.
@@ -81,7 +85,7 @@ export function setupHotkeys() {
       e.preventDefault();
       return;
     }
-    if (e.key === "t") document.getElementById("theme-btn")?.click();
+    if (e.key === "t") toggleTheme();
     if (e.key === "d") toggleDensity();
     const page = railKeys().find(([k]) => k === e.key);
     if (page) go(page[1], {}, { link: false });

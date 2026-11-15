@@ -1,83 +1,23 @@
 // shell.js — the frame's behaviour: the project switcher, the Run menu, the
 // help sheet (Learn / Shortcuts / About), the status line and page titles.
 //
-// Every overlay here is light-dismiss: clicking anywhere outside it, or Esc,
-// closes it. Only one overlay is open at a time.
+// Its menus and the help sheet open through overlay.js, like every overlay.
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { SHORTCUTS, IDE_SHORTCUTS } from "./hotkeys.js";
+import { wireMenu, openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 
-// ------------------------------------------------------------ overlay manager
-// One open overlay at a time; outside pointerdown or Esc closes it.
-let _open = null; // { el, owner, close }
-
-function closeOpen() {
-  if (!_open) return;
-  const o = _open;
-  _open = null;
-  o.close();
-}
-
+// ------------------------------------------------------------ overlays
+// Every overlay goes through overlay.js: Esc closes the top one, a press
+// outside closes a menu or a sheet, focus goes back to what opened it. These
+// three names are kept for the modules that still call them.
 export function openOverlay(el, owner, close) {
-  if (_open && _open.el !== el) closeOpen();
-  _open = { el, owner, close };
+  openLayer(el, { kind: "popover", owner, onClose: close, focus: false });
 }
-
-export function isOverlayOpen(el) {
-  return !!_open && _open.el === el;
-}
-
-export function releaseOverlay(el) {
-  if (_open && _open.el === el) _open = null;
-}
-
-function wireLightDismiss() {
-  document.addEventListener("pointerdown", (e) => {
-    if (!_open) return;
-    const t = e.target;
-    if (_open.el.contains(t)) return;
-    if (_open.owner && _open.owner.contains(t)) return;
-    // Clicks inside a modal dialog or the palette belong to them, not to us.
-    if (t.closest && t.closest(".dlg-backdrop, .smodal-backdrop, .cmdk, .toast, #fs-modal")) return;
-    closeOpen();
-  }, true);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && _open) { closeOpen(); e.stopPropagation(); }
-  });
-}
-
-// ------------------------------------------------------------ menus
-function wireMenu(btn, menu, onOpen) {
-  if (!btn || !menu) return;
-  const close = () => {
-    menu.hidden = true;
-    btn.setAttribute("aria-expanded", "false");
-  };
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (!menu.hidden) { closeOpen(); return; }
-    menu.hidden = false;
-    btn.setAttribute("aria-expanded", "true");
-    openOverlay(menu, btn, close);
-    if (onOpen) onOpen();
-    menu.querySelector(".menu-item")?.focus({ preventScroll: true });
-  });
-  // Arrow keys move between items; picking an item closes the menu.
-  menu.addEventListener("keydown", (e) => {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const items = [...menu.querySelectorAll(".menu-item:not(:disabled)")];
-    const i = items.indexOf(document.activeElement);
-    const n = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
-    items[n]?.focus();
-    e.preventDefault();
-  });
-  menu.addEventListener("click", (e) => {
-    // A tick box or a field (the Run menu's options) keeps the menu open.
-    if (e.target.closest(".menu-item:not(.menu-check)")) closeOpen();
-  });
-}
+export function isOverlayOpen(el) { return isLayerOpen(el); }
+export function releaseOverlay(el) { closeLayer(el); }
 
 // ------------------------------------------------------------ project switcher
 function baseName(p) {
@@ -397,10 +337,10 @@ function sheet() {
     "<div class='sheet-body' id='help-sheet-body'></div>";
   document.body.appendChild(el);
   el.querySelectorAll("[data-guide]").forEach((b) => b.addEventListener("click", () => {
-    closeOpen();
+    closeLayer(el);
     document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: b.dataset.guide } }));
   }));
-  el.querySelector("[data-act='close']").addEventListener("click", () => closeOpen());
+  el.querySelector("[data-act='close']").addEventListener("click", () => closeLayer(el));
   el.querySelectorAll(".sheet-tab").forEach((t) =>
     t.addEventListener("click", () => showPane(t.dataset.pane)));
   _sheet = el;
@@ -420,7 +360,7 @@ export function openHelp(pane = "learn", { render = true } = {}) {
   if (el.hidden) {
     el.hidden = false;
     document.getElementById("help-icon")?.setAttribute("aria-pressed", "true");
-    openOverlay(el, document.getElementById("help-icon"), closeSheet);
+    openLayer(el, { kind: "sheet", owner: document.getElementById("help-icon"), onClose: closeSheet, label: "Help", focus: false, modal: false });
   }
   if (!render) {
     selectHelpTab(pane);
@@ -499,13 +439,12 @@ async function renderAbout(body) {
 
 // ------------------------------------------------------------ setup
 export function setupShell() {
-  wireLightDismiss();
-  wireMenu(document.getElementById("design-pill"), document.getElementById("project-menu"), renderRecents);
+  wireMenu(document.getElementById("design-pill"), document.getElementById("project-menu"), { onOpen: renderRecents });
   wireMenu(document.getElementById("run-opts-btn"), document.getElementById("run-menu"));
   document.getElementById("btn-open-project")?.addEventListener("click", openFolder);
   document.getElementById("btn-reveal-project")?.addEventListener("click", () => revealProject());
   document.getElementById("help-icon")?.addEventListener("click", () => {
-    if (_sheet && !_sheet.hidden) closeOpen(); else openHelp("learn");
+    if (_sheet && !_sheet.hidden) closeLayer(_sheet); else openHelp("learn");
   });
   // Status items jump to where the setting lives.
   document.getElementById("pdk-pill")?.addEventListener("click", () =>
