@@ -18,9 +18,11 @@ top module, the clock and the source list is what LibreLane reads, so a run
 from LanEx and a run from a terminal build the same chip. This module is the
 only place LanEx writes that file, and it is deliberately narrow:
 
-* only top-level keys are set or removed; ``pdk::``/``scl::`` sections,
-  comments, key order, quoting and line endings elsewhere are left exactly
-  as they were (YAML is edited line by line, never re-dumped);
+* only the keys asked for are set or removed: at the top level, inside one
+  named ``pdk::``/``scl::`` section, or (for "every PDK") at the top level
+  and out of the sections that also set them; comments, key order, quoting
+  and line endings elsewhere are left exactly as they were (YAML is edited
+  line by line, never re-dumped);
 * after building the new text it parses old and new and refuses to write
   unless the ONLY difference is the requested keys, so a bad edit can't
   corrupt anything else;
@@ -206,6 +208,48 @@ def applies(entry: Dict[str, Any], pdk: Optional[str], scl: Optional[str]) -> Op
     return ok
 
 
+def effective_entry(data: Dict[str, Any], key: str, pdk: Optional[str], scl: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Where the config file sets *key* for this PDK and library: the most
+    specific ``pdk::``/``scl::`` section that applies wins over the top level,
+    as in LibreLane. ``{value, scope: [section keys] or None, label}``, or
+    None when the file doesn't set it for this target."""
+    best: Optional[Tuple[int, Dict[str, Any]]] = None
+    if key in data:
+        best = (0, {"value": data[key], "scope": None, "label": "top level"})
+    for e in scoped_values(data, key):
+        if applies(e, pdk, scl):
+            depth = len(e["scope"].split(" / "))
+            if best is None or depth >= best[0]:
+                best = (depth, {"value": e["value"], "scope": e["scope"].split(" / "),
+                                "label": e["scope"] + " section"})
+    return best[1] if best else None
+
+
+def effective_values(data: Dict[str, Any], pdk: Optional[str], scl: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    """:func:`effective_entry` for every variable the file sets anywhere
+    (top level or inside a section), keyed by name."""
+    keys = {k for k in data if isinstance(k, str) and _KEY_RX.match(k)}
+
+    def walk(section: Dict[str, Any]) -> None:
+        for k, v in section.items():
+            if isinstance(k, str) and k.startswith(_SCOPE_PREFIXES) and isinstance(v, dict):
+                keys.update(x for x in v if isinstance(x, str) and _KEY_RX.match(x))
+                walk(v)
+    walk(data)
+    out: Dict[str, Dict[str, Any]] = {}
+    for k in sorted(keys):
+        e = effective_entry(data, k, pdk, scl)
+        if e is not None:
+            out[k] = e
+    return out
+
+
+def _section_paths(data: Dict[str, Any], key: str) -> List[List[str]]:
+    """The section paths (``["pdk::sky130*", "scl::…"]``) of every section
+    that sets *key*."""
+    return [e["scope"].split(" / ") for e in scoped_values(data, key)]
+
+
 # ------------------------------------------------------------------ YAML text editing
 
 _YAML_PLAIN_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_./:\-*+]*$")
@@ -306,6 +350,11 @@ def _edit_yaml(text: str, sets: Dict[str, Any], removes: Iterable[str]) -> str:
                 at = scoped[0]
                 while at > 0 and lines[at - 1].startswith("#"):
                     at -= 1
+                if at > 1 and not lines[at - 1].strip() and lines[at - 2].strip() and not lines[at - 2].startswith("#"):
+                    # Right after the last project-wide setting, keeping the
+                    # blank line before the sections (no blank per new key).
+                    lines[at - 1:at - 1] = new
+                    continue
                 block = new + [""]
                 if at > 0 and lines[at - 1].strip():
                     block = [""] + block
@@ -408,30 +457,36 @@ def _open_editable(design_dir: str | Path) -> Tuple[Path, str, Dict[str, Any]]:
 
 def set_keys(design_dir: str | Path, sets: Optional[Dict[str, Any]] = None,
              removes: Optional[Iterable[str]] = None, *, dry_run: bool = False,
-             scope: Optional[List[str]] = None) -> Dict[str, Any]:
+             scope: Optional[List[str]] = None, unscope: bool = False) -> Dict[str, Any]:
     """Set and/or remove top-level keys in the design's config file.
 
     With *scope* (``["pdk::sky130*"]``, ``["pdk::sky130*", "scl::…_hs"]``)
-    the *sets* change keys the file already sets inside that section instead:
-    a section that matches the PDK wins over the top level, so that is where
-    a change has to go to take effect.
+    the *sets* and *removes* change keys the file already sets inside that
+    section instead: a section that matches the PDK wins over the top level,
+    so that is where a change has to go to take effect for that PDK. A
+    section left empty by a remove goes too.
+
+    With *unscope* (top level only) every key set or removed is also taken
+    out of each ``pdk::``/``scl::`` section that sets it, so the top-level
+    value is the one every PDK builds with ("for every PDK").
 
     Returns ``{path, name, changed: [keys], scoped: {key: [entries]}, text,
-    diff, undo}``. Raises :class:`ConfigEditError` with a readable reason on
-    any refusal; the file is untouched in that case.
+    diff, undo, unscoped: [section paths]}``. Raises :class:`ConfigEditError`
+    with a readable reason on any refusal; the file is untouched in that case.
     """
     sets = dict(sets or {})
     removes = [k for k in (removes or []) if k not in sets]
     for k in list(sets) + removes:
         if not isinstance(k, str) or not _KEY_RX.match(k):
             raise ConfigEditError(f"'{k}' isn't a LibreLane variable name.")
+    if scope and unscope:
+        raise ConfigEditError("Pick one: a pdk::/scl:: section, or every PDK.")
     path, text, old = _open_editable(design_dir)
 
     expected = copy.deepcopy(old)
     changed = []
+    dropped: List[List[str]] = []   # sections a key is taken out of (unscope)
     if scope:
-        if removes:
-            raise ConfigEditError("LanEx only changes values inside a pdk::/scl:: section.")
         section = _section(expected, scope, path.name)
         for k, v in sets.items():
             if k not in section:
@@ -439,6 +494,11 @@ def set_keys(design_dir: str | Path, sets: Optional[Dict[str, Any]] = None,
             if section[k] != v:
                 changed.append(k)
             section[k] = v
+        for k in removes:
+            if k in section:
+                changed.append(k)
+                del section[k]
+        _prune_empty(expected, scope)
     else:
         for k, v in sets.items():
             if old.get(k, object()) != v:
@@ -448,16 +508,34 @@ def set_keys(design_dir: str | Path, sets: Optional[Dict[str, Any]] = None,
             if k in expected:
                 changed.append(k)
                 del expected[k]
+        if unscope:
+            for k in list(sets) + removes:
+                for trail in _section_paths(old, k):
+                    del _section(expected, trail, path.name)[k]
+                    _prune_empty(expected, trail)
+                    dropped.append(trail)
+                    if k not in changed:
+                        changed.append(k)
     scoped = {k: scoped_values(old, k) for k in list(sets) + removes}
     scoped = {k: v for k, v in scoped.items() if v}
     if not changed:
         return {"path": str(path), "name": path.name, "changed": [], "scoped": scoped, "text": text,
-                "diff": [], "undo": {}}
+                "diff": [], "undo": {}, "unscoped": []}
 
-    if scope:
-        new_text = _edit_json_scoped(text, expected) if path.suffix == ".json" else _edit_yaml_scoped(text, scope, sets)
+    if path.suffix == ".json":
+        new_text = _edit_json_scoped(text, expected) if (scope or dropped) else _edit_json(text, old, sets, removes)
+    elif scope:
+        new_text = _edit_yaml_scoped(text, scope, sets)
+        for k in removes:
+            new_text = _remove_yaml_scoped(new_text, scope, k)
     else:
-        new_text = _edit_json(text, old, sets, removes) if path.suffix == ".json" else _edit_yaml(text, sets, removes)
+        new_text = _edit_yaml(text, sets, removes)
+        if unscope:
+            # Deepest sections first: emptying a nested scl:: section can
+            # leave its pdk:: parent empty too.
+            for k in list(sets) + removes:
+                for trail in sorted(_section_paths(old, k), key=len, reverse=True):
+                    new_text = _remove_yaml_scoped(new_text, trail, k)
     try:
         got = _load(path, new_text)
     except Exception as ex:
@@ -466,7 +544,7 @@ def set_keys(design_dir: str | Path, sets: Optional[Dict[str, Any]] = None,
         raise ConfigEditError(f"LanEx couldn't change {', '.join(changed)} in {path.name} without touching "
                               "anything else, so nothing was written. Edit the file by hand.")
     res = {"path": str(path), "name": path.name, "changed": changed, "scoped": scoped, "text": new_text,
-           "diff": diff_lines(text, new_text), "undo": {}}
+           "diff": diff_lines(text, new_text), "undo": {}, "unscoped": [" / ".join(t) for t in dropped]}
     if not dry_run:
         res["undo"] = _write(path, text, new_text)
     return res
@@ -512,19 +590,42 @@ def _edit_json_scoped(text: str, expected: Dict[str, Any]) -> str:
     return json.dumps(expected, indent=indent, ensure_ascii=False).replace("\n", nl) + nl
 
 
-def _edit_yaml_scoped(text: str, scope: List[str], sets: Dict[str, Any]) -> str:
-    """Change single-line ``KEY: value`` entries nested under *scope*, by
-    indentation, leaving every other byte alone."""
-    nl = "\r\n" if "\r\n" in text else "\n"
-    lines = text.splitlines()
-    lo, hi, depth = 0, len(lines), -1
+def _prune_empty(data: Dict[str, Any], scope: List[str]) -> None:
+    """Drop the sections along *scope* that a remove left empty, deepest
+    first (LibreLane reads an empty ``pdk::x:`` as null, not a section)."""
+    for n in range(len(scope), 0, -1):
+        parent = data
+        for k in scope[: n - 1]:
+            parent = parent.get(k) if isinstance(parent, dict) else None
+        if not isinstance(parent, dict):
+            return
+        sec = parent.get(scope[n - 1])
+        if isinstance(sec, dict) and not sec:
+            del parent[scope[n - 1]]
+        else:
+            return
+
+
+def _is_content(ln: str) -> bool:
+    return bool(ln.strip()) and not ln.lstrip().startswith("#")
+
+
+def _indent(ln: str) -> int:
+    return len(ln) - len(ln.lstrip(" "))
+
+
+def _yaml_bounds(lines: List[str], scope: List[str]) -> Tuple[int, int, int, int, int]:
+    """Where the section *scope* sits in the YAML lines: ``(header, lo, hi,
+    depth, child)`` with the body in ``lines[lo:hi]``, the header's indent
+    and the indent of the section's own entries."""
+    lo, hi, depth, header = 0, len(lines), -1, -1
     for k in scope:
         found = None
         for i in range(lo, hi):
             ln = lines[i]
-            if not ln.strip() or ln.lstrip().startswith("#"):
+            if not _is_content(ln):
                 continue
-            ind = len(ln) - len(ln.lstrip(" "))
+            ind = _indent(ln)
             if ind <= depth:
                 continue
             m = re.match(r"""^\s*(["']?)(.+?)\1\s*:\s*(#.*)?$""", ln)
@@ -537,14 +638,71 @@ def _edit_yaml_scoped(text: str, scope: List[str], sets: Dict[str, Any]) -> str:
         end = i + 1
         while end < hi:
             ln = lines[end]
-            if ln.strip() and not ln.lstrip().startswith("#") and len(ln) - len(ln.lstrip(" ")) <= ind:
+            if _is_content(ln) and _indent(ln) <= ind:
                 break
             end += 1
-        lo, hi, depth = i + 1, end, ind
+        lo, hi, depth, header = i + 1, end, ind, i
     # Only the section's own entries, not those of a section nested in it
     # (pdk::sky130* can hold an scl:: section that sets the same key).
-    child = next((len(ln) - len(ln.lstrip(" ")) for ln in lines[lo:hi]
-                  if ln.strip() and not ln.lstrip().startswith("#")), depth + 1)
+    child = next((_indent(ln) for ln in lines[lo:hi] if _is_content(ln)), depth + 1)
+    return header, lo, hi, depth, child
+
+
+def _remove_yaml_scoped(text: str, scope: List[str], key: str) -> str:
+    """Take *key* (one line, or a block indented under it) out of the
+    section *scope*; a section left with no entries loses its header too, and
+    so on up the trail. Every other byte stays."""
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines()
+    header, lo, hi, _depth, child = _yaml_bounds(lines, scope)
+    hits = [i for i in range(lo, hi)
+            if re.match(r"^(\s+)" + re.escape(key) + r"\s*:(\s|$)", lines[i]) and _indent(lines[i]) == child]
+    if len(hits) > 1:
+        raise ConfigEditError(f"{key} appears twice in the {' / '.join(scope)} section; fix the file by hand.")
+    if not hits:
+        raise ConfigEditError(f"The {' / '.join(scope)} section doesn't set {key}.")
+    i = hits[0]
+    end = i + 1
+    while end < hi and (not _is_content(lines[end]) or _indent(lines[end]) > child):
+        end += 1
+    # Trailing blank lines and comments before the next entry stay with it.
+    while end > i + 1 and not _is_content(lines[end - 1]):
+        end -= 1
+    del lines[i:end]
+    hi -= end - i
+    text2 = nl.join(lines) + nl
+    if not any(_is_content(ln) for ln in lines[lo:hi]):
+        return _drop_yaml_section(text2, scope)
+    return text2
+
+
+def _drop_yaml_section(text: str, scope: List[str]) -> str:
+    """Remove a section that has no entries left (its header and any comment
+    lines inside it), then its parents if they are left empty in turn."""
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines()
+    header, lo, hi, _d, _c = _yaml_bounds(lines, scope)
+    end = hi
+    while end > lo and not lines[end - 1].strip():
+        end -= 1   # blank lines after it keep separating what follows
+    del lines[header:end]
+    text2 = nl.join(lines) + nl
+    if len(scope) > 1:
+        pl = text2.splitlines()
+        _ph, plo, phi, _pd, _pc = _yaml_bounds(pl, scope[:-1])
+        if not any(_is_content(ln) for ln in pl[plo:phi]):
+            return _drop_yaml_section(text2, scope[:-1])
+    return text2
+
+
+def _edit_yaml_scoped(text: str, scope: List[str], sets: Dict[str, Any]) -> str:
+    """Change single-line ``KEY: value`` entries nested under *scope*, by
+    indentation, leaving every other byte alone."""
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines()
+    if not sets:
+        return text
+    _header, lo, hi, _depth, child = _yaml_bounds(lines, scope)
     for key, val in sets.items():
         hit = None
         for i in range(lo, hi):
@@ -571,6 +729,19 @@ def _edit_yaml_scoped(text: str, scope: List[str], sets: Dict[str, Any]) -> str:
 _HDL_EXTS = (".v", ".sv")
 
 
+def _entry_files(d: Path, entry: str) -> Tuple[List[str], bool]:
+    """The files one ``VERILOG_FILES`` entry names (absolute, resolved) and
+    whether it is a glob. A missing plain file is still named, so it stays
+    visible; a glob matching nothing names nothing."""
+    s = entry[len("dir::"):] if entry.startswith("dir::") else entry
+    p = s if os.path.isabs(s) else str(d / s)
+    if os.path.isfile(p):
+        return [str(Path(p).resolve())], False
+    if any(ch in s for ch in "*?["):
+        return [str(Path(m).resolve()) for m in sorted(glob.glob(p, recursive=True)) if os.path.isfile(m)], True
+    return [str(Path(p).resolve())], False
+
+
 def resolve_sources(design_dir: str | Path, data: Dict[str, Any]) -> Dict[str, Any]:
     """What the config's ``VERILOG_FILES`` resolves to, the way LibreLane's
     preprocessor does it for the common forms (``dir::`` relative to the
@@ -595,15 +766,9 @@ def resolve_sources(design_dir: str | Path, data: Dict[str, Any]) -> Dict[str, A
         if e.startswith(("ref::", "refg::", "expr::", "pdk_dir::")):
             return {"mode": "unknown", "entries": entries, "files": [], "globbed": False,
                     "reason": f"VERILOG_FILES uses '{e.split('::')[0]}::', which LanEx doesn't rewrite."}
-        s = e[len("dir::"):] if e.startswith("dir::") else e
-        p = s if os.path.isabs(s) else str(d / s)
-        if os.path.isfile(p):
-            files.append(str(Path(p).resolve()))
-        elif any(ch in s for ch in "*?["):
-            globbed = True
-            files.extend(str(Path(m).resolve()) for m in sorted(glob.glob(p, recursive=True)) if os.path.isfile(m))
-        else:
-            files.append(str(Path(p).resolve()))   # missing file: keep it visible
+        got, is_glob = _entry_files(d, e)
+        globbed = globbed or is_glob
+        files.extend(got)
     seen: List[str] = []
     for f in files:
         if f not in seen:
@@ -625,10 +790,50 @@ def sources_entries(design_dir: str | Path, files: Iterable[str]) -> List[str]:
     return out
 
 
-def set_sources(design_dir: str | Path, files: List[str]) -> Dict[str, Any]:
-    """Make ``VERILOG_FILES`` resolve to exactly *files*. A glob that already
-    resolves to that set is kept as it is; otherwise the list is written out
-    file by file. Returns :func:`set_keys`' result plus ``"kept_glob"``."""
+def plan_sources(design_dir: str | Path, entries: List[str], files: Iterable[str]) -> Dict[str, Any]:
+    """The ``VERILOG_FILES`` entries that resolve to exactly *files*, changing
+    as little as possible: every entry whose files all stay is kept as written
+    (a ``dir::src/*.v`` glob goes on picking up new files), a plain entry
+    whose file goes is dropped, and only a glob that matches a file that
+    goes is written out file by file. Files nothing covers are added after.
+
+    ``{"entries": [...], "expanded": [glob entries written out]}``."""
+    d = Path(design_dir).resolve()
+    want = [str(Path(f).resolve()) for f in files]
+    wanted = set(want)
+    out: List[str] = []
+    covered: set = set()
+    expanded: List[str] = []
+    for e in entries:
+        got, is_glob = _entry_files(d, e)
+        if is_glob:
+            if set(got) <= wanted:
+                out.append(e)            # nothing it matches goes (or it matches nothing yet)
+                covered.update(got)
+                continue
+            expanded.append(e)
+            for f in got:
+                if f in wanted and f not in covered:
+                    out.extend(sources_entries(d, [f]))
+                    covered.add(f)
+            continue
+        f = got[0]
+        if f in wanted and f not in covered:
+            out.append(e)
+            covered.add(f)
+    for f in want:
+        if f not in covered:
+            out.extend(sources_entries(d, [f]))
+            covered.add(f)
+    return {"entries": out, "expanded": expanded}
+
+
+def set_sources(design_dir: str | Path, files: List[str], *, dry_run: bool = False) -> Dict[str, Any]:
+    """Make ``VERILOG_FILES`` resolve to exactly *files*, keeping globs where
+    it can (:func:`plan_sources`). Refuses an empty list: a run of a config
+    with no design files fails at the first step. Returns :func:`set_keys`'
+    result plus ``kept_glob`` and ``expanded`` (the glob entries that had to
+    be written out file by file, so the caller can say so)."""
     info = read_config(design_dir)
     if not info["editable"]:
         raise ConfigEditError(info["reason"])
@@ -636,12 +841,49 @@ def set_sources(design_dir: str | Path, files: List[str]) -> Dict[str, Any]:
     if cur["mode"] == "unknown":
         raise ConfigEditError(cur["reason"])
     want = [str(Path(f).resolve()) for f in files]
+    if not want:
+        raise ConfigEditError("A chip needs at least one design file, so LanEx won't save an empty list. "
+                              "Tick the files to build first.")
     if cur["mode"] == "list" and sorted(cur["files"]) == sorted(want):
-        return {"path": info["path"], "name": info["name"], "changed": [], "scoped": {}, "kept_glob": cur["globbed"]}
-    # Keep the config's order for files that stay, new ones after.
-    ordered = [f for f in cur["files"] if f in want] + [f for f in want if f not in cur["files"]]
-    res = set_keys(design_dir, {"VERILOG_FILES": sources_entries(design_dir, ordered)})
-    res["kept_glob"] = False
+        return {"path": info["path"], "name": info["name"], "changed": [], "scoped": {},
+                "kept_glob": cur["globbed"], "expanded": [], "diff": []}
+    plan = plan_sources(design_dir, cur["entries"] if cur["mode"] == "list" else [], want)
+    entries = plan["entries"]
+    res = set_keys(design_dir, {"VERILOG_FILES": entries}, dry_run=dry_run)
+    res["kept_glob"] = any(any(ch in e for ch in "*?[") for e in entries)
+    res["expanded"] = plan["expanded"]
+    return res
+
+
+def follow_delete(design_dir: str | Path, abs_path: str) -> Dict[str, Any]:
+    """A file of the project was deleted: take it out of an explicit
+    ``VERILOG_FILES`` list (a glob already stops matching it by itself).
+    Never leaves the list empty: when the deleted file was the last one, the
+    config is left alone and ``last`` says why."""
+    info = read_config(design_dir)
+    if not info["path"] or not info["editable"]:
+        return {"changed": [], "name": info["name"]}
+    data = info["data"]
+    vf = data.get("VERILOG_FILES")
+    if vf is None or scoped_values(data, "VERILOG_FILES"):
+        return {"changed": [], "name": info["name"]}
+    d = Path(design_dir).resolve()
+    gone = str(Path(abs_path).resolve())
+    entries = [str(x) for x in vf] if isinstance(vf, list) else str(vf).split()
+    keep = []
+    for e in entries:
+        if e.startswith(("ref::", "refg::", "expr::", "pdk_dir::")):
+            return {"changed": [], "name": info["name"]}
+        got, is_glob = _entry_files(d, e)
+        if not is_glob and got == [gone]:
+            continue
+        keep.append(e)
+    if keep == entries:
+        return {"changed": [], "name": info["name"]}
+    if not keep:
+        return {"changed": [], "name": info["name"], "last": True}
+    res = set_keys(design_dir, {"VERILOG_FILES": keep})
+    res.pop("text", None)
     return res
 
 

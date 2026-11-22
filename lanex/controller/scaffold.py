@@ -23,6 +23,7 @@ renders a ``config.json`` using only **verified-real** LibreLane variables
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -149,10 +150,52 @@ def _apply_pdk_tuning(cfg: Dict[str, Any], manifest: Dict[str, Any], pdk: str,
             cfg["pdk::" + pat] = section
 
 
+_IDENT_RX = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Verilog and SystemVerilog reserved words a beginner might type as a name.
+_RESERVED = {
+    "always", "and", "assign", "begin", "buf", "case", "casex", "casez", "default", "else", "end",
+    "endcase", "endfunction", "endmodule", "endtask", "for", "forever", "function", "if", "initial",
+    "inout", "input", "integer", "localparam", "module", "nand", "negedge", "nor", "not", "or",
+    "output", "parameter", "posedge", "real", "reg", "repeat", "signed", "task", "time", "tri",
+    "while", "wire", "xor", "xnor", "logic", "bit", "byte", "int", "always_ff", "always_comb",
+    "always_latch", "interface", "package", "class", "enum", "struct", "typedef", "string",
+}
+
+
+def verilog_identifier(name: str, fallback: str = "top") -> str:
+    """*name* as a valid Verilog module name: anything but letters, digits and
+    ``_`` becomes ``_``, a leading digit gets a ``top_`` prefix and a reserved
+    word a ``_top`` suffix ("my chip" -> ``my_chip``, "1top" -> ``top_1top``).
+    The wizard shows the same result before the project is made (wizard.js)."""
+    s = re.sub(r"[^A-Za-z0-9_]+", "_", str(name or "").strip())
+    s = re.sub(r"_+", "_", s).strip("_")
+    if not s:
+        return fallback
+    if s[0].isdigit():
+        s = "top_" + s
+    if s.lower() in _RESERVED:
+        s = s + "_top"
+    return s
+
+
+def free_folder(dest: str | Path) -> Path:
+    """*dest* itself when it is free (missing or empty), else the first free
+    ``<name>-2``, ``<name>-3`` … next to it."""
+    p = Path(dest)
+
+    def free(x: Path) -> bool:
+        return not x.exists() or (x.is_dir() and not any(x.iterdir()))
+    if free(p):
+        return p
+    n = 2
+    while not free(p.with_name(f"{p.name}-{n}")):
+        n += 1
+    return p.with_name(f"{p.name}-{n}")
+
+
 def _rename_starter(dest: Path, old: str, new: str, written: List[str]) -> None:
-    import re
     src = dest / "src" / (old + ".v")
-    if not src.is_file() or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", new):
+    if not src.is_file() or not _IDENT_RX.fullmatch(new):
         return
     text = src.read_text(encoding="utf-8")
     text = re.sub(r"\bmodule\s+" + re.escape(old) + r"\b", "module " + new, text, count=1)
@@ -230,9 +273,16 @@ def create_project(
     dest = Path(dest_dir).expanduser().resolve()
     if dest.exists():
         if not dest.is_dir():
-            return {"ok": False, "error": "destination exists and is not a directory"}
+            return {"ok": False, "error": f"There is already a file named {dest.name} there. Pick another project name.",
+                    "suggest": free_folder(dest).name}
         if any(dest.iterdir()):
-            return {"ok": False, "error": "destination directory is not empty"}
+            # Never write into someone's folder; say so in plain words, with
+            # a name that is free (the wizard offers it).
+            return {"ok": False, "error": f"A folder named {dest.name} is already there and is not empty. "
+                                          f"Pick another project name, such as {free_folder(dest).name}.",
+                    "suggest": free_folder(dest).name}
+    if clock_period is not None and not (float(clock_period) > 0):
+        return {"ok": False, "error": "The clock period is a positive number of nanoseconds."}
     dest.mkdir(parents=True, exist_ok=True)
 
     verbatim = _copy_from(manifest)
@@ -266,7 +316,10 @@ def create_project(
             written.append(str(rel))
 
     tpl_top = manifest.get("top") or template
-    top = top or tpl_top
+    # A name that isn't a Verilog identifier ("my chip", "1top") would leave
+    # the starter module and DESIGN_NAME disagreeing: use the nearest valid
+    # one, which the result reports (and the wizard showed before).
+    top = verilog_identifier(top or tpl_top, tpl_top)
     if manifest.get("kind") == "blank" and top != tpl_top:
         # A blank project's starter module takes the name the person chose, so
         # DESIGN_NAME, the module and its file all agree.
