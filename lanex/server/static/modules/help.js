@@ -52,11 +52,11 @@ const CATALOG = {
     title: "Runs",
     goal: "Every run of the design in one table: find, compare and sweep runs, and pick the one the results pages show.",
     how: [
-      "One row per run: result, setup and hold slack, die and std-cell area, utilisation, power in mW, checks (DRC, LVS and antenna) and runtime. Click a heading to sort. Columns that do not fit the window step aside; Columns brings any of them back.",
+      "One row per run: result, setup and hold slack, die and std-cell area, utilisation, power (in the unit that suits the runs shown), checks (DRC, LVS and antenna) and runtime. Click a heading to sort. Columns that do not fit the window step aside; Columns brings any of them back. The search and filters are kept per project; Export CSV under the table saves the columns shown.",
       "Click a row to show that run on Flow, Layout, Analytics and Verify. The chevron (or a double-click) opens its details beside the table: how it ended, its numbers against the baseline, where it came from, the settings it changed, and its actions (open it on a page, run again with changes, copy its command, pin, bundle, report, files, delete). Esc closes the panel.",
       "Star a run as the baseline: every number turns green or red against it, and the panel lists the settings that differ.",
-      "Tick two to six runs, then Compare: Analytics opens its Compare section with them picked.",
-      "New sweep runs the design at several values of one to three settings, one run per point. A sweep is one row: how many runs and how they went, and under each number the best of its clean runs. Open it for its points (each shows the value it tried), the best for timing and for area with Use this configuration, what failed and where, and a chart of the trend.",
+      "Tick runs (the box in the heading ticks every run shown, a sweep's box ticks its runs), then Compare (two to twelve), Delete or Export CSV.",
+      "New sweep runs the design at several values of one to three settings, one run per point. A sweep is one row: how many runs and how they went, and under each number the best of its clean runs. Open it for its points in the order they ran, the headline (the fastest clock that met timing, or the best for timing and for area, each with Use this configuration), what failed and why it ended short, a table of results by value, charts of setup slack and a metric you pick against the swept value, and Compare all, Rerun failed, Add values and Export CSV.",
     ],
     samples: [
       { key: "Sweep values", sample: "35, 50, 65  or  35:65:15" },
@@ -112,7 +112,7 @@ const CATALOG = {
       "Timing shows setup and hold side by side, slack in every PVT corner (the outlined row is the worst), and how slack moved at each timing check from synthesis to signoff.",
       "Area, Power and Routing break those numbers down: floorplan to scale, area by cell type, the cells used, power split, IR drop per supply net, wire and router convergence.",
       "Flow shows the design at the end of each stage, where the runtime went, and tool warnings by message code. History plots the same numbers over this design's runs; click a point to open that run.",
-      "Compare puts up to six runs side by side, from any design you have opened. The first is the reference (the star on another run makes it the reference): every number shows how far it moved, green when better and red when worse. Settings that differ come first; the metric table shows only the metrics that differ until you ask for all.",
+      "Compare puts up to twelve runs side by side, from any design you have opened. The first is the reference (the star on another run makes it the reference): every number shows how far it moved, green when better and red when worse. Settings that differ come first; the metric table shows only the metrics that differ until you ask for all.",
       "All metrics lists every value with its raw key. Rows with corners or nets open with the arrow. The magnifier opens the tool's own file at that line.",
     ],
     pitfalls: [

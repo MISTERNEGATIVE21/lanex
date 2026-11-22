@@ -21,8 +21,10 @@ import { go } from "./nav.js";
 import * as FS from "./flowstages.js";
 import { icon } from "./icons.js";
 import { verdictOf as cardVerdict, warningsHtml, fmtDur } from "./reportcard.js";
-import { localeNum, localeTime, localeDate } from "./intlcache.js";
+import { localeTime, localeDate } from "./intlcache.js";
 import { loadingStart, pageSkeleton } from "./loading.js";
+import * as MF from "./metricfmt.js";
+import { toCsv, downloadCsv } from "./csvutil.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -68,20 +70,18 @@ const COLS = [
   { id: "origin", label: "Origin", sort: (r) => originText(r), def: 2000 },
   { id: "design", label: "Design", sort: (r) => designLabel(r._design), allOnly: true, def: true },
   { id: "pdk", label: "PDK", sort: (r) => r.pdk || "", def: false },
-  { id: "wns", label: "Setup WNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__setup__ws"), f: (v) => signed(v), def: true,
-    tip: "Worst setup slack in any corner (ns). Positive: the design meets its clock." },
-  { id: "tns", label: "Setup TNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__setup__tns"), f: (v) => signed(v), def: 1500,
-    tip: "Total negative setup slack (ns). 0 when every path meets timing." },
-  { id: "hold", label: "Hold WNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__hold__ws"), f: (v) => signed(v), def: 1500,
-    tip: "Worst hold slack in any corner (ns)." },
-  { id: "die", label: "Die area", unit: "µm²", dir: -1, get: (r) => km(r, "design__die__area"), f: (v) => grp(v), def: 1500,
-    tip: "design__die__area: the whole die, in µm²." },
-  { id: "cells", label: "Std-cell area", unit: "µm²", dir: -1, get: (r) => km(r, "design__instance__area__stdcell"), f: (v) => grp(v), def: true,
-    tip: "design__instance__area__stdcell: the standard cells' area in µm², without fill, tap or decap cells." },
-  { id: "util", label: "Util", unit: "%", dir: 0, get: (r) => { const u = km(r, "design__instance__utilization"); return u == null ? null : u * 100; },
-    f: (v) => (Math.round(v * 10) / 10).toFixed(1), def: true, tip: "How full the core is with cells at the end (design__instance__utilization)." },
-  { id: "power", label: "Power", unit: "mW", dir: -1, get: (r) => { const p = km(r, "power__total"); return p == null ? null : p * 1e3; },
-    f: (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(3)), def: true, tip: "Total power OpenROAD estimated (power__total), in mW." },
+  // The metric columns show LibreLane's values through the one formatter
+  // (metricfmt.js) Compare, the sweep views and Analytics use: slack signed in
+  // ns, areas in µm², utilisation in %, power in the prefix that suits the
+  // runs shown (one prefix down the column).
+  metricCol("wns", "Setup WNS", "timing__setup__ws", 1, true, "Worst setup slack in any corner (ns). Positive: the design meets its clock."),
+  metricCol("tns", "Setup TNS", "timing__setup__tns", 1, 1500, "Total negative setup slack (ns). 0 when every path meets timing."),
+  metricCol("hold", "Hold WNS", "timing__hold__ws", 1, 1500, "Worst hold slack in any corner (ns)."),
+  metricCol("die", "Die area", "design__die__area", -1, 1500, "design__die__area: the whole die, in µm²."),
+  metricCol("cells", "Std-cell area", "design__instance__area__stdcell", -1, true,
+    "design__instance__area__stdcell: the standard cells' area in µm², without fill, tap or decap cells."),
+  metricCol("util", "Util", "design__instance__utilization", 0, true, "How full the core is with cells at the end (design__instance__utilization)."),
+  metricCol("power", "Power", "power__total", -1, true, "Total power OpenROAD estimated (power__total)."),
   { id: "checks", label: "DRC · LVS · Ant", dir: -1, get: (r) => { const c = checksOf(r); return c ? c.total : null; }, def: true,
     tip: "Design-rule errors (worst of Magic, KLayout and the router), LVS errors and antenna violations. Not checked: blank." },
   { id: "runtime", label: "Runtime", dir: -1, get: (r) => num(r.wall_time_s), f: (v) => fmtDur(v), def: 1300, tip: "The sum of every step's time." },
@@ -91,8 +91,30 @@ const COLS = [
 // The column heads: one line each, short enough that none wraps.
 const HEADS = { die: "Die", cells: "Std cells", checks: "Checks", changed: "Changed" };
 const VERDICT_ORDER = { running: 0, passed: 1, warning: 2, incomplete: 3, stopped: 4, failed: 5 };
-const signed = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2);
-const grp = (v) => localeNum(Math.round(v));
+// One prefix for the power column, from the runs shown (renderRuns).
+let _powerScale = null;
+function metricCol(id, label, key, dir, def, tip) {
+  return {
+    id, label, key, dir, def, tip,
+    get: (r) => km(r, key),
+    f: (v) => (key === "power__total" ? MF.showAt(key, v, _powerScale) : MF.show(key, v, { compact: true })).text,
+    get unit() { return key === "power__total" ? (_powerScale ? _powerScale.unit : "W") : MF.show(key, 1).unit; },
+  };
+}
+// A difference too small to mean anything: 0.05 % of the baseline, and at
+// least 5 ps of slack or a second of runtime (values are LibreLane's own
+// units: W, a 0–1 ratio, µm², so no other absolute floor applies).
+function sameAs(c, d, b) {
+  const floor = c.id === "runtime" ? 1 : c.unit === "ns" ? 0.005 : 0;
+  return Math.abs(d) <= Math.max(Math.abs(b) * 5e-4, floor);
+}
+// The exact value, for a cell's hover: more digits than the cell, in its unit.
+function exactOf(c, v) {
+  if (c.id === "runtime") return fmtDur(v);
+  const u = c.key ? MF.unitOf(MF.parseKey(c.key).base) : c.unit || "";
+  if (u === "ratio") return String(Number((v * 100).toPrecision(6))) + " %";
+  return String(Number(v.toPrecision(6))) + (u ? " " + u : "");
+}
 
 const COLS_KEY = "ll.runsCols", SORT_KEY = "ll.runsSort", BASE_KEY = "ll.runsBaseline", OPEN_KEY = "ll.runsOpenSweeps";
 function visibleCols(scope) {
@@ -210,6 +232,33 @@ let _renderSeq = 0;
 const CHANGES = new Map();     // keyOf(run) -> [{var, from, to}] vs the baseline
 let _changesKey = "";
 
+// The search and filter chips, kept per project (and once for "All
+// designs"), so a reload or a project switch and back finds them as left.
+const FILTER_KEY = "ll.runsFilters";
+let _filterFor = null, _qText = "";
+function filterSlot() { return getRunScope() === "all" ? "*all" : normDir(state.designDir) || ""; }
+function loadFilters() {
+  const k = filterSlot();
+  if (k === _filterFor) return;
+  _filterFor = k;
+  const f = ((safeStorage.getJSON(FILTER_KEY, {}) || {})[k]) || {};
+  _qText = typeof f.q === "string" ? f.q : "";
+  F.q = _qText.toLowerCase();
+  for (const x of ["status", "origin", "pdk"]) F[x] = typeof f[x] === "string" ? f[x] : "";
+  const fi = document.getElementById("runs-filter");
+  if (fi && fi.value !== _qText) fi.value = _qText;
+}
+function saveFilters() {
+  const m = safeStorage.getJSON(FILTER_KEY, {}) || {};
+  const k = filterSlot();
+  delete m[k];
+  if (_qText || F.status || F.origin || F.pdk) m[k] = { q: _qText, status: F.status, origin: F.origin, pdk: F.pdk };
+  // The most recent few dozen projects are enough.
+  const keys = Object.keys(m);
+  for (const old of keys.slice(0, Math.max(0, keys.length - 40))) delete m[old];
+  safeStorage.setJSON(FILTER_KEY, m);
+}
+
 function baselineTag(design) { return (safeStorage.getJSON(BASE_KEY, {}) || {})[normDir(design)] || ""; }
 function setBaselineTag(design, tag) {
   const m = safeStorage.getJSON(BASE_KEY, {}) || {};
@@ -224,7 +273,7 @@ function wire() {
     b.addEventListener("click", () => { setRunScope(b.dataset.scope); renderRuns(); }));
   onContext(() => paintViewing());
   const fi = document.getElementById("runs-filter");
-  if (fi) fi.addEventListener("input", () => { F.q = fi.value.toLowerCase(); renderRuns({ cached: true }); });
+  if (fi) fi.addEventListener("input", () => { _qText = fi.value; F.q = fi.value.toLowerCase(); saveFilters(); renderRuns({ cached: true }); });
   document.getElementById("runs-import")?.addEventListener("click", () => importRunFlow());
   document.getElementById("runs-new-sweep")?.addEventListener("click", () => import("./sweeps.js").then((m) => m.openSweepSheet()));
   // The column picker: a popover on the overlay stack (Esc, an outside press).
@@ -280,7 +329,7 @@ function paintChips(runs) {
     el.innerHTML = opts.map(([v, label, n]) =>
       "<button class='rn-segb" + (F[key] === v ? " is-on" : "") + "' data-v='" + esc(v) + "' aria-pressed='" + (F[key] === v) + "'>" +
       esc(label) + (n != null ? " <span class='rn-n'>" + n + "</span>" : "") + "</button>").join("");
-    el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { F[key] = b.dataset.v; renderRuns({ cached: true }); }));
+    el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { F[key] = b.dataset.v; saveFilters(); renderRuns({ cached: true }); }));
   };
   const cnt = (fn) => runs.filter(fn).length;
   chip("rn-status", "status", [["", "All", runs.length], ["passed", "Clean", cnt((r) => verdictOf(r).state === "passed")],
@@ -328,6 +377,7 @@ export async function renderRuns({ cached = false } = {}) {
   const table = document.getElementById("runs-table");
   if (!table) return;
   wire();
+  loadFilters();
   const scope = getRunScope();
   const key = scope + "\0" + normDir(state.designDir);
   const my = ++_renderSeq;
@@ -362,6 +412,9 @@ export async function renderRuns({ cached = false } = {}) {
   note("");
   _shown = { key, runs };
   if (scope !== "all") state.runs = runs;
+  // A remembered PDK filter that no run has any more would hide every run
+  // with no chip left to clear it.
+  if (F.pdk && !runs.some((r) => r.pdk === F.pdk)) { F.pdk = ""; saveFilters(); }
   paintChips(runs);
   paintLive();
   syncSide();
@@ -380,7 +433,8 @@ export async function renderRuns({ cached = false } = {}) {
     empty.innerHTML = "<h3>No runs match</h3><p>Nothing fits the search and filters. There are " + runs.length + " runs in all.</p>" +
       "<button class='btn' id='rn-clear-filters'>Clear the filters</button>";
     empty.querySelector("#rn-clear-filters").onclick = () => {
-      F.q = F.status = F.origin = F.pdk = "";
+      F.q = F.status = F.origin = F.pdk = _qText = "";
+      saveFilters();
       const fi = document.getElementById("runs-filter"); if (fi) fi.value = "";
       renderRuns({ cached: true });
     };
@@ -389,6 +443,7 @@ export async function renderRuns({ cached = false } = {}) {
   }
   wrap.hidden = false; empty.hidden = true;
   const cols = visibleCols(scope);
+  _powerScale = MF.scaleOf("power__total", shown.map((r) => km(r, "power__total")));
   _baseMemo = new Map();
   _model = { items: buildItems(sortRuns(shown)), cols, a: 0, b: 0, windowed: false };
   paintTable(table, _model);
@@ -419,7 +474,9 @@ function paintFoot(runs, shown) {
   foot.innerHTML = "<span>" + n + (sweeps ? " · " + sweeps + " sweep" + (sweeps === 1 ? "" : "s") : "") + "</span>" +
     (base
       ? "<span>Baseline <code>" + esc(base) + "</code></span><span class='rn-key'><i style='background:var(--pass)'></i>better than it</span><span class='rn-key'><i style='background:var(--fail)'></i>worse</span>"
-      : "<span>Star a run to make it the baseline: every number is then coloured better or worse than it.</span>");
+      : "<span>Star a run to make it the baseline: every number is then coloured better or worse than it.</span>") +
+    "<span class='rn-spacer'></span><button class='linklike rn-foot-csv' title='The columns shown, one row per run shown'>" + icon("download", { size: 12 }) + " Export CSV</button>";
+  foot.querySelector(".rn-foot-csv").onclick = () => exportRunsCsv(sortRuns(shown));
 }
 
 function headHtml(cols) {
@@ -431,7 +488,7 @@ function headHtml(cols) {
       esc(HEADS[c.id] || c.label) + (c.unit ? " <small>" + esc(c.unit) + "</small>" : "") +
       "<span class='rn-arrow' aria-hidden='true'>" + (on ? (_sort.dir > 0 ? "▲" : "▼") : "") + "</span></button></th>";
   };
-  return "<thead><tr><th class='rn-th rn-c-pick'><span class='sr-only'>Select</span></th>" +
+  return "<thead><tr><th class='rn-th rn-c-pick'><input type='checkbox' class='rn-pick rn-pick-all' aria-label='Select every run shown' title='Select every run shown'/></th>" +
     "<th class='rn-th rn-c-base' title='Baseline: every number is coloured against it'>★</th>" + cols.map(th).join("") + "</tr></thead>";
 }
 
@@ -452,6 +509,10 @@ function buildItems(list) {
   for (const o of order) {
     if (o.run) { items.push({ key: keyOf(o.run), run: o.run }); continue; }
     const g = groups.get(o.group);
+    // A sweep's points in the order they were planned (the sweep's own
+    // order), not the table's sort.
+    const at = (r) => { const i = (g.sw.tags || []).indexOf(r.tag); return i < 0 ? 1e9 : i; };
+    g.runs.sort((a, b) => at(a) - at(b) || String(a.started_at).localeCompare(String(b.started_at)));
     const open = _openSweeps.has(o.group);
     items.push({ key: o.group, group: g, gk: o.group, open });
     if (open) for (const r of g.runs) items.push({ key: keyOf(r), run: r, child: g.sw });
@@ -666,9 +727,15 @@ function afterInsert(table, m, from, to, only = null) {
     if (it.group && it.open) {
       const el = table.querySelector(".rn-sw-sum[data-sum='" + CSS.escape(it.gk) + "']");
       const g = it.group.runs;
-      if (el && g.length) import("./sweeps.js").then((mod) => mod.paintSweepSummary(el, it.group.sw, g, { verdictOf, failCode, baseline: baselineTag(g[0]._design) }));
+      if (el && g.length) import("./sweeps.js").then((mod) => mod.paintSweepSummary(el, it.group.sw, g, {
+        verdictOf, failCode, baseline: baselineTag(g[0]._design),
+        // A results row opens that run's panel; "Select its runs" ticks them.
+        openRun: (r) => { setRun(r.tag, r._design); openSide(r); },
+        selectRuns: (rs) => pickRuns(rs, true),
+      }));
     }
   }
+  syncPickBoxes();
 }
 
 // The widest cell of each column, from every row: up to three collapsed rows.
@@ -808,7 +875,7 @@ function cellHtml(c, r, base) {
     const b = c.get(base);
     if (b != null) {
       const d = v - b;
-      const same = Math.abs(d) <= Math.max(Math.abs(b) * 5e-4, c.id === "runtime" ? 1 : 0.005);
+      const same = sameAs(c, d, b);
       if (!same) {
         cls = (d > 0) === (c.dir > 0) ? " is-better" : " is-worse";
         delta = " (baseline " + (c.f ? c.f(b) : b) + ")";
@@ -817,8 +884,7 @@ function cellHtml(c, r, base) {
   }
   const neg = (c.id === "wns" || c.id === "tns" || c.id === "hold") && v < 0 ? " is-neg" : "";
   // The tooltip has more digits than the cell, not all sixteen of the float.
-  const exact = c.id === "runtime" ? fmtDur(v) : String(Number(v.toPrecision(6))) + (c.unit ? " " + c.unit : "");
-  return "<td class='rn-c-" + c.id + " is-num" + cls + neg + "' title='" + esc(c.label + ": " + exact + delta) + "'>" + esc(c.f ? c.f(v) : v) + "</td>";
+  return "<td class='rn-c-" + c.id + " is-num" + cls + neg + "' title='" + esc(c.label + ": " + exactOf(c, v) + delta) + "'>" + esc(c.f ? c.f(v) : v) + "</td>";
 }
 const short = (s) => { s = String(s ?? "—"); return s.length > 14 ? s.slice(0, 13) + "…" : s; };
 
@@ -849,13 +915,14 @@ function nameCellHtml(r, cols, child, viewing = false) {
     "<span class='rn-viewing' title='Flow, Layout, Analytics and Verify show this run'" + (viewing ? " style='display:inline-block'" : "") + ">shown</span></div>" + lineageHtml(r) + "</td>";
 }
 
-// "FP_CORE_UTIL 40–70" (a range when the values are numbers), axes joined by ×.
-function sweepAxesText(sw) {
+// "CLOCK_PERIOD 10, 9, 8": the values each setting tried, in the sweep's
+// order; a long list keeps its first three and its last ("40, 45, 50 … 80,
+// 9 values"). Axes joined by ×.
+export function sweepAxesText(sw) {
   return (sw.axes || []).map((a) => {
     const vs = (a.values || []).map(String);
-    const nums = vs.map(Number);
-    const range = nums.every(Number.isFinite) && vs.length > 2 ? Math.min(...nums) + "–" + Math.max(...nums) : vs.join(", ");
-    return a.var + " " + range;
+    const list = vs.length > 5 ? vs.slice(0, 3).join(", ") + " … " + vs[vs.length - 1] + ", " + vs.length + " values" : vs.join(", ");
+    return a.var + " " + list;
   }).join(" × ") || "settings";
 }
 const sweepNameText = (g) => "Sweep " + sweepAxesText(g.sw) + " 00";
@@ -868,13 +935,32 @@ function sweepRowHtml(g, cols, gk, open) {
   const failed = rs.filter((r) => verdictOf(r).state === "failed");
   const reasons = [...new Set(failed.map((r) => failCode(r)).filter(Boolean))];
   const passed = rs.filter((r) => verdictOf(r).state === "passed");
-  const running = rs.some((r) => verdictOf(r).state === "running");
-  // Fewer runs than planned: say why (a Stop, or "stop at the first clean").
-  const short = Number.isFinite(sw.count) && rs.length < sw.count;
+  const running = !!sw.active || rs.some((r) => verdictOf(r).state === "running");
+  // Fewer runs than planned: say why, from how the sweep's queue ended
+  // (dse.record_end; "interrupted" when LanEx stopped before it could say).
+  // A point run again (Rerun failed, Run the ones left) replaces the one it
+  // reran: planned and ran count points, not runs.
+  const reruns = sw.reruns || {};
+  const have = new Set(rs.map((r) => r.tag));
+  const planned = Number.isFinite(sw.count) ? sw.count - Object.keys(reruns).length : NaN;
+  const ran = rs.length - rs.filter((r) => reruns[r.tag] && have.has(reruns[r.tag])).length;
+  const short = Number.isFinite(planned) && ran < planned;
   const stopped = rs.some((r) => verdictOf(r).state === "stopped");
-  const why = running ? "Running now" : short ? (stopped ? "You stopped it" : sw.stop_when_good && passed.length ? "Stopped at the first clean run" : "") : "";
-  const tone = running ? "live" : failed.length && !passed.length ? "fail" : failed.length || (short && stopped) ? "warn" : passed.length ? "pass" : "warn";
-  const count = rs.length + (short ? " of " + sw.count : "") + " run" + ((short ? sw.count : rs.length) === 1 ? "" : "s");
+  const end = (sw.ended && sw.ended.reason) || "";
+  const cut = end === "interrupted" && rs.some((r) => verdictOf(r).state === "incomplete");
+  const [why, word] = running ? ["Running now", ""] : !short ? (cut ? ["LanEx was closed or restarted while a point ran", "interrupted"] : ["", ""])
+    : end === "stopped" ? ["You stopped it", "stopped"]
+    : end === "first-clean" ? ["Stopped at the first clean run, as asked", "first clean"]
+    : end === "failed-fast" ? ["Stopped: two points failed the same way before any step ran (" + (sw.ended.detail || "") + "), so the rest would too", "failed early"]
+    : end === "done" ? ["Some of its runs were deleted", "runs deleted"]
+    : end === "interrupted" && !sw.ended.assumed ? ["LanEx was closed or restarted while it ran", "interrupted"]
+    : stopped ? ["It was stopped", "stopped"]
+    // Recorded before LanEx noted why a sweep ended.
+    : sw.stop_when_good && passed.length ? ["Stopped at the first clean run, as asked", "first clean"]
+    : ["LanEx was closed or restarted while it ran", "interrupted"];
+  const tone = running ? "live" : failed.length && !passed.length ? "fail" : failed.length || short ? "warn" : passed.length ? "pass" : "warn";
+  const count = ran + (short ? " of " + planned : "") + " run" + ((short ? planned : ran) === 1 ? "" : "s");
+  const picked = rs.filter((r) => _picked.has(keyOf(r))).length;
   const cell = (c) => {
     if (c.id === "name") {
       return "<td class='rn-c-name'><div class='rn-name'>" +
@@ -883,7 +969,7 @@ function sweepRowHtml(g, cols, gk, open) {
     }
     if (c.id === "verdict") {
       return "<td class='rn-c-verdict'" + (why ? " title='" + esc(why) + "'" : "") + "><span class='rn-v is-" + tone + "'><i aria-hidden='true'></i>" + esc(count) +
-        (failed.length ? "<span class='rn-sw-n'>· <span class='rn-bad'>" + failed.length + " failed</span></span>" : why && !running ? "<span class='rn-sw-n'>· " + esc(stopped ? "stopped" : "first clean") + "</span>" : "") + "</span></td>";
+        (failed.length ? "<span class='rn-sw-n'>· <span class='rn-bad'>" + failed.length + " failed</span></span>" : word ? "<span class='rn-sw-n'>· " + esc(word) + "</span>" : "") + "</span></td>";
     }
     // An old manifest's time had no zone: the server read it as its own clock
     // (dse.load_sweeps) and says so; the dotted line shows it is assumed.
@@ -911,7 +997,8 @@ function sweepRowHtml(g, cols, gk, open) {
     return "<td class='rn-c-" + c.id + (c.get ? " is-num" : "") + "'></td>";
   };
   const n = cols.length + 2;
-  return "<tr class='rn-sweep" + (open ? " is-open" : "") + "' data-group='" + esc(gk) + "'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" +
+  return "<tr class='rn-sweep" + (open ? " is-open" : "") + "' data-group='" + esc(gk) + "'><td class='rn-c-pick'>" +
+    "<input type='checkbox' class='rn-pick rn-pick-sweep' aria-label='Select the runs of this sweep'" + (picked && picked === rs.length ? " checked" : "") + (picked && picked < rs.length ? " data-mixed='1'" : "") + "/></td><td class='rn-c-base'></td>" +
     cols.map(cell).join("") + "</tr>" +
     (open ? "<tr class='rn-sweep-sum'><td colspan='" + n + "'><div class='rn-sw-sum' data-sum='" + esc(gk) + "'></div></td></tr>" : "");
 }
@@ -957,6 +1044,13 @@ function wireTable(table, runs) {
   table.onclick = (e) => {
     const t = e.target;
     if (t.closest("tr.rn-sweep-sum")) return;
+    // Every run shown, or every run of a sweep, at once.
+    if (t.classList && t.classList.contains("rn-pick-all")) { pickRuns(_shown.runs.filter(matches), t.checked); return; }
+    if (t.classList && t.classList.contains("rn-pick-sweep")) {
+      const it = _model && _model.items.find((x) => x.group && x.gk === t.closest("tr.rn-sweep").dataset.group);
+      if (it) pickRuns(it.group.runs, t.checked);
+      return;
+    }
     const grp = t.closest("tr.rn-sweep");
     if (grp) {
       const gk = grp.dataset.group;
@@ -968,12 +1062,10 @@ function wireTable(table, runs) {
     const r = rowOf(t, runs);
     if (!r) return;
     if (t.closest(".rn-pick")) {
+      // No cap here: delete and export take any number. Compare's own limit
+      // shows on its button.
       const k = keyOf(r);
-      if (t.checked) {
-        if (_picked.size >= 6) { t.checked = false; toast.show("Compare takes up to six runs.", "info"); return; }
-        _picked.add(k);
-      } else _picked.delete(k);
-      t.closest("tr").classList.toggle("is-picked", t.checked);
+      if (t.checked) _picked.add(k); else _picked.delete(k);
       syncSelection();
       return;
     }
@@ -1015,32 +1107,104 @@ function paintViewing() {
 }
 
 // ------------------------------------------------------------------ selection
+const COMPARE_MAX = 12;        // compare.js MAX
 function pickedRuns() { return _shown.runs.filter((r) => _picked.has(keyOf(r))); }
+function pickRuns(runs, on) {
+  for (const r of runs) { if (on) _picked.add(keyOf(r)); else _picked.delete(keyOf(r)); }
+  syncSelection();
+}
+// The ticks follow the selection without redrawing the table: every row,
+// each sweep's box (ticked, or a dash when some of its runs are), the
+// select-all box over the runs the filters show.
+function syncPickBoxes() {
+  const table = document.getElementById("runs-table");
+  if (!table) return;
+  table.querySelectorAll("tr.rn-row").forEach((tr) => {
+    const on = _picked.has(tr.dataset.key);
+    tr.classList.toggle("is-picked", on);
+    const cb = tr.querySelector("input.rn-pick");
+    if (cb) cb.checked = on;
+  });
+  const mark = (cb, runs) => {
+    const n = runs.filter((r) => _picked.has(keyOf(r))).length;
+    cb.checked = !!runs.length && n === runs.length;
+    cb.indeterminate = n > 0 && n < runs.length;
+  };
+  table.querySelectorAll("tr.rn-sweep:not(.rn-sizer) input.rn-pick-sweep").forEach((cb) => {
+    const it = _model && _model.items.find((x) => x.group && x.gk === cb.closest("tr").dataset.group);
+    if (it) mark(cb, it.group.runs);
+  });
+  const all = table.querySelector("input.rn-pick-all");
+  if (all) mark(all, _shown.runs.filter(matches));
+}
 function syncSelection() {
   const bar = document.getElementById("rn-selbar");
   if (!bar) return;
   // Runs that are gone (deleted, filtered by scope) leave the selection.
   const live = new Set(_shown.runs.map(keyOf));
   for (const k of [..._picked]) if (!live.has(k)) _picked.delete(k);
+  syncPickBoxes();
   const n = _picked.size;
   bar.hidden = n === 0;
   if (!n) return;
+  const many = n > COMPARE_MAX;
   bar.innerHTML = "<b>" + n + " run" + (n === 1 ? "" : "s") + " selected</b>" +
-    "<button class='btn btn-primary btn-sm' data-sel='compare'" + (n < 2 ? " disabled title='Pick at least two'" : "") + ">" + icon("diff", { size: 13 }) + " Compare</button>" +
-    "<button class='btn btn-ghost btn-sm' data-sel='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
+    "<button class='btn btn-primary btn-sm' data-sel='compare'" + (n < 2 ? " disabled title='Pick at least two'" : many ? " disabled title='Compare takes up to " + COMPARE_MAX + " runs'" : "") + ">" + icon("diff", { size: 13 }) + " Compare</button>" +
+    "<button class='btn btn-ghost btn-sm' data-sel='delete'>" + icon("trash", { size: 13 }) + " Delete " + n + "</button>" +
+    "<button class='btn btn-ghost btn-sm' data-sel='csv'>" + icon("download", { size: 13 }) + " Export CSV</button>" +
     "<button class='btn btn-ghost btn-sm' data-sel='clear'>Clear</button>" +
-    (n < 2 ? "<span class='muted'>Tick one more to compare.</span>" : "");
+    (n < 2 ? "<span class='muted'>Tick one more to compare.</span>" : many ? "<span class='muted'>Compare takes up to " + COMPARE_MAX + ": untick " + (n - COMPARE_MAX) + ".</span>" : "");
   bar.querySelector("[data-sel='compare']").onclick = () => compareRuns(pickedRuns());
   bar.querySelector("[data-sel='delete']").onclick = () => batchDelete();
-  bar.querySelector("[data-sel='clear']").onclick = () => { _picked.clear(); renderRuns({ cached: true }); };
+  bar.querySelector("[data-sel='csv']").onclick = () => exportRunsCsv(pickedRuns(), "selected");
+  bar.querySelector("[data-sel='clear']").onclick = () => { _picked.clear(); syncSelection(); };
 }
 
+// Compare these runs (up to COMPARE_MAX of them; more are cut, and it says so).
 export async function compareRuns(runs) {
   if (runs.length < 2) return;
+  if (runs.length > COMPARE_MAX) {
+    toast.show("Compare takes up to " + COMPARE_MAX + " runs: it shows the first " + COMPARE_MAX + " of " + runs.length +
+      ". Swap any of them there with Add a run.", "info", 9000);
+  }
   const m = await import("./compare.js");
-  m.preselectCompare(runs.map((r) => r.run_dir).filter(Boolean));
+  m.preselectCompare(runs.slice(0, COMPARE_MAX).map((r) => r.run_dir).filter(Boolean));
   // Showing Analytics renders Compare, which ticks the pick and compares.
   go("analytics", { section: "analytics-compare" });
+}
+
+// The Runs table as a CSV: the columns shown, one row per run (a sweep's
+// points too, folded or not), the numbers exact as LibreLane wrote them.
+function exportRunsCsv(runs, what) {
+  if (!runs.length) return;
+  const cols = visibleCols(getRunScope());
+  const rawUnit = (c) => (c.key ? (MF.unitOf(MF.parseKey(c.key).base) === "ratio" ? "fraction" : MF.unitOf(MF.parseKey(c.key).base)) : c.id === "runtime" ? "s" : "");
+  const head = [];
+  for (const c of cols) {
+    if (c.id === "checks") head.push("DRC errors", "LVS errors", "Antenna violations");
+    else head.push(c.label + (rawUnit(c) ? " (" + rawUnit(c) + ")" : ""));
+    if (c.id === "name") head.push("Sweep point");
+  }
+  const rows = [head];
+  for (const r of runs) {
+    const row = [];
+    for (const c of cols) {
+      if (c.id === "name") { row.push(r.tag, valuesText(pointValues(r, sweepOf(r)))); continue; }
+      if (c.id === "verdict") { const v = verdictOf(r); row.push(v.label || v.state); continue; }
+      if (c.id === "when") { row.push(r.started_at || ""); continue; }
+      if (c.id === "origin") { row.push(originText(r)); continue; }
+      if (c.id === "design") { row.push(designLabel(r._design)); continue; }
+      if (c.id === "pdk") { row.push(r.pdk || ""); continue; }
+      if (c.id === "note") { row.push(r.note || ""); continue; }
+      if (c.id === "changed") { row.push((CHANGES.get(keyOf(r)) || []).map((x) => x.var + ": " + x.from + " -> " + x.to).join("; ")); continue; }
+      if (c.id === "checks") { const k = checksOf(r); row.push(k ? k.drc ?? "" : "", k ? k.lvs ?? "" : "", k ? k.ant ?? "" : ""); continue; }
+      const v = c.get ? c.get(r) : null;
+      row.push(v == null ? "" : v);
+    }
+    rows.push(row);
+  }
+  const name = (getRunScope() === "all" ? "all-designs" : designLabel(state.designDir) || "runs").replace(/[^A-Za-z0-9._-]+/g, "-");
+  downloadCsv(name + "-runs" + (what ? "-" + what : "") + ".csv", toCsv(rows));
 }
 
 // ------------------------------------------------------------------ lazy facts
@@ -1079,24 +1243,41 @@ async function loadChanges(runs) {
   for (const [d, rs] of byDesign) {
     const base = rs.find((r) => r.tag === baselineTag(d));
     if (!base) continue;
-    const list = rs.slice(0, 40);
-    try {
-      const data = await api.compare(list.map((r) => r.tag), list.map((r) => r.run_dir));
-      const diff = (data && (data.config_diff || (data.data || {}).config_diff)) || {};
-      for (const r of list) {
-        const out = [];
-        for (const [k, per] of Object.entries(diff)) {
-          if (NOISE.test(k)) continue;
-          const a = per[r.run_dir], b = per[base.run_dir];
-          if (JSON.stringify(a) !== JSON.stringify(b) && !/\/runs\//.test(JSON.stringify(a) + JSON.stringify(b))) out.push({ var: k, from: show(b), to: show(a) });
+    // The baseline goes into every request (it was left out when it was not
+    // among the first 40 runs, and every "changed" was then wrong); the other
+    // runs go 39 at a time, so every run gets its answer.
+    const others = rs.filter((r) => r !== base);
+    for (let i = 0; i < Math.max(1, others.length); i += 39) {
+      const list = [base, ...others.slice(i, i + 39)];
+      try {
+        const data = await api.compare(list.map((r) => r.tag), list.map((r) => r.run_dir));
+        const diff = (data && (data.config_diff || (data.data || {}).config_diff)) || {};
+        // The server keys each column by the run folder as it resolved it.
+        const colOf = colIndex(data, list);
+        for (const r of list) {
+          const out = [];
+          for (const [k, per] of Object.entries(diff)) {
+            if (NOISE.test(k)) continue;
+            const a = per[colOf(r)], b = per[colOf(base)];
+            if (JSON.stringify(a) !== JSON.stringify(b) && !/\/runs\//.test(JSON.stringify(a) + JSON.stringify(b))) out.push({ var: k, from: show(b), to: show(a) });
+          }
+          CHANGES.set(keyOf(r), out);
         }
-        CHANGES.set(keyOf(r), out);
-      }
-    } catch (_e) { /* the column stays "…"; nothing else depends on it */ }
+      } catch (_e) { /* the column stays "…"; nothing else depends on it */ }
+      if (key !== _changesKey) return;
+    }
   }
   if (key === _changesKey) renderRuns({ cached: true });
 }
 const show = (v) => (v == null ? "unset" : typeof v === "object" ? JSON.stringify(v) : String(v));
+// run -> the key of its column in a /api/compare answer: the run folder the
+// server resolved (a symlinked or /mnt/c path may not read the same), matched
+// by tag and design folder when the folder string differs.
+function colIndex(data, list) {
+  const rows = (data && (data.runs || (data.data || {}).runs)) || [];
+  const byDir = new Map(rows.map((x) => [x.run_dir, x.col]));
+  return (r) => byDir.get(r.run_dir) || (rows.find((x) => x.tag === r.tag && (!x.design || normDir(r._design).endsWith("/" + x.design))) || {}).col || r.run_dir;
+}
 
 // ------------------------------------------------------------------ live sweep
 let _poll = null;
@@ -1182,12 +1363,12 @@ function syncSide() {
 function deltaHtml(c, v, b, r) {
   if (b == null || !/passed|warning/.test(verdictOf(r).state)) return "<span class='rn-d'></span>";
   const d = v - b;
-  const same = Math.abs(d) <= Math.max(Math.abs(b) * 5e-4, c.id === "runtime" ? 1 : 0.005);
+  const same = sameAs(c, d, b);
   if (same) return "<span class='rn-d'>same</span>";
   const sign = d > 0 ? "+" : "−";
   const text = c.unit === "ns" ? sign + Math.abs(d).toFixed(2) + " ns"
     : c.id === "runtime" ? sign + fmtDur(Math.abs(d))
-    : c.id === "util" ? sign + Math.abs(d).toFixed(1) + " pt"
+    : c.id === "util" ? sign + Math.abs(d * 100).toFixed(1) + " pt"
     : sign + Math.abs((d / (b || 1)) * 100).toFixed(1) + " %";
   const cls = !c.dir ? "" : (d > 0) === (c.dir > 0) ? " is-better" : " is-worse";
   return "<span class='rn-d" + cls + "' title='" + esc("Baseline: " + (c.f ? c.f(b) : b) + (c.unit ? " " + c.unit : "")) + "'>" + esc(text) + "</span>";
@@ -1198,8 +1379,7 @@ function sideNumsHtml(r, base) {
     const v = c.get(r);
     if (v == null) return "";
     const neg = c.unit === "ns" && v < 0 ? " class='is-neg'" : "";
-    const exact = c.id === "runtime" ? fmtDur(v) : String(Number(v.toPrecision(6))) + (c.unit ? " " + c.unit : "");
-    return "<div class='rn-num'><dt title='" + esc(c.tip || "") + "'>" + esc(c.label) + "</dt><dd" + neg + " title='" + esc(exact) + "'>" + esc(c.f ? c.f(v) : v) +
+    return "<div class='rn-num'><dt title='" + esc(c.tip || "") + "'>" + esc(c.label) + "</dt><dd" + neg + " title='" + esc(exactOf(c, v)) + "'>" + esc(c.f ? c.f(v) : v) +
       (c.unit ? "<small>" + esc(c.unit) + "</small>" : "") + "</dd>" + (base ? deltaHtml(c, v, c.get(base), r) : "<span class='rn-d'></span>") + "</div>";
   }).join("");
   const k = checksOf(r);

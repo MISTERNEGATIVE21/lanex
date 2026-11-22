@@ -3728,13 +3728,44 @@ def h_dse_start(handler: Any) -> None:
         _respond(handler, "This project has no config file (config.json or config.yaml). "
                  "Create one on Setup, then start the sweep.", 400)
         return
-    spec = {"axes": body.get("axes") or [], "mode": body.get("mode") or "grid"}
-    try:
-        overrides_list = dse.expand_sweep(spec)
-    except ValueError as ex:
-        _respond(handler, str(ex), 400)
-        return
+    # Continuing a recorded sweep (its failed points again, or more values of
+    # its one setting) runs under the same sweep, with the settings it was
+    # started with, never the page's current ones.
+    cont = body.get("continue") if isinstance(body.get("continue"), dict) else None
+    prior = None
+    reruns: List[str] = []
+    if cont:
+        prior = next((s for s in dse.load_sweeps(design_dir) if s.get("id") == cont.get("sweep_id")), None)
+        if prior is None:
+            _respond(handler, "That sweep is not recorded in this project any more.", 404)
+            return
+        try:
+            nxt = dse.continuation(prior, rerun=cont.get("rerun") or None,
+                                   values=cont.get("values") if cont.get("values") is not None else None)
+        except ValueError as ex:
+            _respond(handler, str(ex), 400)
+            return
+        overrides_list, reruns = nxt["points"], nxt["reruns"]
+        spec = {"axes": nxt["axes"], "mode": prior.get("mode") or "grid"}
+        body = {**body, "base_overrides": prior.get("base_overrides") or {},
+                "sources": prior.get("sources", body.get("sources")), "extras": prior.get("extras", body.get("extras")),
+                "run_mode": prior.get("run_mode") or body.get("run_mode"),
+                "flow_name": prior.get("flow") or body.get("flow_name"), "stop_when_good": False,
+                "goal": prior.get("goal") or ""}
+    else:
+        spec = {"axes": body.get("axes") or [], "mode": body.get("mode") or "grid"}
+        try:
+            overrides_list = dse.expand_sweep(spec)
+        except ValueError as ex:
+            _respond(handler, str(ex), 400)
+            return
     base_overrides = dict(body.get("base_overrides") or {})
+    # The whole sweep is checked before the first point: a fixed die that
+    # FP_CORE_UTIL cannot change, a DIE_AREA that would cut into CORE_AREA.
+    plan = dse.plan_sweep(design_dir, axes=spec["axes"], mode=spec["mode"], base_overrides=base_overrides)
+    if plan["problems"]:
+        _respond(handler, plan["problems"][0], 400)
+        return
     # Every point builds for the PDK the config names (see _start_run): a
     # sweep whose picker disagrees would sweep another chip, or none.
     from ..controller import configedit
@@ -3751,8 +3782,8 @@ def h_dse_start(handler: Any) -> None:
     # free (unless the caller explicitly opts into replacing them).
     # Each point is named by the values it tries (sweep-util-65), never
     # overwriting an earlier run of the same name.
-    tags = dse.sweep_run_tags(design_dir, overrides_list)
-    sweep_id = dse.new_sweep_id(design_dir)
+    tags = dse.sweep_run_tags(design_dir, overrides_list, taken=(prior or {}).get("tags") or ())
+    sweep_id = prior.get("id") if prior else dse.new_sweep_id(design_dir)
     start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body,
                                       sweep_id=sweep_id)
     if dse.job.active:
@@ -3761,26 +3792,49 @@ def h_dse_start(handler: Any) -> None:
     # Persist a manifest so the sweep is recoverable after a restart and Runs
     # can group its runs without parsing run-tag regexes. Written BEFORE the
     # worker starts, so a point that ends at once still finds its sweep.
-    dse.record_sweep(design_dir, {
-        "id": sweep_id,
-        "base": base_tag,
-        "created_at": platform_env.local_now().isoformat(timespec="seconds"),
-        "axes": spec["axes"],
-        "mode": spec["mode"],
-        "run_mode": run_mode,
-        "flow": flow_name,
-        "base_overrides": base_overrides,
-        "tags": tags,
-        "points": overrides_list,
-        "count": len(tags),
-        "goal": str(body.get("goal") or "")[:40],
-        "stop_when_good": bool(body.get("stop_when_good")),
-    })
+    if prior:
+        manifest = {k: v for k, v in prior.items() if k not in ("ended", "created_at_note")}
+        manifest.update({
+            "axes": spec["axes"],
+            "tags": list(prior.get("tags") or []) + tags,
+            "points": list(prior.get("points") or []) + overrides_list,
+            "count": len(prior.get("tags") or []) + len(tags),
+            "reruns": {**(prior.get("reruns") or {}), **{old: new for old, new in zip(reruns, tags)}},
+            "continued_at": platform_env.local_now().isoformat(timespec="seconds"),
+            # Set when the queue ends (dse.record_end); still None after a
+            # restart means LanEx stopped while it ran.
+            "ended": None,
+        })
+    else:
+        manifest = {
+            "id": sweep_id,
+            "base": base_tag,
+            "created_at": platform_env.local_now().isoformat(timespec="seconds"),
+            "axes": spec["axes"],
+            "mode": spec["mode"],
+            "run_mode": run_mode,
+            "flow": flow_name,
+            "base_overrides": base_overrides,
+            # Kept so "Rerun failed" and "Add values" run with the same files.
+            "sources": list(body.get("sources") or []),
+            "extras": list(body.get("extras") or []),
+            "tags": tags,
+            "points": overrides_list,
+            "count": len(tags),
+            "goal": str(body.get("goal") or "")[:40],
+            "stop_when_good": bool(body.get("stop_when_good")),
+            "ended": None,
+        }
+    dse.record_sweep(design_dir, manifest)
     result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags,
                            sweep_id=sweep_id, stop_when_good=bool(body.get("stop_when_good")),
-                           on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res))
+                           on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res),
+                           on_done=lambda end: dse.record_end(design_dir, sweep_id, end))
     if not result.get("ok"):
-        dse.forget_sweep(design_dir, sweep_id)
+        if prior:
+            dse.record_sweep(design_dir, prior)
+        else:
+            dse.forget_sweep(design_dir, sweep_id)
         _respond(handler, result.get("error") or "could not start the sweep", 400)
         return
     result = dict(result)
@@ -3796,7 +3850,40 @@ def h_dse_sweeps(handler: Any) -> None:
     if not design_dir:
         _respond(handler, {"sweeps": []})
         return
-    _respond(handler, {"sweeps": dse.load_sweeps(design_dir)})
+    sweeps = dse.load_sweeps(design_dir)
+    st = dse.job.status()
+    for s in sweeps:
+        if st["active"] and s.get("id") == st["sweep_id"]:
+            s["active"] = True
+        elif not s.get("ended"):
+            # No end recorded and no queue running it: LanEx stopped (closed,
+            # restarted, the PC slept) while it ran, or it predates the record.
+            s["ended"] = {"reason": "interrupted", "assumed": "ended" not in s}
+    _respond(handler, {"sweeps": sweeps})
+
+
+def h_dse_plan(handler: Any) -> None:
+    """What a sweep would do, without starting it (POST {axes, mode,
+    base_overrides, keys}): each setting's value in this design and where it
+    comes from, every value checked the way LibreLane reads it, the one-off
+    settings that ride along, and what would block the start."""
+    from ..controller import dse
+    body = getattr(handler, "_body", {}) or {}
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, {"ok": True, "count": 0, "points": [], "problems": ["No project is open."],
+                           "value_problems": [], "warnings": [], "riders": {}, "context": {}})
+        return
+    axes = body.get("axes") if isinstance(body.get("axes"), list) else []
+    keys = [k for k in (body.get("keys") or []) if isinstance(k, str)][:40]
+    try:
+        plan = dse.plan_sweep(design_dir, axes=axes, mode=body.get("mode") or "grid",
+                              base_overrides=dict(body.get("base_overrides") or {}), keys=keys)
+    except Exception as ex:
+        _log.exception("sweep plan failed")
+        _respond(handler, str(ex), 500)
+        return
+    _respond(handler, plan)
 
 
 def h_dse_cancel(handler: Any) -> None:
@@ -5008,6 +5095,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/config/undo", h_config_undo),
     ("/api/timing-paths", h_timing_paths),
     ("/api/dse/start", h_dse_start),
+    ("/api/dse/plan", h_dse_plan),
     ("/api/dse/cancel", h_dse_cancel),
     ("/api/dse/sweeps", h_dse_sweeps),
     ("/api/dse/status", h_dse_status),

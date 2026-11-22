@@ -14,9 +14,12 @@ import { localeNum } from "./intlcache.js";
 import { verdictOfRun } from "./verdict.js";
 import { openLayer, closeLayer, isLayerOpen } from "./overlay.js";
 import { toast } from "./toast.js";
+import * as MF from "./metricfmt.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
-const MAX = 6;
+// Up to twelve runs: every point of a typical sweep. Past six the tables
+// scroll sideways inside their own box (the run names stay on the left).
+const MAX = 12;
 
 // The run's verdict as the Runs page reads it: a square mark and its word.
 function verdictMark(r) {
@@ -92,7 +95,8 @@ function paintSel(root) {
   }));
   const add = root.querySelector("#cmp-add");
   add.disabled = _sel.length >= MAX;
-  add.title = _sel.length >= MAX ? "Compare takes up to six runs" : "";
+  add.title = _sel.length >= MAX ? "Compare takes up to " + MAX + " runs: take one out to add another" : "";
+  root.classList.toggle("cmp-many", _sel.length > 6);
 }
 
 function wirePicker(root) {
@@ -125,7 +129,7 @@ function wirePicker(root) {
   pop.addEventListener("click", (e) => {
     const o = e.target.closest(".cmp-opt");
     if (!o) return;
-    if (_sel.length >= MAX) { toast.show("Compare takes up to six runs.", "info"); return; }
+    if (_sel.length >= MAX) { toast.show("Compare takes up to " + MAX + " runs.", "info"); return; }
     _sel.push(o.dataset.dir);
     paintSel(root);
     compare(root);
@@ -145,7 +149,7 @@ async function compare(root) {
   disposeCharts();
   if (_sel.length < 2) {
     out.innerHTML = "<div class='an-none cmp-hint'><b>" + (_sel.length ? "Add one more run." : "Pick two runs.") + "</b> " +
-      "The first is the reference; the others show how far each number moved from it. Up to six runs, from any design you have opened. " +
+      "The first is the reference; the others show how far each number moved from it. Up to " + MAX + " runs, from any design you have opened. " +
       "Ticking runs on the Runs page and pressing Compare brings them here.</div>";
     return;
   }
@@ -251,14 +255,21 @@ function summaryHtml(data, cols) {
   }
   if (!order.length) return "<h3 class='cmp-h'>Headline numbers</h3><p class='muted'>These runs have no summary numbers (they ended before the layout was built).</p>";
   const ref = cols[0];
+  const table = data.metric_table || {};
   return "<h3 class='cmp-h'>Headline numbers</h3>" +
     "<div class='cmp-scroll'><table class='cmp-table cmp-sum'><thead><tr><th>Metric</th>" + colHeaders(cols) + "</tr></thead><tbody>" +
     order.map((label) => {
       const base = byCol[ref.col] && byCol[ref.col][label];
+      // The summary carries power in mW and utilisation in %: the row is shown
+      // from LibreLane's own value through the shared formatter instead, with
+      // one prefix along the row.
+      const key = base && base.key || (cols.map((c) => byCol[c.col] && byCol[c.col][label]).find(Boolean) || {}).key;
+      const raw = key && table[key] ? table[key] : null;
+      const scale = raw ? MF.scaleOf(key, cols.map((c) => raw[c.col])) : null;
       return "<tr><td>" + esc(label) + "</td>" + cols.map((c, i) => {
         const row = byCol[c.col] && byCol[c.col][label];
         const d = i && row && base ? deltaOf(row.value, base.value, meta[row.key], row.unit) : null;
-        return summaryCellHtml(row, d);
+        return summaryCellHtml(row, d, raw && row ? { key, value: raw[c.col], scale } : null);
       }).join("") + "</tr>";
     }).join("") + "</tbody></table></div>";
 }
@@ -269,16 +280,28 @@ function summaryHtml(data, cols) {
 // so a tape-out comparison can never rest on a number the user cannot verify
 // (Fear A/G). An absent row stays "—" (never a fabricated 0). `delta` (from
 // deltaOf) adds how far the value moved from the reference run.
-export function summaryCellHtml(row, delta = null) {
+// `raw` ({key, value, scale}): the metric's own value from metric_table,
+// shown through the shared formatter (metricfmt.js) when it is a number.
+export function summaryCellHtml(row, delta = null, raw = null) {
   if (!row) return "<td>—</td>";
-  const unit = row.unit ? " " + fmt.escape(row.unit) : "";
   const cls = row.status ? " class='" + (row.status === "pass" ? "cmp-num pass" : row.status === "fail" ? "cmp-num fail" : "cmp-num") + "'" : " class='cmp-num'";
+  if (raw && typeof raw.value === "number" && Number.isFinite(raw.value)) {
+    const s = metricShown(raw.key, raw.value, raw.scale);
+    return "<td" + cls + fmt.titleAttr(raw.value) + ">" + fmt.escape(s.text) + (s.unit ? " " + fmt.escape(s.unit) : "") + deltaHtml(delta) + "</td>";
+  }
+  const unit = row.unit ? " " + fmt.escape(row.unit) : "";
   return "<td" + cls + fmt.titleAttr(row.value) + ">" + fmt.escape(shortMetric(row.value)) + unit + deltaHtml(delta) + "</td>";
+}
+
+// A metric through the shared formatter; power at its row's prefix.
+function metricShown(key, v, scale) {
+  return scale ? MF.showAt(key, v, scale) : MF.show(key, v);
 }
 
 // fmt.metric() pads to 3 decimals, which turns a count of 64 into "64.000".
 // When the value has no more digits than that, show it as written (64, 66.4);
 // otherwise keep the rounded display (the exact value is in the title).
+// Used for the summary's own text rows (die size, pin counts).
 function shortMetric(v) {
   const r = fmt.metric(v);
   if (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100 && Number(r) === v) {
@@ -340,11 +363,15 @@ function paintMetrics(out, data, cols, filter) {
   host.innerHTML = "<table class='cmp-table cmp-all'><thead><tr><th>Metric</th>" + colHeaders(cols) + "</tr></thead><tbody>" +
     set.map((m) => {
       const per = table[m];
+      // LibreLane's values in their unit (power with one prefix along the
+      // row, utilisation in %), the exact value in each cell's title.
+      const scale = MF.scaleOf(m, cols.map((c) => per[c.col]));
       const cells = cols.map((c, i) => {
         const v = per[c.col];
         const d = i ? deltaOf(v, per[ref.col], meta[m]) : null;
         const cls = best[m] && c.col === best[m] && differ(per, cols) ? " class='cmp-best'" : "";
-        return "<td" + cls + fmt.titleAttr(v) + ">" + esc(v === undefined || v === null ? "—" : typeof v === "number" ? shortMetric(v) : String(v)) +
+        const s = v === undefined || v === null ? null : metricShown(m, v, scale);
+        return "<td" + cls + fmt.titleAttr(v) + ">" + esc(!s ? "—" : s.text + (s.unit && s.text !== "—" ? " " + s.unit : "")) +
           (d && d.cls !== "is-same" ? deltaHtml(d) : "") + "</td>";
       }).join("");
       return "<tr><td><code>" + esc(m) + "</code></td>" + cells + "</tr>";
@@ -405,7 +432,9 @@ async function renderCompareCharts(host, data, cols) {
   host.innerHTML = present.map(([k, label]) => {
     const um = /\(([^)]+)\)\s*$/.exec(label);
     const name = um ? label.slice(0, um.index).trim() : label;
-    return "<figure class='cmp-fig'><figcaption><b>" + fmt.escape(name) + "</b>" + (um ? " <span>" + fmt.escape(um[1]) + "</span>" : "") +
+    const scale = MF.scaleOf(k, cols.map((c) => num(table[k][c.col])));
+    const u = scale ? scale.unit : MF.unitOf(MF.parseKey(k).base) === "ratio" ? "%" : um ? um[1] : "";
+    return "<figure class='cmp-fig'><figcaption><b>" + fmt.escape(name) + "</b>" + (u ? " <span>" + fmt.escape(u) + "</span>" : "") +
       "<code>" + fmt.escape(k) + "</code></figcaption><div class='cmp-chart' data-k='" + fmt.escape(k) + "' style='height:" + runBarsHeight(cols.length) + "px'></div></figure>";
   }).join("");
   for (const [k, label] of present) {
@@ -414,9 +443,15 @@ async function renderCompareCharts(host, data, cols) {
     // Split "Cell count" / "Core area (µm²)" into a name + optional unit so the
     // chart clearly states WHICH metric it compares (title) and its unit (y-axis).
     const um = /\(([^)]+)\)\s*$/.exec(label);
-    const unit = um ? um[1] : "";
     const name = um ? label.slice(0, um.index).trim() : label;
-    const opt = runBarsOption({ labels, values: cols.map((c) => num(table[k][c.col])), unit });
+    // The bars in the unit every other number on the page uses: power at one
+    // SI prefix, utilisation in %.
+    const raw = cols.map((c) => num(table[k][c.col]));
+    const scale = MF.scaleOf(k, raw);
+    const pct = MF.unitOf(MF.parseKey(k).base) === "ratio";
+    const values = raw.map((v) => (v == null ? null : scale ? v / scale.div : pct ? Number((v * 100).toFixed(4)) : v));
+    const unit = scale ? scale.unit : pct ? "%" : um ? um[1] : "";
+    const opt = runBarsOption({ labels, values, unit });
     if (!opt) continue;
     const chart = window.echarts.init(el, null, { renderer: "canvas" });
     el.setAttribute("role", "img");
