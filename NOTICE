@@ -32,6 +32,44 @@ driver.js.mjs SHA-256
 226faa224a70df5bbe5a637c489941c004f840526359a468d7d23f8774d44a86), for the
 first-run guide and the app tour; the licence text is in vendor/driverjs/LICENSE.
 
+LanEx ships Apache ECharts 5.5.1 (https://echarts.apache.org, Apache License,
+Version 2.0) as lanex/server/static/vendor/echarts.min.js, fetched unchanged by
+scripts/vendor.sh from dist/echarts.min.js of the npm package echarts@5.5.1
+(SHA-256 of the shipped file
+dbc15e9b9ca60d2ab3115953cc42e92a70d540388a27d4d0acfcf8c3464b6a0b), for its
+charts. Its NOTICE, reproduced as required by the Apache License:
+
+    Apache ECharts
+    Copyright 2017-2024 The Apache Software Foundation
+
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
+
+The bundle includes ZRender 5.6.0 (BSD 3-Clause, Copyright (c) 2017, Baidu
+Inc.), code from d3.js (BSD 3-Clause, Copyright 2010-2016 Mike Bostock) and
+tslib helpers (0BSD, Copyright (c) Microsoft Corporation). The licence texts
+are in vendor/echarts.LICENSE, vendor/echarts.NOTICE and
+vendor/echarts-licenses/; the tslib notice is kept at the top of
+echarts.min.js.
+
+LanEx ships the Barlow typeface, version 1.408 (Copyright 2017 The Barlow
+Project Authors, https://github.com/jpt/barlow), as
+lanex/server/static/vendor/fonts/barlow-*.woff2 and
+barlow-semi-condensed-*.woff2, and JetBrains Mono, version 2.211 (Copyright
+2020 The JetBrains Mono Project Authors,
+https://github.com/JetBrains/JetBrainsMono), as
+lanex/server/static/vendor/fonts/jetbrainsmono.woff2. Both are licensed under
+the SIL Open Font License, Version 1.1; the licence texts are in
+vendor/fonts/OFL-Barlow.txt and vendor/fonts/OFL-JetBrainsMono.txt. The fonts
+ship in WOFF2 format under their original names, with their copyright and
+licence fields intact.
+
+LanEx's line icons (lanex/server/static/modules/icons.js) are drawn in the
+style of Feather Icons (https://feathericons.com, MIT License, Copyright (c)
+2013-2017 Cole Bemis) and Lucide (https://lucide.dev); path data that follows
+Feather's is used under its MIT License, whose text is in
+vendor/icons.LICENSE.
+
 --------------------------------------------------------------------------------
 Disclaimer
 --------------------------------------------------------------------------------
