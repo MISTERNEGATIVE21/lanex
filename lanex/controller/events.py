@@ -20,15 +20,54 @@ Design notes (why a ring buffer + a global sequence):
 """
 from __future__ import annotations
 
+import re
+import secrets
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 # --- process-global monotonic sequence -------------------------------------
 
 _seq_lock = threading.Lock()
 _seq = 0
+
+# Which server process stamped an event id. The sequence restarts at 1 with
+# every server start, so a browser that kept its window open across a restart
+# reconnects with the OLD server's Last-Event-ID (say 5000): read as a plain
+# number, the new server skipped every event until its own counter passed it,
+# and the Flow page looked frozen (G14). Event ids on the wire are therefore
+# "<boot>-<seq>"; an id from another boot, a bare number from an older server,
+# or one ahead of this bus is a gap: the stream resyncs instead of skipping.
+BOOT_ID = secrets.token_hex(4)
+_WIRE_RX = re.compile(r"^([0-9a-f]{8})-(\d{1,18})$")
+
+
+def wire_id(seq: int) -> str:
+    """The SSE ``id:`` for bus sequence *seq*."""
+    return f"{BOOT_ID}-{int(seq)}"
+
+
+def resume_point(last_event_id: Optional[str], max_seq: int) -> Tuple[int, Optional[str]]:
+    """Where a (re)connecting stream starts, from its ``Last-Event-ID``.
+
+    Returns ``(cursor, gap_reason)``: ``cursor`` is the sequence to resume
+    after (``-1`` = a fresh stream, start at the current end); ``gap_reason``
+    is None when the cursor can be trusted, else why the client must resync
+    (``"restart"``: the id came from another server process; ``"ahead"``: an
+    id this bus never issued)."""
+    raw = (last_event_id or "").strip()
+    if not raw or raw == "-1":
+        return -1, None
+    m = _WIRE_RX.match(raw)
+    if not m:
+        return -1, "restart"
+    if m.group(1) != BOOT_ID:
+        return -1, "restart"
+    seq = int(m.group(2))
+    if seq > max_seq:
+        return -1, "ahead"
+    return seq, None
 
 
 def next_seq() -> int:
@@ -76,8 +115,14 @@ class EventBus:
 
     @property
     def max_seq(self) -> int:
+        """The newest sequence in the ring. Emitters stamp a sequence before
+        taking the ring's lock, so the ring is ordered only nearly: the newest
+        is the largest of the last few entries, not always the last one."""
         with self._cond:
-            return self._buf[-1].get("seq", 0) if self._buf else 0
+            if not self._buf:
+                return 0
+            n = len(self._buf)
+            return max(self._buf[i].get("seq", 0) for i in range(max(0, n - 64), n))
 
     @property
     def min_seq(self) -> int:

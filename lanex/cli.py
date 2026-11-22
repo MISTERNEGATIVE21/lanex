@@ -37,6 +37,55 @@ def _print_url(url: str) -> None:
     sys.stdout.write(f"\nLanEx is running at: {url}\n")
 
 
+def _load_key() -> str:
+    """The LanEx key (server/auth.py): the saved one, or a new one. A home we
+    cannot write must never stop LanEx from starting: the key then lives only
+    in this process (windows opened by this command still get it)."""
+    from .server import auth
+
+    try:
+        return auth.load_or_create()
+    except Exception as ex:
+        import secrets
+
+        _log.warning("could not save the LanEx key (%s); using one for this run only", ex)
+        return secrets.token_urlsafe(32)
+
+
+def _print_key_hint(keyed_url: str) -> None:
+    """In a terminal, the address that opens a signed-in window (a headless
+    server has nobody else to hand it to). Not in a log file: the launcher's
+    log is something people attach to bug reports."""
+    from .server import auth
+
+    try:
+        tty = sys.stdout.isatty()
+    except Exception:
+        tty = False
+    if tty:
+        sys.stdout.write(f"Open it with its key:  {keyed_url}\n")
+    else:
+        sys.stdout.write(f"The key that opens it is in {auth.token_path()}\n")
+
+
+def _with_running_key(url: str) -> str:
+    """*url* of an already running LanEx with its key, read from server.json
+    (the key file as a fallback); unchanged when neither has one."""
+    from .server import auth
+
+    token = None
+    try:
+        token = json.loads(_server_record_path().read_text(encoding="utf-8")).get("key")
+    except Exception:
+        pass
+    if not token:
+        try:
+            token = auth.read_existing()
+        except Exception:
+            token = None
+    return auth.with_key(url, token if isinstance(token, str) else None)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Entry point. argv mirrors :mod:`click` style.
 
@@ -60,7 +109,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--port", type=int, default=8765, help="preferred port (default 8765)")
     parser.add_argument("--allow-remote", action="store_true",
                         help="permit binding a non-loopback host (exposes the GUI to your "
-                             "network — there is no authentication; use with care)")
+                             "network: anyone with the LanEx key, printed at start and kept "
+                             "in ~/.lanex/auth-token, can run tools as you; use with care)")
     parser.add_argument("--no-browser", action="store_true",
                         help="don't auto-open anything (headless; visit the printed URL)")
     parser.add_argument("--tab", action="store_true",
@@ -122,7 +172,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if running:
             sys.stdout.write(f"LanEx is already running at {running}; opening its window\n")
             sys.stdout.flush()
-            _lazy_open(running, False)
+            _lazy_open(_with_running_key(running), False)
             return 0
 
     _setup_logging(args.verbose)
@@ -170,8 +220,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write(f"librelane gui cannot start: {ex}\n")
         return 2
 
+    token = _load_key()
     try:
-        httpd, port = make_server(host=args.host, port=args.port, allow_remote=args.allow_remote)
+        httpd, port = make_server(host=args.host, port=args.port, allow_remote=args.allow_remote,
+                                  token=token)
     except Exception as ex:
         sys.stderr.write(f"could not bind {args.host}:{args.port} ({ex})\n")
         return 2
@@ -181,8 +233,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     url = f"http://{host_disp}:{port}/"
     # The window opens straight on the cockpit, the same page the Windows
     # launcher opens. /landing is still served for anyone who links to it.
-    home_url = url
+    # The address carries the LanEx key once; the server swaps it for a cookie.
+    from .server import auth as _auth
+    home_url = _auth.with_key(url, token)
     _print_url(url)
+    _print_key_hint(home_url)
     if args.design_dir:
         # Register the initial design directory directly with the server so the
         # GUI opens already pointed at it.
@@ -201,7 +256,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stderr.write(f"could not set --design-dir: {ex}\n")
 
     threading.Timer(0.5, _lazy_open, args=(home_url, args.no_browser, args.tab)).start()
-    _write_server_record(url, port)
+    _write_server_record(url, port, token)
     try:
         serve_forever(httpd, open_after=False)
     except KeyboardInterrupt:
@@ -247,7 +302,11 @@ def _running_instance_url(timeout: float = 2.0) -> Optional[str]:
     try:
         with urllib.request.urlopen(url.rstrip("/") + "/api/health", timeout=timeout) as r:
             body = json.loads(r.read().decode("utf-8", "replace") or "{}")
-        return url if body.get("service") == "lanex" else None
+        # /api/health answers {"ok": true, "data": {"service": "lanex", ...}};
+        # reading only the flat form never recognised a running LanEx, so the
+        # app shortcut started a second server instead of reopening the window.
+        data = body.get("data") if isinstance(body.get("data"), dict) else body
+        return url if data.get("service") == "lanex" else None
     except Exception:
         return None
 
@@ -306,8 +365,9 @@ def _server_record_path():
     return home() / "server.json"
 
 
-def _write_server_record(url: str, port: int) -> None:
-    """Record the bound URL/port/pid for out-of-process launchers.
+def _write_server_record(url: str, port: int, token: Optional[str] = None) -> None:
+    """Record the bound URL/port/pid (and the LanEx key) for out-of-process
+    launchers. Mode 0600: the key in it is what lets a page talk to LanEx.
 
     ``find_free_port`` may settle on 8766+ when something else owns 8765
     (app.py:436-453), so anything outside this process — the Windows launcher in
@@ -327,11 +387,15 @@ def _write_server_record(url: str, port: int) -> None:
         from .controller.instance_identity import current
 
         record = {"url": url, "port": port, "pid": os.getpid(), **current()}
+        if token:
+            # The Windows launcher opens its window with this (windows/launcher
+            # probe.go reads server.json over \\wsl.localhost).
+            record["key"] = token
         # Write-then-rename: a reader polling every 500 ms must never catch a
         # half-written file and conclude LanEx isn't running.
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(record) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        from .server.auth import write_private
+
+        write_private(path, json.dumps(record) + "\n")
     except Exception:  # pragma: no cover - best-effort only
         pass
 

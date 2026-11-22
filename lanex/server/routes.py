@@ -4077,7 +4077,44 @@ def h_custom_cell_remove(handler: Any) -> None:
     if not dd:
         _respond(handler, "no active design dir", 400)
         return
-    _respond(handler, customcells.remove_cell(dd, body.get("name", "")))
+    result = customcells.remove_cell(dd, str(body.get("name") or ""))
+    if not result.get("ok"):
+        _respond(handler, result.get("error", "remove failed"), 400)
+        return
+    _respond(handler, result)
+
+
+def h_upload(handler: Any) -> None:
+    """One file, sent as the raw request body, streamed into the project's
+    upload staging folder (G16). ``POST /api/upload?filename=<name>[&design_dir=]``
+    → ``{upload_id, filename, size}``; a custom-cell or macro save then names
+    the ``upload_id`` instead of carrying the bytes. 2 GiB per file."""
+    from ..controller import uploads
+    dd = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    try:
+        length = int(handler.headers.get("Content-Length") or "-1")
+    except ValueError:
+        length = -1
+    refused: Optional[Tuple[int, str]] = None
+    if not dd:
+        refused = (400, "no active design dir")
+    elif (handler.headers.get("Transfer-Encoding") or "").lower() == "chunked":
+        refused = (411, "send the file with a Content-Length")
+    if refused is None:
+        try:
+            res = uploads.receive(dd, _query_param(handler.path, "filename"), handler.rfile, length)
+            handler._body_read = True
+            _respond(handler, res)
+            return
+        except uploads.UploadError as ex:
+            refused = (ex.status, str(ex))
+        except OSError as ex:
+            if handler._is_conn_error(ex):
+                raise
+            refused = (500, f"could not store the upload: {ex}")
+    # A refused body is not read: end the connection rather than drain 2 GB.
+    handler.close_connection = True
+    _respond(handler, refused[1], refused[0])
 
 
 def h_custom_cell_enable(handler: Any) -> None:
@@ -4133,7 +4170,11 @@ def h_custom_macro_remove(handler: Any) -> None:
     if not dd:
         _respond(handler, "no active design dir", 400)
         return
-    _respond(handler, custommacros.remove_macro(dd, body.get("name", "")))
+    result = custommacros.remove_macro(dd, str(body.get("name") or ""))
+    if not result.get("ok"):
+        _respond(handler, result.get("error", "remove failed"), 400)
+        return
+    _respond(handler, result)
 
 
 def h_custom_macro_enable(handler: Any) -> None:
@@ -4736,6 +4777,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/custom-macros/remove", h_custom_macro_remove),
     ("/api/custom-macros/enable", h_custom_macro_enable),
     ("/api/custom-macros", h_custom_macros),
+    ("/api/upload", h_upload),
     ("/api/health", h_health),
     ("/api/presence", h_presence),
     ("/api/hello", h_page_hello),
@@ -4822,8 +4864,71 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/copy-spm", h_copy_spm),
 ]
 
+# Which HTTP method each route answers (G20). Anything that changes state, opens
+# a window or a session, starts or stops work, or blocks on a dialog is POST
+# only: a POST needs the X-Requested-With header and passes the same-origin
+# check, so a link, an <img> or a form on another site can never fire it. Reads
+# are GET (EventSource, <img src> and downloads stay GET). "Both" routes read on
+# GET and write on POST, and the handler itself tells the two apart.
+# test_route_methods checks that every ROUTES entry is listed here: a new route
+# must pick its method.
+_GET = ("GET",)
+_POST = ("POST",)
+_BOTH = ("GET", "POST")
+_POST_ROUTES = {
+    "/api/project/new", "/api/project/design-info", "/api/project/new-file",
+    "/api/config/set", "/api/config/sources", "/api/project/forget", "/api/project/delete",
+    "/api/fs/native-pick", "/api/verify/rerun", "/api/compare", "/api/fix/plan",
+    "/api/fix/apply", "/api/config/undo", "/api/dse/start", "/api/dse/cancel",
+    "/api/file/write", "/api/file/delete", "/api/file/rename", "/api/lint",
+    "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave", "/api/celllib/view",
+    "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings",
+    "/api/custom-cells/save", "/api/custom-cells/remove", "/api/custom-cells/enable",
+    "/api/custom-macros/save", "/api/custom-macros/remove", "/api/custom-macros/enable",
+    "/api/upload", "/api/bye", "/api/run-pin", "/api/run-import-dir",
+    "/api/run-import-bundle", "/api/run-delete", "/api/reveal", "/api/container-tools/open",
+    "/api/xquartz/restart", "/api/open-in-tool", "/api/layout/open", "/api/write-config",
+    "/api/set-design-dir", "/api/diff", "/api/cli-command", "/api/manual/run",
+    "/api/manual/cancel", "/api/run/start", "/api/run/cancel", "/api/run/resume",
+    "/api/reproducible", "/api/tools/install-ciel", "/api/container/pull",
+    "/api/container/enable-docker-group", "/api/container/start-engine", "/api/tools/cancel",
+    "/api/tools/install/", "/api/tools/uninstall/", "/api/pdk/uninstall",
+    "/api/pdk/fix-permissions", "/api/copy-spm",
+}
+_BOTH_ROUTES = {"/api/run-note", "/api/watch", "/api/settings/pdk-root", "/api/suggest-config"}
+_GET_ROUTES = {
+    "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
+    "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems",
+    "/api/timing-paths", "/api/dse/sweeps", "/api/dse/status", "/api/system-resources",
+    "/api/lint-result", "/api/sim/testbenches", "/api/waveform", "/api/celllib/cell",
+    "/api/celllib/layout", "/api/celllib", "/api/macros/catalog", "/api/macros/projects",
+    "/api/macros/inspect", "/api/cells", "/api/custom-cells", "/api/custom-macros",
+    "/api/health", "/api/presence", "/api/hello", "/api/about", "/api/steps", "/api/variables",
+    "/api/design-formats", "/api/flows", "/api/pdks", "/api/scls", "/api/pdk-ready", "/api/runs",
+    "/api/known-designs", "/api/run-step-log", "/api/run-files", "/api/run-images",
+    "/api/run-outputs", "/api/run-diagrams", "/api/render-dot", "/api/run-gui-meta",
+    "/api/run-reproduce", "/api/run-bundle", "/api/trends", "/api/desktop-tools",
+    "/api/container-tools", "/api/layout/sources", "/api/layout/render", "/api/layout/thumb",
+    "/api/layout/probe", "/api/layout/instances", "/api/layout/mesh", "/api/layout/markers",
+    "/api/layout/commands", "/api/runs/", "/api/tools", "/api/metrics-catalog", "/api/run/status",
+    "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
+    "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
+    "/api/design-dir", "/api/preflight", "/api/manual/result",
+}
+# A route in none of the sets keeps the old answer-anything behaviour, so a
+# route added elsewhere never breaks at run time; the test names it instead.
+ROUTE_METHODS: Dict[str, Tuple[str, ...]] = {
+    prefix: (_POST if prefix in _POST_ROUTES else _GET if prefix in _GET_ROUTES else _BOTH)
+    for prefix, _fn in ROUTES
+}
+# Routes whose handler reads the raw request body itself (no JSON parse, no
+# 10 MB JSON cap).
+RAW_BODY_ROUTES = frozenset({"/api/upload"})
+
 __all__ = [
     "ROUTES",
+    "ROUTE_METHODS",
+    "RAW_BODY_ROUTES",
     "serve_view",
     "static_root",
 ]

@@ -56,12 +56,14 @@ async function _fetch(path, init) {
     throw e;
   }
   if (timer) clearTimeout(timer);
-  let body;
-  try { body = await resp.json(); } catch (_e) { body = { ok: false, error: "non-json response" }; }
+  const body = await _readBody(resp);
   if (!resp.ok || body.ok === false) {
     const err = new Error(body.error || "HTTP " + resp.status);
     err.status = resp.status;
     err.body = body;
+    // The server no longer knows this window's LanEx key (its key file was
+    // replaced): nothing here will work again until LanEx is reopened.
+    if (resp.status === 401 && body.code === "key") _keyLost(err.message);
     // A run, resume or sweep refused because the project folder is gone
     // (moved, renamed or deleted while LanEx was open): Setup shows it as
     // missing and turns Run off (setup.js).
@@ -80,6 +82,24 @@ async function _fetch(path, init) {
   }
   return data;
 }
+// The reply as an object. Every /api/* error from LanEx is JSON
+// ({ok: false, error}); anything else (a proxy's page, a plain-text answer, a
+// truncated body) becomes {ok: false, error: <its own words>} rather than the
+// useless "non-json response".
+async function _readBody(resp) {
+  let text = "";
+  try { text = await resp.text(); } catch (_e) { text = ""; }
+  if (text) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed !== null && typeof parsed === "object") return parsed;
+      return { ok: resp.ok, data: parsed };
+    } catch (_e) { /* not JSON: say what came back */ }
+  }
+  const words = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+  return { ok: false, error: words || ("LanEx answered HTTP " + resp.status + (resp.statusText ? " " + resp.statusText : "")) };
+}
+
 // One request for identical calls in flight at the same time (keyed by the
 // project shown too: the server answers for its active project). Nothing is
 // kept once it has answered.
@@ -166,8 +186,11 @@ export const api = {
       tool, tag, path, location: "container" }) }),
   // Layout tab: KLayout draws the run in-process (controller/layoutview.py).
   layoutSources: (tag) => _fetch("/api/layout/sources?tag=" + encodeURIComponent(tag)),
+  // POST: opening a layout starts a KLayout session on the server, so it is
+  // not something a link on another site may do (G20).
   layoutOpen: (tag, source) =>
-    _fetch("/api/layout/open?tag=" + encodeURIComponent(tag) + "&source=" + encodeURIComponent(source || "final"), { timeout: 120000 }),
+    _fetch("/api/layout/open?tag=" + encodeURIComponent(tag) + "&source=" + encodeURIComponent(source || "final"),
+      { method: "POST", body: "{}", timeout: 120000 }),
   layoutProbe: (sid, x, y, r) =>
     _fetch("/api/layout/probe?sid=" + encodeURIComponent(sid) + "&x=" + x + "&y=" + y + "&r=" + r),
   layoutInstances: (sid, cell) =>
@@ -344,7 +367,8 @@ export const api = {
   cellLayout: (pdk, scl, cell) =>
     _fetch("/api/celllib/layout?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
   cellView: (pdk, scl, cell) =>
-    _fetch("/api/celllib/view?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || ""), { timeout: 120000 }),
+    _fetch("/api/celllib/view?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || ""),
+      { method: "POST", body: "{}", timeout: 120000 }),
   cellViewClose: (sid) =>
     _fetch("/api/celllib/view/close", { method: "POST", body: JSON.stringify({ sid }) }),
   macroCatalog: (pdk, scl) =>
@@ -375,7 +399,22 @@ export const api = {
     _fetch("/api/custom-macros/remove", { method: "POST", body: JSON.stringify({ name, design_dir: designDir }) }),
   customMacroEnable: (name, enabled, designDir) =>
     _fetch("/api/custom-macros/enable", { method: "POST", body: JSON.stringify({ name, enabled, design_dir: designDir }) }),
+  // One file as the raw request body, streamed to the project's upload folder
+  // (a macro GDS is often hundreds of MB: base64 inside JSON stopped at about
+  // 7.5 MB). Resolves {upload_id, filename, size}; a save then names the id.
+  upload: (file, designDir) => {
+    if (file.size > UPLOAD_MAX_BYTES) {
+      const err = new Error(file.name + " is " + Math.round(file.size / 1048576) + " MiB; LanEx takes files up to " +
+        (UPLOAD_MAX_BYTES / 1073741824) + " GiB.");
+      err.status = 413;
+      return Promise.reject(err);
+    }
+    return _fetch("/api/upload?filename=" + encodeURIComponent(file.name) +
+      (designDir ? "&design_dir=" + encodeURIComponent(designDir) : ""),
+      { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" }, timeout: 0 });
+  },
 };
+export const UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 // ----------------------------- SSE ------------------------------------------
 
@@ -400,8 +439,19 @@ export const sse = {
 // here, with a growing pause, and at once when the PC wakes up.
 let _retryMs = 2000;
 let _retryTimer = null;
+let _keyGone = false;
+// The key is gone (see _fetch): say so for good and stop retrying the stream,
+// which would only be refused again.
+function _keyLost(message) {
+  if (typeof document === "undefined") return;
+  _keyGone = true;
+  if (_healthTimer) { clearInterval(_healthTimer); _healthTimer = null; }
+  if (_es) { try { _es.close(); } catch (_e) {} }
+  _connIndicator(false, "key", message);
+}
 function _connect() {
   if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+  if (_keyGone) return;
   if (_es && _es.readyState !== 2) return;   // 2 = CLOSED
   try {
     _es = new EventSource("/api/events");
@@ -507,11 +557,16 @@ function _wire(es) {
   // retries silently forever, and until it reconnects the UI would just go
   // quietly stale. Show a small fixed chip while disconnected.
   es.onerror = () => {
-    if (es !== _es) return;
+    if (es !== _es || _keyGone) return;
     _connIndicator(false);
     _wasDisconnected = true;
     _watchHealth();
-    if (es.readyState === 2) _scheduleReconnect();
+    if (es.readyState === 2) {
+      // The server refused the stream outright. One plain request tells a
+      // lost key (401, _keyLost) from a server that is just coming back.
+      _fetch("/api/run/status", { timeout: 5000 }).catch(() => {});
+      _scheduleReconnect();
+    }
   };
   es.onopen = () => {
     if (es !== _es) return;
@@ -542,13 +597,15 @@ function _resyncRunStatus(reason) {
 
 // Fixed "reconnecting" chip — created lazily, removed the moment the stream is
 // healthy again. Pure DOM, no dependency on other modules (api.js is a leaf).
-function _connIndicator(ok, how) {
+function _connIndicator(ok, how, message) {
   let el = document.getElementById("sse-conn-chip");
+  if (_keyGone && how !== "key") return;
   if (ok) {
     if (el) el.remove();
     return;
   }
-  const text = how === "long"
+  const text = how === "key" ? (message || "This window is not signed in to LanEx. Close it and open LanEx again.")
+    : how === "long"
     ? "LanEx is not answering yet. Keep this window open: your unsaved edits stay here, and it reconnects by itself."
     : "Connection to the LanEx server lost. Reconnecting…";
   if (el) { if (el.textContent !== text) el.textContent = text; return; }

@@ -30,8 +30,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .routes import ROUTES, static_root, serve_view, serve_run_file
+from .routes import ROUTES, ROUTE_METHODS, RAW_BODY_ROUTES, static_root, serve_view, serve_run_file
 from .sse import ISSEHandler, attach_sse_handler, detach_sse_handler
+from . import auth
 from ..controller.runner import FlowRunner
 
 _log = logging.getLogger("librelane.lanex.server")
@@ -337,7 +338,116 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             f.close()
 
     def _send_404(self) -> None:
-        self._send_text("Not found", 404)
+        self._send_error(404, "Not found")
+
+    def _is_api(self) -> bool:
+        return (getattr(self, "path", "") or "").startswith("/api/")
+
+    def _send_error(self, status: int, message: str, code: Optional[str] = None,
+                    headers: Optional[Dict[str, str]] = None) -> None:
+        """An error reply. Every ``/api/*`` error has one shape,
+        ``{"ok": false, "error": "<plain words>"}`` (plus a machine ``code`` when
+        the page acts on it); a page or static path gets plain text."""
+        if not self._is_api():
+            self._send_text(message, status)
+            return
+        obj: Dict[str, Any] = {"ok": False, "error": message}
+        if code:
+            obj["code"] = code
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    # ---------- the LanEx key (G21) and methods (G20)
+
+    def _port(self) -> int:
+        try:
+            return int(self.server.server_address[1])
+        except Exception:
+            return 0
+
+    def _given_key(self) -> Optional[str]:
+        return (self.headers.get(auth.HEADER)
+                or auth.cookie_value(self.headers.get("Cookie"), auth.cookie_name(self._port())))
+
+    def _key_ok(self, path: str) -> bool:
+        """True when no key is required, the path is exempt, or the request
+        carries the key (header or cookie)."""
+        token = self._token()
+        if token is None or path in auth.EXEMPT_PATHS:
+            return True
+        return auth.matches(token, self._given_key())
+
+    def _token(self) -> Optional[str]:
+        """This server's LanEx key (make_server(token=...)); None = no key
+        required, only for tests and code that embeds a server."""
+        return getattr(getattr(self, "server", None), "lanex_token", None)
+
+    def _refuse_key(self) -> None:
+        self._send_error(401, "This LanEx window is not signed in to the server. Close it and "
+                              "open LanEx again from its shortcut (or run `lanex`).", code="key")
+
+    def _route(self, path: str) -> Optional[Tuple[str, Callable[[Any], None]]]:
+        for prefix, fn in ROUTES:
+            if self._match(prefix, path):
+                return prefix, fn
+        return None
+
+    def _method_ok(self, prefix: str, method: str) -> bool:
+        """Whether *prefix* answers *method*. A side-effecting route answers
+        POST only, so a link or an ``<img>`` on another site cannot fire it
+        (G20); HEAD follows GET."""
+        allowed = ROUTE_METHODS.get(prefix, ("GET", "POST"))
+        m = "GET" if method == "HEAD" else method
+        return m in allowed
+
+    def _refuse_method(self, prefix: str) -> None:
+        allowed = ROUTE_METHODS.get(prefix, ("GET", "POST"))
+        self._send_error(405, f"{self.command} is not allowed here; use {' or '.join(allowed)}.",
+                         code="method", headers={"Allow": ", ".join(allowed)})
+
+    def _page_gate(self) -> bool:
+        """For a page (``/``, ``/ide``, ``/landing``): True to serve it. A
+        ``?lanex_key=`` that matches sets the cookie and redirects to the same
+        page without it; no valid key anywhere gets the "how to open LanEx"
+        page. Always True when no key is required."""
+        token = self._token()
+        if token is None:
+            return True
+        from urllib.parse import parse_qsl, urlencode
+        path, _, query = self.path.partition("?")
+        pairs = parse_qsl(query, keep_blank_values=True)
+        given = [v for k, v in pairs if k == auth.QUERY_PARAM]
+        if given:
+            if not auth.matches(token, given[-1]):
+                self._send_key_page(wrong=True)
+                return False
+            rest = urlencode([(k, v) for k, v in pairs if k != auth.QUERY_PARAM])
+            self.send_response(303)
+            self.send_header("Location", (path or "/") + ("?" + rest if rest else ""))
+            self.send_header("Set-Cookie", f"{auth.cookie_name(self._port())}={token}; Path=/; "
+                                           f"Max-Age={auth.COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return False
+        if self._key_ok("/"):
+            return True
+        self._send_key_page(wrong=False)
+        return False
+
+    def _send_key_page(self, *, wrong: bool) -> None:
+        self._send_text(_key_page_html(wrong), 401, "text/html; charset=utf-8")
 
     def _read_json_body(self) -> Dict[str, Any]:
         n = int(self.headers.get("Content-Length") or "0")
@@ -393,8 +503,8 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
 
     def _refuse_host(self) -> None:
         port = self.server.server_address[1] if getattr(self, "server", None) else 8765
-        self._send_text(f"This LanEx server only answers at 127.0.0.1 or localhost. "
-                        f"Open http://127.0.0.1:{port}/ instead.", 403)
+        self._send_error(403, f"This LanEx server only answers at 127.0.0.1 or localhost. "
+                              f"Open http://127.0.0.1:{port}/ instead.", code="host")
 
     # ---------- dispatch
 
@@ -422,36 +532,35 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             self._refuse_host()
             return
         path = self.path.split("?", 1)[0]
+        if path.startswith("/api/") and not self._key_ok(path):
+            self._refuse_key()
+            return
         _note_page_activity(path)
         if path == "/api/events":
-            last_event_id = self.headers.get("Last-Event-ID", "-1")
-            try:
-                start_seq = int(last_event_id)
-            except Exception:
-                start_seq = -1
             handler = ISSEHandler(self)
             attach_sse_handler(handler)
             try:
-                handler.stream_until_closed(get_runner(), start_seq=start_seq)
+                # The raw id: "<boot>-<seq>" from this server resumes; anything
+                # else (a restart, an older LanEx) resyncs (G14).
+                handler.stream_until_closed(get_runner(), last_event_id=self.headers.get("Last-Event-ID"))
             finally:
                 detach_sse_handler(handler)
             return
 
-        for prefix, fn in ROUTES:
-            if self._match(prefix, path):
-                # Found exact match — dispatch.
-                self._dispatch(fn)
+        route = self._route(path)
+        if route is not None:
+            if not self._method_ok(route[0], "GET"):
+                self._refuse_method(route[0])
                 return
+            self._dispatch(route[1])
+            return
 
         # Static fallback.
-        if path == "/" or path == "":
-            self._serve_static("index.html")
-            return
-        if path == "/ide" or path == "/ide.html":
-            self._serve_static("ide.html")
-            return
-        if path == "/landing" or path == "/landing.html":
-            self._serve_static("landing.html")
+        page = {"/": "index.html", "": "index.html", "/ide": "ide.html", "/ide.html": "ide.html",
+                "/landing": "landing.html", "/landing.html": "landing.html"}.get(path)
+        if page is not None:
+            if self._page_gate():
+                self._serve_static(page)
             return
         if path.startswith("/static/"):
             rel = path[len("/static/"):]
@@ -472,7 +581,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         try:
             response = serve_run_file(full_path)
         except Exception as ex:
-            self._send_json({"error": str(ex)}, 400)
+            self._send_error(400, str(ex))
             return
         if response is None:
             self._send_404()
@@ -490,6 +599,11 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         path = self.path.split("?", 1)[0]
+        if path.startswith("/api/") and not self._key_ok(path):
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/api/events":
             # Long-lived stream; bail to the underlying HTTP server default
             # (which is a 200 since the connection will persist).
@@ -499,14 +613,15 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        for prefix, _fn in ROUTES:
-            if self._match(prefix, path):
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
+        route = self._route(path)
+        if route is not None:
+            ok = self._method_ok(route[0], "HEAD")
+            self.send_response(200 if ok else 405)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
 
         if path.startswith("/static/"):
             base = static_root()
@@ -563,16 +678,30 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             self._discard_body()
             self._refuse_host()
             return
+        path = self.path.split("?", 1)[0]
+        if not self._key_ok(path):
+            self._discard_body()
+            self._refuse_key()
+            return
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
             self._discard_body()
-            self._send_text("CSRF validation failed", 403)
+            self._send_error(403, "CSRF validation failed", code="csrf")
             return
         if not self._same_origin_ok():
             self._discard_body()
-            self._send_text("cross-origin request rejected", 403)
+            self._send_error(403, "cross-origin request rejected", code="origin")
             return
 
-        path = self.path.split("?", 1)[0]
+        route = self._route(path)
+        if route is None:
+            self._discard_body()
+            self._send_404()
+            return
+        if not self._method_ok(route[0], "POST"):
+            self._discard_body()
+            self._refuse_method(route[0])
+            return
+
         _note_page_activity(path)
         if self.headers.get("X-LanEx-UTC-Offset") is not None:
             # The browser's time zone, for run names in local time.
@@ -585,9 +714,16 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             now = time.time()
             if now - self._install_rates.get(ip, 0) < 1.0:
                 self._discard_body()
-                self._send_text("Rate limit exceeded", 429)
+                self._send_error(429, "Rate limit exceeded", code="rate")
                 return
             self._install_rates[ip] = now
+
+        if route[0] in RAW_BODY_ROUTES:
+            # The handler streams the raw body itself (a file upload can be
+            # far bigger than any JSON body).
+            self._body = {}  # type: ignore[attr-defined]
+            self._dispatch(route[1])
+            return
 
         try:
             body = self._read_json_body()
@@ -595,15 +731,11 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             msg = str(ex)
             if not self._body_read:
                 self._discard_body()
-            self._send_text(msg, 413 if "too large" in msg.lower() else 400)
+            self._send_error(413 if "too large" in msg.lower() else 400, msg)
             return
-            
+
         self._body = body  # type: ignore[attr-defined]
-        for prefix, fn in ROUTES:
-            if self._match(prefix, path):
-                self._dispatch(fn)
-                return
-        self._send_404()
+        self._dispatch(route[1])
 
     def _dispatch(self, fn: Callable[[Any], None]) -> None:
         try:
@@ -620,7 +752,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 return
             try:
-                self._send_json({"error": str(ex)}, 500)
+                self._send_error(500, str(ex) or type(ex).__name__)
             except Exception as ex2:
                 if not self._is_conn_error(ex2):
                     raise
@@ -749,12 +881,40 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             self._send_404()
             return
         except Exception as ex:
-            self._send_json({"error": str(ex)}, 400)
+            self._send_error(400, str(ex))
             return
         if response is None:
             self._send_404()
             return
         self._send_path(response["path"], response["content_type"])
+
+
+def _key_page_html(wrong: bool) -> str:
+    """The page a window without the LanEx key gets instead of the app."""
+    lead = ("That LanEx key is not the one this server uses. It changes when the key "
+            "file is deleted." if wrong else
+            "This window does not have the key that lets a page talk to LanEx, so "
+            "LanEx did not load here.")
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Open LanEx</title><link rel='stylesheet' href='/static/fonts.css'>"
+        "<style>:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;"
+        "background:#0b1220;color:#dbe6ff;font:16px/1.55 Barlow,system-ui,sans-serif}"
+        "main{max-width:560px;margin:24px;padding:28px 30px;border:1px solid #23406e;border-radius:14px;"
+        "background:linear-gradient(180deg,#101b30,#0c1526);box-shadow:0 0 40px rgba(64,140,255,.12)}"
+        ".k{font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase;color:#6f8fc4}"
+        "h1{font-weight:700;font-size:28px;margin:10px 0 12px}code{font-family:'JetBrains Mono',monospace;"
+        "background:#16233d;padding:1px 6px;border-radius:5px}a{color:#7fb2ff}li{margin:6px 0}</style>"
+        "</head><body><main><div class='k'>LanEx</div><h1>Open LanEx from its shortcut</h1>"
+        f"<p>{lead}</p><ul>"
+        "<li>On Windows: click <b>LanEx</b> in the Start menu or the tray icon's <b>Open LanEx</b>.</li>"
+        "<li>On macOS or Linux: open the LanEx app, or run <code>lanex</code> in a terminal.</li>"
+        "<li>Running it headless: the address with the key is printed when the server starts, "
+        "and the key is in <code>~/.lanex/auth-token</code>.</li></ul>"
+        "<p><a href='/'>Try again</a> (works when this browser has opened LanEx before).</p>"
+        "</main></body></html>"
+    )
 
 
 def _addr_family(host: str) -> int:
@@ -798,25 +958,32 @@ def find_free_port(preferred: int = 8765, *, host: str = "127.0.0.1", retries: i
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8765,
-                allow_remote: bool = False) -> Tuple[ThreadingHTTPServer, int]:
+                allow_remote: bool = False,
+                token: Optional[str] = None) -> Tuple[ThreadingHTTPServer, int]:
     """Make a ThreadingHTTPServer bound to (host, port). Returns (server, actual_port).
 
-    The GUI has no authentication and exposes filesystem + tool-launch endpoints,
-    so binding to anything other than loopback is refused unless the operator
-    passes ``allow_remote=True`` (CLI ``--allow-remote``). Even then the
-    same-origin check on POSTs stays on.
+    The server exposes filesystem + tool-launch endpoints, so binding to
+    anything other than loopback is refused unless the operator passes
+    ``allow_remote=True`` (CLI ``--allow-remote``). Even then the same-origin
+    check on POSTs stays on.
+
+    *token* is the LanEx key (auth.py) every ``/api/*`` request must carry; the
+    ``lanex`` command always passes one. None leaves the API open, for tests
+    and code that embeds a server.
     """
     global _ALLOW_REMOTE
     if host not in _LOOPBACK_HOSTS and not allow_remote:
         raise RuntimeError(
-            f"refusing to bind {host!r}: the GUI has no authentication and serves "
-            "filesystem + tool-launch endpoints. Bind 127.0.0.1 (default), or pass "
-            "--allow-remote if you understand you're exposing it to your network."
+            f"refusing to bind {host!r}: the GUI serves filesystem + tool-launch "
+            "endpoints. Bind 127.0.0.1 (default), or pass --allow-remote if you "
+            "understand you're exposing it to your network."
         )
     _ALLOW_REMOTE = bool(allow_remote)
     actual_port = find_free_port(port, host=host)
     server_cls = _ThreadingHTTPServer6 if _addr_family(host) == socket.AF_INET6 else ThreadingHTTPServer
     httpd = server_cls((host, actual_port), LibreLaneGUIRequestHandler)
+    # Per server, not per process: tests run keyed and unkeyed servers side by side.
+    httpd.lanex_token = token or None  # type: ignore[attr-defined]
     return httpd, actual_port
 
 

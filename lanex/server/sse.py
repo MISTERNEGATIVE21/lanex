@@ -234,19 +234,23 @@ class ISSEHandler:
         """The wire frames of one bus event (cached by sequence). A ``batch``
         event (several events emitted as one) goes out as its events, in
         order, the last carrying the batch's id."""
+        from ..controller.events import wire_id
         seq = ev.get("seq", 0)
         key = (seq, id(ev))
         with _FRAMES_LOCK:
             hit = _FRAMES.get(key)
         if hit is not None:
             return hit
+        # The id carries this server's boot id ("<boot>-<seq>"), so a window
+        # that reconnects after a restart is told about the gap instead of
+        # having every new event skipped as "already seen" (G14).
         if ev.get("type") == "batch" and isinstance(ev.get("events"), list):
             subs = [e for e in ev["events"] if isinstance(e, dict)]
-            parts = [self._frame(e.get("type", "info"), e, id=(str(seq) if i == len(subs) - 1 else None))
+            parts = [self._frame(e.get("type", "info"), e, id=(wire_id(seq) if i == len(subs) - 1 else None))
                      for i, e in enumerate(subs)]
             text = "".join(parts)
         else:
-            text = self._frame(ev.get("type", "info"), ev, id=str(seq))
+            text = self._frame(ev.get("type", "info"), ev, id=wire_id(seq))
         with _FRAMES_LOCK:
             _FRAMES[key] = text
             while len(_FRAMES) > _FRAMES_MAX:
@@ -312,7 +316,8 @@ class ISSEHandler:
             cond.wait(timeout)
             return collect()
 
-    def stream_until_closed(self, runner: FlowRunner, *, heartbeat: float = 15.0, idle: float = 0.4, start_seq: int = -1) -> None:
+    def stream_until_closed(self, runner: FlowRunner, *, heartbeat: float = 15.0, idle: float = 0.4,
+                            start_seq: int = -1, last_event_id: Optional[str] = None) -> None:
         """Stream events from the shared bus until the client disconnects.
 
         Reads :data:`lanex.controller.events.bus` non-destructively by sequence
@@ -326,10 +331,20 @@ class ISSEHandler:
         ``runner`` argument is kept for signature stability but unused, and
         ``idle`` is now only an upper bound on one wait for a stream whose
         socket cannot be watched (a test's fake connection).
+
+        ``last_event_id`` is the raw ``Last-Event-ID`` header (``"<boot>-<seq>"``).
+        When given it decides the start: an id from this server resumes after
+        its sequence; one from another server process (a restart while the
+        window stayed open), a bare number from an older LanEx, or one this bus
+        never issued starts at the current end with a ``gap`` so the page
+        resyncs from ``/api/run/status`` (G14).
         """
         from ..controller import events as _events
         bus = _events.bus
         self._bus = bus
+        stale_reason: Optional[str] = None
+        if last_event_id is not None:
+            start_seq, stale_reason = _events.resume_point(last_event_id, bus.max_seq)
 
         try:
             self.request_handler.send_response(200)
@@ -365,7 +380,14 @@ class ISSEHandler:
         # Emit an explicit ``gap`` so the client re-hydrates from /api/run/status
         # rather than trusting its now-incomplete event history (Fear F, N3).
         min_buffered = bus.min_seq
-        if start_seq >= 0 and min_buffered > 0 and start_seq + 1 < min_buffered:
+        if stale_reason is not None:
+            self._write(
+                "gap",
+                {"ts": time.time(), "resync": True, "reason": stale_reason,
+                 "oldest_seq": min_buffered},
+                event="gap",
+            )
+        elif start_seq >= 0 and min_buffered > 0 and start_seq + 1 < min_buffered:
             self._write(
                 "gap",
                 {"ts": time.time(), "resync": True,

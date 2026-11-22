@@ -184,7 +184,9 @@ def test_cli_from_shortcut_reuses_a_running_instance(monkeypatch):
     monkeypatch.setattr(cli, "_running_instance_url", lambda: "http://127.0.0.1:8766/")
     monkeypatch.setattr(cli, "_lazy_open", lambda url, no_browser, tab=False: opened.append(url))
     assert cli.main(["--from-shortcut"]) == 0
-    assert opened == ["http://127.0.0.1:8766/"]
+    # The window opens with the LanEx key when one exists (server/auth.py).
+    from lanex.server import auth
+    assert opened == [auth.with_key("http://127.0.0.1:8766/", auth.read_existing())]
 
 
 def test_running_instance_url_rejects_stale_or_foreign_records(monkeypatch, tmp_path):
