@@ -3,7 +3,7 @@
 import { api } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { fmt } from "./api.js";
-import { renderConfig } from "./config.js";
+import { renderConfig, switchOverridesTo, refreshEffective } from "./config.js";
 import { setupFolderBrowser, loadFilesFor } from "./fs.js";
 import { toast } from "./toast.js";
 import { renderPreflight, freshPreflight, preflightNow, runBlocker } from "./preflight.js";
@@ -148,8 +148,10 @@ export function setupSetup() {
   setupFolderBrowser();
   renderRecentDesigns();
   // Page header links; the Constraints categories have their own tabs inside
-  // that card (config.js), so they never crowd this bar.
-  wireJump(document.getElementById("sec-setup"));
+  // that card (config.js), so they never crowd this bar. At the bottom of the
+  // page the section filling the screen is the current one ("Ready to run?"),
+  // not the folded All settings bar under it.
+  wireJump(document.getElementById("sec-setup"), { atBottom: "most-visible" });
   wireSetupActions();
   import("./projectcard.js").then((m) => m.wireDesignRow()).catch(() => {});
   import("./mostused.js").then((m) => m.wireSettings()).catch(() => {});
@@ -248,6 +250,9 @@ export async function openDesignQuick(designDir, opts = {}) {
     if (state.designDir) import("./runend.js").then((m) => m.clearRunResult()).catch(() => {});
   }
   state.designDir = designDir;
+  // Nor are its one-off settings (All settings): each project keeps its own
+  // (G13), and the chip next to Run shows this one's.
+  switchOverridesTo(designDir);
   state.designExplicit = explicit;
   // Until its files are in (finishAdopt), a PDK pick doesn't repaint the
   // Design row: the file list does, once.
@@ -275,6 +280,8 @@ export async function openDesignQuick(designDir, opts = {}) {
   // newest run (context.js).
   (await import("./context.js")).openProject(designDir);
   await readConfigPdk();
+  // All settings' values come from this project's config now.
+  refreshEffective();
   return true;
 }
 
@@ -357,6 +364,7 @@ function paintMissing() {
       state.designMissing = null;
       state.designDir = null;
       state.runs = [];
+      switchOverridesTo(null);
       paintProjectBlock();
       paintMissing();
       paintRunButton();
@@ -586,17 +594,31 @@ export async function syncPdkFromConfig({ reread = true } = {}) {
   }
 }
 
-// Save the picker's PDK and library to the config, when the config names
-// one (a config that names neither builds for whatever the picker sends).
+// The picker's PDK and library for the config: what it has to write so that
+// reopening the project shows this pick again. A config that names no PDK
+// builds for LibreLane's default (sky130A with sky130_fd_sc_hd), so picking
+// exactly that writes nothing; any other pick is saved, or the picker would
+// snap back to sky130A the next time the project opens.
+export function targetSets(c, pdk, scl) {
+  const set = {};
+  if (!c) return set;
+  const names = !!(c.pdk || c.scl);
+  if (pdk && pdk !== c.pdk && (names || pdk !== LIBRELANE_DEFAULT_PDK)) set.PDK = pdk;
+  if (scl && scl !== c.scl && (names || set.PDK || scl !== "sky130_fd_sc_hd")) set.STD_CELL_LIBRARY = scl;
+  return set;
+}
+
+// Save the picker's PDK and library to the config (a person's pick of the
+// target, so the project keeps it).
 async function saveTargetToConfig() {
   const c = cfgFor();
-  if (!c || (!c.pdk && !c.scl)) return;
-  const set = {};
-  if (state.selectedPdk && state.selectedPdk !== c.pdk) set.PDK = state.selectedPdk;
-  if (state.selectedScl && state.selectedScl !== c.scl) set.STD_CELL_LIBRARY = state.selectedScl;
+  if (!c) return;
+  const set = targetSets(c, state.selectedPdk, state.selectedScl);
   if (!Object.keys(set).length) return;
   if (!c.editable) {
-    toast.show(c.name + " names " + (c.pdk || c.scl) + " and LanEx can't edit it. Change it there too: a run stops until the two agree.", "warn", 9000);
+    toast.show(c.pdk || c.scl
+      ? c.name + " names " + (c.pdk || c.scl) + " and LanEx can't edit it. Change it there too: a run stops until the two agree."
+      : "LanEx can't save the PDK to " + c.name + ", so runs from LanEx use " + state.selectedPdk + " but the project opens on sky130A again.", "warn", 9000);
     return;
   }
   try {
@@ -611,7 +633,8 @@ async function saveTargetToConfig() {
     }
     document.dispatchEvent(new CustomEvent("g:config_changed"));
   } catch (ex) {
-    toast.show("Couldn't save the PDK to " + c.name + ": " + (ex.message || ex) + ". A run stops until the two agree.", "error", 9000);
+    toast.show("Couldn't save the PDK to " + c.name + ": " + (ex.message || ex) + "." +
+      (c.pdk || c.scl ? " A run stops until the two agree." : ""), "error", 9000);
   }
 }
 
@@ -695,6 +718,8 @@ async function onPdkSelected(e) {
     // While a project opens, its file list paints the Design row once the
     // files are in (fs.js loadFilesFor): no second read here.
     if (_adopting !== state.designDir) import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
+    // Which pdk::/scl:: sections apply follows the pick (All settings' values).
+    refreshEffective();
     refreshPdkReadiness();
   } catch (ex) {
     paintPdkPill("error", "pill-fail");
@@ -717,6 +742,7 @@ async function onSclSelected(e) {
   state.selectedScl = sel.value;
   if (sel.value) safeStorage.set("ll.recentScl", sel.value);
   if (e && e.type === "change") await saveTargetToConfig();
+  refreshEffective();
   refreshPdkReadiness();
 }
 

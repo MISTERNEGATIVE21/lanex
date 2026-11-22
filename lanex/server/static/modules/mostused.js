@@ -6,14 +6,18 @@
 // key (server side, controller/configedit.py), like the top/clock row: what
 // this card shows is what a terminal run of the same config builds.
 //
+// A value a pdk::/scl:: section sets for the picked PDK is shown and edited
+// there (configscope.js asks: that section only, or every PDK).
+//
 // Everything else stays in All settings (config.js), whose values are
-// per-run overrides that leave the config file alone.
+// one-off settings for runs from LanEx that leave the config file alone.
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { pdkFacts } from "./pdkinfo.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
+import { applyingEntry, sectionWho, writeSetting } from "./configscope.js";
 
 const SYNTH = [
   ["AREA 0", "AREA 0 · small, fast to build"],
@@ -82,10 +86,16 @@ const GROUPS = [
 const ITEMS = GROUPS.flatMap((g) => g.items);
 const KEYS = ITEMS.map((i) => i.key);
 
-let _vals = {};
+let _vals = {};      // what each field shows: the value the file gives this PDK
+let _top = {};       // the file's top-level values
 let _scoped = {};
 let _cfg = null;
 let _seq = 0;
+// "A fixed die area" picked before a die area exists: FP_SIZING=absolute
+// alone would break the next run, so it is held here and saved together with
+// the area in one write.
+let _pendingFixed = false;
+let _pendingFor = null;
 const $ = (id) => document.getElementById(id);
 
 function shown(v) {
@@ -133,19 +143,34 @@ function control(it, id, val) {
     " value='" + fmt.escape(cur) + "' placeholder='" + fmt.escape(ph) + "'/>";
 }
 
+// The value a run gets from the file for the picked PDK: the section that
+// wins, else the top level.
+function effective(key) {
+  const hit = applyingEntry(_scoped[key]);
+  return hit ? hit.value : _top[key];
+}
+
 function notesFor(it) {
   const out = [];
+  const hit = applyingEntry(_scoped[it.key]);
   for (const e of _scoped[it.key] || []) {
     if (e.applies === false) continue;
-    out.push("The <code>" + fmt.escape(e.scope) + "</code> section of " + fmt.escape(_cfg.name) + " sets <b>" +
-      fmt.escape(shown(e.value)) + "</b>" + (e.applies ? " for this PDK, and that wins over this field." : " for matching PDKs."));
+    if (hit && e.scope === hit.scope) {
+      out.push("From the <code>" + fmt.escape(e.scope) + "</code> section of " + fmt.escape(_cfg.name) +
+        ", for " + fmt.escape(sectionWho(e)) + ". A change asks whether it is for those only or for every PDK.");
+    } else if (!e.applies) {
+      out.push("The <code>" + fmt.escape(e.scope) + "</code> section of " + fmt.escape(_cfg.name) + " sets <b>" +
+        fmt.escape(shown(e.value)) + "</b> for matching PDKs.");
+    }
   }
   const ov = (state.varsValues || {})[it.key];
   if (ov !== undefined && ov !== null && String(ov).trim() !== "") {
-    out.push("All settings overrides this for runs from LanEx: <b>" + fmt.escape(String(ov)) + "</b>.");
+    out.push("A one-off setting (All settings) replaces this for runs from LanEx: <b>" + fmt.escape(String(ov)) + "</b>.");
   }
   if (it.key === "DIE_AREA" && _vals.FP_SIZING === "absolute" && !shown(_vals.DIE_AREA)) {
-    out.push("A fixed die needs its area.");
+    out.push(_pendingFixed
+      ? "Enter the die area to save the fixed die. Until then " + fmt.escape((_cfg && _cfg.name) || "the config") + " keeps sizing from utilization."
+      : "A fixed die needs its area.");
   }
   return out;
 }
@@ -229,6 +254,7 @@ function paintSummary() {
 
 export async function paintSettings() {
   if (!$("ms-body")) return;
+  if (_pendingFor !== state.designDir) { _pendingFixed = false; _pendingFor = state.designDir; }
   if (!state.designDir) { _cfg = null; render(); return; }
   const seq = ++_seq;
   try {
@@ -238,8 +264,14 @@ export async function paintSettings() {
     });
     if (seq !== _seq) return;
     _cfg = info.config || null;
-    _vals = info.settings || {};
+    _top = info.settings || {};
     _scoped = info.settings_scoped || {};
+    _vals = {};
+    for (const k of KEYS) _vals[k] = effective(k);
+    if (_pendingFixed) {
+      if (_vals.FP_SIZING === "absolute") _pendingFixed = false;
+      else _vals.FP_SIZING = "absolute";
+    }
   } catch (ex) {
     if (seq !== _seq) return;
     $("ms-body").innerHTML = "<p class='ms-ro'>Couldn't read the settings: " + fmt.escape(ex.message || ex) + "</p>";
@@ -272,15 +304,30 @@ function parse(it, raw) {
 
 async function save(key, set, remove) {
   try {
-    const r = await api.configSet(set, remove, { pdk: state.selectedPdk || null, scl: state.selectedScl || null });
-    // An All settings override for the same key would silently win: drop it.
-    if (state.varsValues && key in state.varsValues) delete state.varsValues[key];
+    const it = ITEMS.find((x) => x.key === key);
+    const r = await writeSetting({ key, value: set[key], remove: !!(remove && remove.length), label: (it && it.label.toLowerCase()) || key,
+      entries: _scoped[key] || [], cfgName: (_cfg && _cfg.name) || "the config" });
+    if (r) document.dispatchEvent(new CustomEvent("g:config_changed"));
+  } catch (ex) {
+    toast.show("Couldn't save " + key + ": " + (ex.message || ex), "error", 7000);
+  }
+  await paintSettings();
+}
+
+// A fixed die with its area, in one write (never FP_SIZING=absolute alone).
+async function saveFixedDie(area) {
+  try {
+    const r = await api.configSet({ FP_SIZING: "absolute", DIE_AREA: area }, [], { pdk: state.selectedPdk || null, scl: state.selectedScl || null });
+    _pendingFixed = false;
+    for (const k of ["FP_SIZING", "DIE_AREA"]) if (state.varsValues && k in state.varsValues) delete state.varsValues[k];
     if (r.changed && r.changed.length) {
-      toast.show((remove.length ? "Removed " + key + " from " : "Saved " + key + " to ") + r.name + ".", "success", 2200);
+      const { undoWrite } = await import("./configscope.js");
+      const undo = r.undo && r.undo.backup ? { label: "Undo", run: () => undoWrite(r.undo, r.name) } : null;
+      toast.show("Saved a fixed die of " + area.join(" ") + " µm to " + r.name + ".", "success", 6000, undo);
     }
     document.dispatchEvent(new CustomEvent("g:config_changed"));
   } catch (ex) {
-    toast.show("Couldn't save " + key + ": " + (ex.message || ex), "error", 7000);
+    toast.show("Couldn't save the fixed die: " + (ex.message || ex), "error", 7000);
   }
   await paintSettings();
 }
@@ -295,6 +342,17 @@ export function wireSettings() {
     if (!it) return;
     const p = parse(it, e.target.value);
     if (p.error) { toast.show(p.error, "warn"); render(); return; }
+    // Die size: a fixed die is saved with its area, never before it.
+    if (it.key === "FP_SIZING") {
+      const hasArea = !!shown(_vals.DIE_AREA);
+      if (p.value === "absolute" && !hasArea) { _pendingFixed = true; _vals.FP_SIZING = "absolute"; render(); $("ms-DIE_AREA")?.focus(); return; }
+      if (p.value !== "absolute" && _pendingFixed) { _pendingFixed = false; paintSettings(); return; }
+    }
+    if (it.key === "DIE_AREA" && _pendingFixed) {
+      if (p.remove) { toast.show("A fixed die needs its area, like 0 0 200 200.", "warn"); return; }
+      saveFixedDie(p.value);
+      return;
+    }
     if (p.remove) save(it.key, {}, [it.key]);
     else save(it.key, { [it.key]: p.value }, []);
   });
@@ -303,6 +361,7 @@ export function wireSettings() {
   });
   body.addEventListener("click", (e) => {
     const b = e.target.closest("[data-reset]");
+    if (b && b.dataset.reset === "FP_SIZING" && _pendingFixed) { _pendingFixed = false; paintSettings(); return; }
     if (b) save(b.dataset.reset, {}, [b.dataset.reset]);
   });
   document.querySelector("#setup-settings [data-jump-to]")?.addEventListener("click", (e) => {

@@ -377,10 +377,22 @@ function paintCount() {
   const rows = designRows();
   const ticked = rows.filter((f) => _checked.has(f.abs)).length;
   const tbs = _files.filter((f) => f.role === "testbench").length;
+  const managed = _cfg.mode === "list" || _cfg.mode === "none";
   el.textContent = rows.length
-    ? ticked + " of " + rows.length + " design file" + (rows.length === 1 ? "" : "s") + " go into the chip" +
+    ? (!ticked && managed && (state.configSources || []).length
+        ? "None ticked. Nothing is saved until you tick a file: runs still build the " + countText(state.configSources.length) +
+          " " + (_cfg.name || "the config") + " builds."
+        : designCountText(ticked, rows.length)) +
       (tbs ? " · " + tbs + " testbench" + (tbs === 1 ? "" : "es") : "")
     : "No design files yet.";
+}
+
+function countText(n) { return n === 1 ? "1 design file" : n + " design files"; }
+
+// "1 of 1 design file goes into the chip", "2 of 3 design files go into the
+// chip": the verb follows how many go in.
+export function designCountText(ticked, total) {
+  return ticked + " of " + total + " design file" + (total === 1 ? "" : "s") + (ticked === 1 ? " goes" : " go") + " into the chip";
 }
 
 function column(root) {
@@ -484,7 +496,7 @@ function srcRow(f, tickable) {
     cb.checked = _checked.has(f.abs);
     cb.setAttribute("aria-label", "Build " + f.rel + " into the chip");
     if (_cfg.mode === "list" && _cfg.globbed) {
-      cb.title = "Untick to leave it out of the chip. " + (_cfg.name || "The config") + " then lists its design files by name.";
+      cb.title = "Untick to leave it out of the chip. " + (_cfg.name || "The config") + " then has to list the files that glob matches by name (LanEx asks first).";
     }
     cb.addEventListener("change", () => {
       if (cb.checked) _checked.add(f.abs); else _checked.delete(f.abs);
@@ -529,11 +541,36 @@ function onTicksChanged() {
   if (_cfg.mode !== "list" && _cfg.mode !== "none") return;
   const files = tickedDesign();
   const dir = state.designDir;
+  // An empty list can't build: nothing is saved until a file is ticked (the
+  // count line says so, and runs keep the config's list meanwhile).
+  if (!files.length) return;
+  const globbed = _cfg.mode === "list" && _cfg.globbed;
   _saving = _saving.then(async () => {
     try {
+      // A change a glob can't express (unticking a file it matches) writes
+      // the glob out file by file: new files there would stop going in, so
+      // ask first.
+      if (globbed) {
+        const dry = await api.configSources(files, { dry_run: true });
+        if (state.designDir !== dir) return;
+        if (dry.expanded && dry.expanded.length) {
+          const { confirmDialog } = await import("./dialog.js");
+          const ok = await confirmDialog({
+            title: "List the files by name?",
+            body: (_cfg.name || "The config") + " builds " + dry.expanded.join(", ") + ", which matches the file you unticked. " +
+              "To leave it out, LanEx writes that pattern out as a list of the files it matches now. New files there " +
+              "then need a tick here before they go into the chip.",
+            confirmText: "List them by name",
+          });
+          if (!ok) { await loadFilesFor(dir); return; }
+        }
+      }
       const r = await api.configSources(files);
       if (state.designDir !== dir) return;
-      if (r.changed && r.changed.length) toast.show("Saved the file list to " + r.name + ".", "success", 2200);
+      if (r.changed && r.changed.length) {
+        toast.show("Saved the file list to " + r.name + "." + (r.expanded && r.expanded.length && !globbed
+          ? " " + r.expanded.join(", ") + " is now a list of files." : ""), "success", 2600);
+      }
       await loadFilesFor(dir);
       document.dispatchEvent(new CustomEvent("g:config_changed"));
     } catch (ex) {

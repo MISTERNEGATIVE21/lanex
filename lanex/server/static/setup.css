@@ -736,6 +736,16 @@ body:not(.theme-light) .pf-node.is-ok .pf-state { color: var(--met3); }
 .config-nav .nav-chip.is-current { color: var(--text-strong); }
 .config-nav .nav-chip.is-current::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--met1); box-shadow: 0 0 8px var(--accent-glow); }
 .config-nav .nav-count { font-family: var(--mono); font-size: 12px; color: var(--text-muted); }
+/* All settings filters rows, groups and their tabs in place (config.js). */
+.config-nav .nav-chip[hidden], #vars-form .vars-form[hidden], #vars-form .var-row[hidden], #vars-form .config-anchor[hidden] { display: none; }
+/* A value LibreLane would refuse is not used: said under the field. */
+.var-row .var-err { display: block; margin-top: 4px; font-size: 13px; color: var(--warn); }
+.var-row .var-err[hidden] { display: none; }
+.var-row.is-invalid input, .var-row.is-invalid select { border-color: var(--warn); }
+/* "2 one-off settings" next to Run (config.js paintOneOffChip). */
+.oneoff-chip { cursor: pointer; }
+.oneoff-chip[hidden] { display: none; }
+.oneoff-chip:hover { border-color: var(--accent); }
 .reports-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 14px; }
 .preset-row .lbl { font-size: 14px; color: var(--text-muted); }
 

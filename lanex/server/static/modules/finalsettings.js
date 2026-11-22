@@ -129,7 +129,7 @@ function _sentRows(model) {
         "</code>" + (s.conflict.scoped ? ", " + fmt.escape(s.conflict.scope || "scoped") : "") +
         ")</span> " +
         provBtnHtml({ kind: "input", key: s.name },
-          "Open the superseded config line (file on disk is never modified)");
+          "Open the superseded config line (the one-off setting doesn't change the file)");
     } else {
       vs = "<span class='muted'>not in config: runtime override applies to this run only</span>";
     }
@@ -229,7 +229,7 @@ export async function openFinalSettings(payload = null) {
   const cumulative = buildCumulativeModel(payload.overrides, map, state.variables);
   const c = cumulative.counts;
   const bodyHtml =
-    "<p>Configuration precedence order (later sources override earlier; config files on disk are <b>never modified</b>):</p>" +
+    "<p>Configuration precedence order (later sources override earlier; one-off settings from All settings <b>don't change</b> the config file on disk):</p>" +
     "<ol class='fs-order'>" +
     "<li>LibreLane built-in defaults followed by PDK definitions. A configuration setting only a few variables is normal; " +
     "<b>all other parameters</b> take values from these defaults.</li>" +

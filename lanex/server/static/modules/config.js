@@ -1,8 +1,19 @@
-// config.js — Constraints form, grouped & comprehensive.
-// - Groups variables by stage
-// - Sticky nav to jump between groups
-// - Presets: Default / Low Power / Performance / Sky130 special / Min area
-// - Auto-applies "hide non-PDK variables" when a PDK is selected
+// config.js — All settings: every LibreLane variable by flow stage, and the
+// one-off settings a run from LanEx sends with it.
+//
+// One model with the config file at its centre:
+// - Each field shows the value a run gets NOW: the one-off setting when there
+//   is one, else what the project's config sets for the selected PDK (the
+//   most specific pdk::/scl:: section wins, as in LibreLane), else
+//   LibreLane's default. So touching a field never silently replaces the
+//   file's value with the default.
+// - A change here is a one-off setting (state.varsValues): it goes with runs
+//   started from LanEx as a -c override and is never written into the file.
+//   Every one-off setting is shown as a chip next to Run (paintOneOffChip), so
+//   nothing can reach a run unseen. They are kept per project (G13) and stay
+//   until cleared. A one-off can be saved into the config from its trail.
+// - Rows are built once per variable list; search, the "Show" filter and
+//   value changes update them in place.
 
 import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
@@ -108,11 +119,11 @@ const STAGE_GROUPS = [
 // Presets only set REAL LibreLane variables (verified against the live
 // variable registry). PL_TARGET_DENSITY_PCT is a percentage (0–100), FP_CORE_UTIL
 // is a percentage, SYNTH_STRATEGY is the Literal 'AREA n' / 'DELAY n', and
-// DIODE_ON_PORTS is the Literal 'none|in|out|both'. "Default" clears overrides so
-// every field falls back to LibreLane's own defaults.
+// DIODE_ON_PORTS is the Literal 'none|in|out|both'. "Clear" drops every
+// one-off setting, so each field is back to what the config file sets.
 const PRESETS = {
   default: {
-    label: "Default",
+    label: "Clear",
     reset: true,
     values: {},
   },
@@ -154,6 +165,9 @@ const PRESETS = {
   },
 };
 
+// Picked in Setup's PDK card and always sent from there: never a one-off.
+const PLUMBING = new Set(["PDK", "STD_CELL_LIBRARY"]);
+
 function groupFor(name, v) {
   if (v?.pdk && STAGE_GROUPS[0].pdk_only) return "pdk";
   // Longest-matching-key wins, NOT first-match. First-match sent e.g.
@@ -174,85 +188,481 @@ function groupFor(name, v) {
   return best || "misc";
 }
 
-let _searchTerm = "";
+// ---------------------------------------------------------------- values (pure)
+
+export function shownValue(v) {
+  if (v === null || v === undefined) return "";
+  if (Array.isArray(v)) return v.map(shownValue).join(v.every((x) => typeof x === "number" || /^-?[\d.]+$/.test(String(x))) ? " " : ", ");
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+const NUM_RX = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+function listItems(s) {
+  return (s.includes(",") ? s.split(",") : s.split(/\s+/)).map((x) => x.trim()).filter(Boolean);
+}
+
+// A field's text as the value a run would send, by the variable's kind
+// (introspect.py: bool, int, number, numbers, choice, list, path, dict, text).
+// {empty} for a blank field, {error} for a value LibreLane would refuse, else
+// {value} (a string the server passes as -c, or a boolean).
+export function parseValue(v, raw) {
+  const s = String(raw == null ? "" : raw).trim();
+  const name = (v && v.name) || "This setting";
+  const kind = (v && v.kind) || (v && /bool/i.test(v.type || "") ? "bool" : "text");
+  if (s === "") return { empty: true };
+  if (kind === "bool") {
+    if (/^(true|1|yes|on)$/i.test(s)) return { value: true };
+    if (/^(false|0|no|off)$/i.test(s)) return { value: false };
+    return { error: name + " is true or false." };
+  }
+  if (kind === "int") {
+    if (!/^[+-]?\d+$/.test(s)) return { error: name + " takes a whole number." };
+    return { value: String(parseInt(s, 10)) };
+  }
+  if (kind === "number") {
+    if (!NUM_RX.test(s)) return { error: name + " takes a number" + (v.units ? " (" + v.units + ")" : "") + "." };
+    return { value: s };
+  }
+  if (kind === "numbers") {
+    const parts = s.replace(/^[[(]|[\])]$/g, "").split(/[\s,]+/).filter(Boolean);
+    if (!parts.length || parts.some((p) => !NUM_RX.test(p))) return { error: name + " takes numbers, separated by spaces (like 0 0 200 200)." };
+    return { value: parts.join(" ") };
+  }
+  if (kind === "choice") {
+    const choices = (v.choices || []).map(String);
+    if (choices.length && !choices.includes(s)) return { error: name + " is one of " + choices.join(", ") + "." };
+    return { value: s };
+  }
+  if (kind === "list") {
+    const items = listItems(s);
+    if (!items.length) return { empty: true };
+    return { value: items.some((x) => /\s/.test(x)) ? items.join(",") : items.join(" ") };
+  }
+  if (kind === "dict") {
+    try {
+      const o = JSON.parse(s);
+      if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("not an object");
+    } catch (_e) {
+      return { error: name + " is a JSON object, like {\"key\": \"value\"}." };
+    }
+    return { value: s };
+  }
+  return { value: s };
+}
+
+// True when a parsed field value is the value the run gets without it, so
+// it isn't a one-off setting at all.
+export function sameValue(v, value, baseText) {
+  if (baseText === "" || baseText === undefined || baseText === null) return false;
+  const b = parseValue(v, baseText);
+  if (b.error || b.empty) return false;
+  const kind = (v && v.kind) || "text";
+  if (kind === "int" || kind === "number") return Number(value) === Number(b.value);
+  if (kind === "numbers") {
+    const x = String(value).split(" ").map(Number), y = String(b.value).split(" ").map(Number);
+    return x.length === y.length && x.every((n, i) => n === y[i]);
+  }
+  if (kind === "list") return listItems(String(value)).join("\0") === listItems(String(b.value)).join("\0");
+  return String(value) === String(b.value);
+}
+
+// ---------------------------------------------------------------- module state
+
+let _wired = false;
+let _builtFor = null;          // the variables array the rows were built from
+const _rows = new Map();       // name -> { v, row, input, src, err, reset }
+const _groups = [];            // { def, heading, hint, grid, chip, names }
+let _search = "";
+let _show = "all";             // all | file | oneoff
+let _eff = { dir: null, key: "", map: {}, name: null, loaded: false };
+let _effSeq = 0;
+
+// ---------------------------------------------------------------- one-off settings per project (G13)
+
+const _byProject = new Map();  // project dir -> its one-off settings
+let _ovDir = null;
+
+// The project in view changed: keep the last one's one-off settings with it
+// and bring this one's back (none for a project not opened before). A
+// one-off setting never follows the person into another project.
+export function switchOverridesTo(dir) {
+  const next = dir || "";
+  if (_ovDir === next) return;
+  if (_ovDir !== null && _ovDir !== "") {
+    const cur = activeOverrides();
+    if (Object.keys(cur).length) _byProject.set(_ovDir, cur); else _byProject.delete(_ovDir);
+  }
+  _ovDir = next;
+  state.varsValues = Object.assign({}, (next && _byProject.get(next)) || {});
+  // The last project's config values are not this one's; they are read
+  // again once the server has this project open (setup.js).
+  _eff = { dir: null, key: "", map: {}, name: null, loaded: false };
+}
+
+// What will actually be sent to the engine besides the PDK picks: every
+// one-off setting with a value.
+export function activeOverrides() {
+  const out = {};
+  for (const [k, v] of Object.entries(state.varsValues || {})) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+// The one-off settings shown next to Run: everything sent with the run that
+// Setup's PDK card didn't pick.
+export function oneOffSettings(values = state.varsValues) {
+  const out = {};
+  for (const [k, v] of Object.entries(values || {})) {
+    if (PLUMBING.has(k) || v === null || v === undefined) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- effective values
+
+function effKey() { return [state.designDir || "", state.selectedPdk || "", state.selectedScl || ""].join("\0"); }
+
+export async function refreshEffective({ force = false } = {}) {
+  const key = effKey();
+  if (!force && _eff.loaded && _eff.key === key) return _eff;
+  const seq = ++_effSeq;
+  let next = { dir: state.designDir || null, key, map: {}, name: null, editable: false, loaded: true };
+  if (state.designDir) {
+    try {
+      const r = await api.designInfo({ effective: true, pdk: state.selectedPdk || null, scl: state.selectedScl || null });
+      next = { ...next, map: (r && r.effective) || {}, name: (r && r.config && r.config.name) || null,
+        editable: !!(r && r.config && r.config.editable) };
+    } catch (_e) { /* no config to read: defaults only */ }
+  }
+  if (seq !== _effSeq) return _eff;
+  _eff = next;
+  paintFileName();
+  refreshRows();
+  renderOverridesSummary();
+  return _eff;
+}
+
+function cfgName() { return _eff.name || "the config"; }
+
+// The value a run gets without a one-off setting, and where it comes from.
+function baseOf(v) {
+  const e = _eff.map[v.name];
+  if (e) return { text: shownValue(e.value), from: "config", scope: e.scope || null };
+  const d = v.default;
+  if (d !== undefined && d !== null && shownValue(d) !== "") return { text: shownValue(d), from: "default" };
+  return { text: "", from: v.pdk ? "pdk" : "none" };
+}
+
+function hasOverride(name) {
+  const ov = (state.varsValues || {})[name];
+  return ov !== undefined && ov !== null && !(typeof ov === "string" && ov.trim() === "");
+}
+
+// ---------------------------------------------------------------- render
 
 export function renderConfig() {
   const root = document.getElementById("vars-form");
   if (!root) return;
+  wireOnce();
+  build();
+  refreshEffective();
+  syncReportToggles();
+  renderOverridesSummary();
+  paintOneOffChip();
+}
+
+function wireOnce() {
+  if (_wired) return;
+  _wired = true;
   const search = document.getElementById("var-search");
+  let t = 0;
   search?.addEventListener("input", () => {
-    _searchTerm = search.value.toUpperCase();
-    paint();
+    clearTimeout(t);
+    t = setTimeout(() => { _search = search.value.trim().toUpperCase(); applyFilter(); }, 120);
   });
-  document.querySelectorAll(".chip-clickable").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const p = PRESETS[btn.dataset.preset];
-      if (!p) return;  // user-defined chips are handled by paintUserPresets()
-      const { confirmDialog } = await import("./dialog.js");
-      // B3 — preview exactly what the preset changes BEFORE applying it, so a
-      // preset can never silently overwrite a field the user tuned by hand.
-      const changes = [];
-      if (p.reset) {
-        const nOv = Object.keys(state.varsValues || {}).length;
-        changes.push(nOv ? ("clear " + nOv + " current override(s) → LibreLane defaults")
-                         : "nothing to clear: no overrides set");
-      }
-      for (const [k, v] of Object.entries(p.values)) {
-        const cur = state.varsValues[k];
-        const from = (cur === undefined || cur === "") ? "default" : String(cur);
-        changes.push(k + ": " + from + " → " + String(v));
-      }
-      const ok = await confirmDialog({
-        title: "Apply preset " + (p.label || btn.dataset.preset) + "?",
-        body: "This preset will " + changes.join("; ") + "." +
-          (p.reset ? "" : " Overrides not listed here are kept."),
-        confirmText: "Apply preset",
-      });
-      if (!ok) return;
-      document.querySelectorAll(".chip-clickable").forEach((b) => b.classList.remove("chip-active"));
-      btn.classList.add("chip-active");
-      if (p.reset) state.varsValues = {};
-      for (const [k, v] of Object.entries(p.values)) state.varsValues[k] = String(v);
-      syncReportToggles();
-      paint();
-      renderOverridesSummary();
-    });
+  const show = document.getElementById("var-show");
+  show?.addEventListener("change", () => { _show = show.value || "all"; applyFilter(); });
+  // The preset chips of this card only: the jump links elsewhere share the
+  // chip classes. Wired once, so a preset click opens one dialog however
+  // often the config changed.
+  document.querySelectorAll("#cfg-card [data-preset]").forEach((btn) => {
+    btn.addEventListener("click", () => onPreset(btn));
   });
-  // "Save preset": persist the current overrides as a named, reusable preset
-  // (localStorage, per-browser). Cheap QoL — a returning user re-applies their
-  // own recipe in one click instead of re-typing fields.
   const saveBtn = document.getElementById("config-save-preset");
-  if (saveBtn && !saveBtn._wired) {
-    saveBtn._wired = true;
-    saveBtn.addEventListener("click", async () => {
-      const ov = activeOverrides();
-      if (!Object.keys(ov).length) { toast.show("Set at least one override first.", "warn"); return; }
-      const { promptDialog } = await import("./dialog.js");
-      const name = await promptDialog({ title: "Save preset", label: "Preset name", defaultValue: "" });
-      if (!name || !name.trim()) return;
-      const presets = userPresets();
-      presets[name.trim()] = { values: ov };
-      safeStorage.setJSON(USER_PRESETS_KEY, presets);
-      paintUserPresets();
-      toast.show("Saved preset '" + name.trim() + "'.", "success");
-    });
-  }
+  saveBtn?.addEventListener("click", onSavePreset);
   paintUserPresets();
   // Quick SYNTH_SHOW toggle (surfaces the most-asked-for diagram knob without
-  // hunting the full variable list). Drives the same override the form would.
+  // hunting the full variable list). Drives the same one-off setting the form would.
   const ss = document.getElementById("cfg-synth-show");
-  if (ss && !ss._wired) {
-    ss._wired = true;
-    ss.addEventListener("change", () => {
-      state.varsValues.SYNTH_SHOW = ss.checked;
-      const formInput = document.getElementById("var-SYNTH_SHOW");
-      if (formInput) formInput.value = ss.checked ? "true" : "false";
-      renderOverridesSummary();
-    });
+  ss?.addEventListener("change", () => {
+    const v = (state.variables || []).find((x) => x.name === "SYNTH_SHOW") || { name: "SYNTH_SHOW", kind: "bool" };
+    setOneOff(v, ss.checked);
+  });
+  // Any change to the one-off settings, from any page (a run's settings
+  // loaded from Runs, a sweep's "Use this", a save that dropped one).
+  document.addEventListener("g:overrides_changed", () => {
+    refreshRows();
+    syncReportToggles();
+    renderOverridesSummary();
+    paintOneOffChip();
+  });
+  document.addEventListener("g:config_changed", (e) => {
+    const d = (e && e.detail) || {};
+    // The fix sheet saved these into the config: a one-off of the same key
+    // would win over it on the next Run and bring the error back.
+    if (d.from === "fixsheet" && Array.isArray(d.keys)) {
+      for (const k of d.keys) if (state.varsValues && k in state.varsValues) delete state.varsValues[k];
+    }
+    refreshEffective({ force: true });
+  });
+  document.addEventListener("g:pdk_confirmed", () => refreshEffective());
+}
+
+function build() {
+  const root = document.getElementById("vars-form");
+  const nav = document.getElementById("config-nav");
+  if (!root || !nav) return;
+  const vars = state.variables || [];
+  if (_builtFor === vars && _rows.size) return;
+  _builtFor = vars;
+  _rows.clear();
+  _groups.length = 0;
+  root.innerHTML = "";
+  nav.innerHTML = "";
+  const buckets = new Map(STAGE_GROUPS.map((g) => [g.id, []]));
+  for (const v of [...vars].sort((a, b) => a.name.localeCompare(b.name))) buckets.get(groupFor(v.name, v)).push(v);
+  for (const [stageId, vs] of buckets) {
+    if (!vs.length) continue;
+    const def = STAGE_GROUPS.find((g) => g.id === stageId);
+    const heading = document.createElement("h3");
+    heading.id = "cfg-section-" + stageId;
+    heading.className = "config-anchor";
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.style.marginBottom = "var(--s-3)";
+    hint.textContent = def.description || "";
+    // Category tabs; jumpnav's scroll-spy underlines the one in view.
+    const chip = document.createElement("button");
+    chip.className = "nav-chip";
+    chip.type = "button";
+    chip.dataset.jump = heading.id;
+    nav.appendChild(chip);
+    const grid = document.createElement("div");
+    grid.className = "vars-form";
+    for (const v of vs) grid.appendChild(buildRow(v));
+    root.appendChild(heading);
+    if (def.description) root.appendChild(hint);
+    root.appendChild(grid);
+    _groups.push({ def, heading, hint, grid, chip, names: vs.map((v) => v.name) });
   }
-  syncReportToggles();
-  paint();
-  renderOverridesSummary();
+  const empty = document.createElement("p");
+  empty.className = "muted";
+  empty.id = "vars-empty";
+  empty.hidden = true;
+  root.appendChild(empty);
+  wireJumpNav(nav);
+  refreshRows();
+  applyFilter();
+}
+
+function inputHtml(v, id) {
+  const kind = v.kind || (/bool/i.test(v.type || "") ? "bool" : "text");
+  if (kind === "bool") {
+    return "<select id='" + id + "'><option value=''>(not set)</option><option value='true'>true</option><option value='false'>false</option></select>";
+  }
+  // Literal / Enum variables expose their allowed values in `choices` (from the
+  // backend's typing introspection): a real dropdown, so no invalid value.
+  if (Array.isArray(v.choices) && v.choices.length) {
+    return "<select id='" + id + "'><option value=''>(not set)</option>" +
+      v.choices.map((s) => "<option value='" + fmt.escape(s) + "'>" + fmt.escape(s) + "</option>").join("") + "</select>";
+  }
+  const ph = kind === "numbers" ? "numbers, like 0 0 200 200" : kind === "list" ? "values, separated by spaces or commas" : "";
+  return "<input type='text' id='" + id + "' spellcheck='false' autocomplete='off' placeholder='" + fmt.escape(ph) + "' />";
+}
+
+function buildRow(v) {
+  const row = document.createElement("div");
+  row.className = "var-row";
+  row.dataset.var = v.name;
+  const id = "var-" + v.name;
+  // B4: LibreLane's own default for every field, so a value is never
+  // mistaken for something the user typed. No default = required or
+  // derived from the PDK/flow, which is itself information.
+  const defStr = shownValue(v.default);
+  const defaultChip = defStr !== ""
+    ? "<span class='vdefault' title='LibreLane default'>default: " + fmt.escape(defStr) + "</span>"
+    : "<span class='vdefault vdefault-none' title='No LibreLane default (required, or derived from the PDK/flow)'>no default</span>";
+  row.innerHTML =
+    "<div class='vname'>" +
+    "<span class='name'>" + fmt.escape(v.name) + "</span>" +
+    (v.type ? "<span class='type'>" + fmt.escape(v.type) + "</span>" : "") +
+    (v.pdk ? "<span class='flag'>PDK</span>" : "") +
+    (v.units ? "<span class='units'>" + fmt.escape(v.units) + "</span>" : "") +
+    defaultChip +
+    "</div>" +
+    "<div class='vdesc'>" + fmt.escape(v.description || "") + "</div>" +
+    inputHtml(v, id) +
+    "<small class='var-err' role='alert' hidden></small>" +
+    "<button type='button' class='var-reset' title='Drop this one-off setting' aria-label='Drop the one-off setting of " +
+      fmt.escape(v.name) + "' hidden>↺</button>";
+  const input = row.querySelector("#" + cssEscape(id));
+  const reset = row.querySelector(".var-reset");
+  const err = row.querySelector(".var-err");
+  // A config chip goes before the default chip: the file's value is what a
+  // run gets, the default is what it would get without it.
+  const src = document.createElement("button");
+  src.type = "button";
+  src.className = "vconfig";
+  src.hidden = true;
+  src.addEventListener("click", async () => {
+    const prov = await import("./provenance.js");
+    prov.openProvenance({ kind: "input", key: v.name }, { title: "Your config's own " + v.name + " line" });
+  });
+  row.querySelector(".vdefault")?.before(src);
+  // A text field commits on change (Enter or leaving it), never per keystroke.
+  input?.addEventListener("change", () => setOneOff(v, input.value, { from: "field" }));
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" && input.tagName === "INPUT") input.blur(); });
+  reset?.addEventListener("click", () => { delete state.varsValues[v.name]; setErr(v.name, ""); });
+  _rows.set(v.name, { v, row, input, src, err, reset });
+  return row;
+}
+
+function setErr(name, text) {
+  const r = _rows.get(name);
+  if (!r) return;
+  r.err.textContent = text;
+  r.err.hidden = !text;
+  r.row.classList.toggle("is-invalid", !!text);
+}
+
+// Set or drop one one-off setting from a field's text (or a boolean).
+function setOneOff(v, raw, { from = "" } = {}) {
+  const p = typeof raw === "boolean" ? { value: raw } : parseValue(v, raw);
+  if (p.empty) { delete state.varsValues[v.name]; setErr(v.name, ""); refreshRow(v.name, { force: true }); return; }
+  if (p.error) {
+    const base = baseOf(v);
+    setErr(v.name, "Not used: " + p.error + (hasOverride(v.name) ? " Runs keep " + shownValue(state.varsValues[v.name]) + "." :
+      base.text ? " Runs keep " + base.text + "." : ""));
+    return;
+  }
+  setErr(v.name, "");
+  if (sameValue(v, p.value, baseOf(v).text)) delete state.varsValues[v.name];
+  else state.varsValues[v.name] = p.value;
+  if (from === "field") refreshRow(v.name, { force: true });
+}
+
+function refreshRow(name, { force = false } = {}) {
+  const r = _rows.get(name);
+  if (!r) return;
+  const base = baseOf(r.v);
+  const has = hasOverride(name);
+  const cur = has ? shownValue(state.varsValues[name]) : base.text;
+  if (r.input && (force || document.activeElement !== r.input) && !r.row.classList.contains("is-invalid")) {
+    if (r.input.tagName === "SELECT") {
+      if (cur && ![...r.input.options].some((o) => o.value === cur)) {
+        const o = document.createElement("option");
+        o.value = cur; o.textContent = cur;
+        r.input.appendChild(o);
+      }
+      r.input.value = cur;
+    } else {
+      r.input.value = cur;
+    }
+  }
+  r.row.classList.toggle("modified", has);
+  r.reset.hidden = !has;
+  r.src.hidden = base.from !== "config";
+  if (base.from === "config") {
+    const where = base.scope ? cfgName() + " " + base.scope.join(" / ") : cfgName();
+    r.src.textContent = where + ": " + base.text;
+    r.src.classList.toggle("vconfig-scoped", !!base.scope);
+    r.src.title = (base.scope
+      ? "Set in the " + base.scope.join(" / ") + " section of " + cfgName() + ", which applies to the selected PDK."
+      : "Set in " + cfgName() + ".") + (has ? " This run's one-off setting replaces it." : "") + " Click to open the file at that line.";
+  }
+}
+
+function refreshRows() {
+  for (const name of _rows.keys()) refreshRow(name);
+  if (_show !== "all") applyFilter();
+}
+
+function rowVisible(name) {
+  const r = _rows.get(name);
+  if (!r) return false;
+  if (_search && !name.toUpperCase().includes(_search) && !(r.v.description || "").toUpperCase().includes(_search)) return false;
+  if (_show === "oneoff") return hasOverride(name);
+  if (_show === "file") return !!_eff.map[name];
+  return true;
+}
+
+function applyFilter() {
+  let total = 0;
+  for (const g of _groups) {
+    let n = 0;
+    for (const name of g.names) {
+      const vis = rowVisible(name);
+      _rows.get(name).row.hidden = !vis;
+      if (vis) n++;
+    }
+    total += n;
+    g.heading.textContent = g.def.name + " · " + n;
+    g.heading.hidden = g.hint.hidden = g.grid.hidden = !n;
+    g.chip.hidden = !n;
+    g.chip.innerHTML = fmt.escape(g.def.name) + " <span class='nav-count'>" + n + "</span>";
+  }
+  const empty = document.getElementById("vars-empty");
+  if (empty) {
+    empty.hidden = total > 0 || !_rows.size;
+    empty.textContent = _show === "oneoff" ? "No one-off settings: every run uses " + cfgName() + " as it is."
+      : _show === "file" ? cfgName() + " sets nothing that matches."
+      : "No setting matches the filter.";
+  }
+}
+
+function paintFileName() {
+  const el = document.getElementById("cfg-file-name");
+  if (el) el.textContent = cfgName();
+}
+
+// ---------------------------------------------------------------- presets
+
+async function onPreset(btn) {
+  const p = PRESETS[btn.dataset.preset];
+  if (!p) return;
+  const { confirmDialog } = await import("./dialog.js");
+  // B3 — preview exactly what the preset changes BEFORE applying it, so a
+  // preset can never silently overwrite a field the user tuned by hand.
+  const changes = [];
+  if (p.reset) {
+    const n = Object.keys(oneOffSettings()).length;
+    changes.push(n ? "drop " + n + " one-off setting" + (n === 1 ? "" : "s") + ", so every field is back to what " + cfgName() + " sets"
+      : "change nothing: there are no one-off settings");
+  }
+  const vars = new Map((state.variables || []).map((v) => [v.name, v]));
+  for (const [k, val] of Object.entries(p.values)) {
+    const v = vars.get(k) || { name: k };
+    const cur = hasOverride(k) ? shownValue(state.varsValues[k]) : (baseOf(v).text || "unset");
+    changes.push(k + ": " + cur + " → " + String(val));
+  }
+  const ok = await confirmDialog({
+    title: p.reset ? "Clear the one-off settings?" : "Apply preset " + (p.label || btn.dataset.preset) + "?",
+    body: (p.reset ? "This will " : "This preset will ") + changes.join("; ") + "." +
+      (p.reset ? "" : " These are one-off settings for runs from LanEx; " + cfgName() + " stays as it is. Other one-off settings are kept."),
+    confirmText: p.reset ? "Clear them" : "Apply preset",
+  });
+  if (!ok) return;
+  document.querySelectorAll("#cfg-card [data-preset], #cfg-card .user-preset").forEach((b) => b.classList.remove("chip-active"));
+  if (!p.reset) btn.classList.add("chip-active");
+  if (p.reset) state.varsValues = {};
+  for (const [k, val] of Object.entries(p.values)) state.varsValues[k] = String(val);
 }
 
 // ---- User-defined presets (localStorage, per-browser) ---------------------
@@ -261,13 +671,28 @@ function userPresets() {
   const p = safeStorage.getJSON(USER_PRESETS_KEY, {});
   return (p && typeof p === "object") ? p : {};
 }
-function applyOverrideSet(values, { reset = true } = {}) {
-  if (reset) state.varsValues = {};
-  for (const [k, v] of Object.entries(values || {})) state.varsValues[k] = (typeof v === "boolean") ? v : String(v);
-  syncReportToggles();
-  paint();
-  renderOverridesSummary();
+
+// "Save preset": persist the current one-off settings as a named, reusable
+// preset (localStorage, per-browser).
+async function onSavePreset() {
+  const ov = oneOffSettings();
+  if (!Object.keys(ov).length) { toast.show("Change at least one setting first.", "warn"); return; }
+  const { promptDialog } = await import("./dialog.js");
+  const name = await promptDialog({ title: "Save preset", label: "Preset name", defaultValue: "" });
+  if (!name || !name.trim()) return;
+  const presets = userPresets();
+  presets[name.trim()] = { values: ov };
+  safeStorage.setJSON(USER_PRESETS_KEY, presets);
+  paintUserPresets();
+  toast.show("Saved preset '" + name.trim() + "'.", "success");
 }
+
+function applyOverrideSet(values, { reset = true } = {}) {
+  const next = reset ? {} : { ...activeOverrides() };
+  for (const [k, v] of Object.entries(values || {})) next[k] = (typeof v === "boolean") ? v : String(v);
+  state.varsValues = next;
+}
+
 function paintUserPresets() {
   const host = document.getElementById("config-user-presets");
   if (!host) return;
@@ -279,7 +704,7 @@ function paintUserPresets() {
   host.querySelectorAll(".user-preset").forEach((el) => {
     el.addEventListener("click", (e) => {
       if (e.target.closest(".user-preset-del")) return;
-      document.querySelectorAll(".chip-clickable").forEach((b) => b.classList.remove("chip-active"));
+      document.querySelectorAll("#cfg-card [data-preset], #cfg-card .user-preset").forEach((b) => b.classList.remove("chip-active"));
       el.classList.add("chip-active");
       const p = userPresets()[el.dataset.uname];
       if (p) applyOverrideSet(p.values);
@@ -296,80 +721,164 @@ function paintUserPresets() {
   });
 }
 
-// What will actually be sent to the engine. A preset only seeds these values;
-// any field you then edit is layered on top — so the run uses the preset's
-// values PLUS your edits (blanks excluded → those fall back to the PDK/tool
-// default). Showing the merged set removes the "preset or my edits?" ambiguity
-// (issue #7). Fields you never touch are NOT here and use LibreLane's defaults.
-export function activeOverrides() {
-  const out = {};
-  for (const [k, v] of Object.entries(state.varsValues || {})) {
-    if (v === null || v === undefined) continue;
-    if (typeof v === "string" && v.trim() === "") continue;
-    if (typeof v === "boolean") { out[k] = v; continue; }
-    out[k] = v;
-  }
-  return out;
-}
+// ---------------------------------------------------------------- the summary in the card
 
 export function renderOverridesSummary() {
   const el = document.getElementById("config-overrides-summary");
   if (!el) return;
-  const ov = activeOverrides();
+  const ov = oneOffSettings();
   const keys = Object.keys(ov).sort();
-  // The design's own config file, viewable as-is (input-side transparency:
-  // see exactly what LanEx reads and never edits) — plus THE answer button:
-  // the merged final-settings preview (config vs overrides vs defaults),
+  // The design's own config file, viewable as-is, plus the merged
+  // final-settings preview (config vs one-off settings vs defaults),
   // assembled from the same collectRunPayload() the Run button sends.
   const viewCfg =
     "<button class='btn btn-ghost' id='ov-final-settings' " +
-    "title='Complete run configuration: combines overrides, design config settings, and PDK defaults'>Final settings</button> " +
+    "title='Complete run configuration: combines one-off settings, the design config and PDK defaults'>Final settings</button> " +
     "<button class='btn btn-ghost' id='ov-view-config' " +
     "title='Open your design&#39;s own config file, exactly as it is on disk'>View config file</button>";
   const wireViewCfg = () => {
     el.querySelector("#ov-view-config")?.addEventListener("click", async () => {
       const { openProvenance } = await import("./provenance.js");
       openProvenance({ kind: "input", key: "" },
-        { title: "Design configuration file on disk (read-only view; LanEx does not edit it directly)" });
+        { title: cfgName() + " on disk (Project, Sources, PDK and Common settings save into it; All settings doesn't)" });
     });
     el.querySelector("#ov-final-settings")?.addEventListener("click", async () => {
       const { openFinalSettings } = await import("./finalsettings.js");
       openFinalSettings();
     });
+    el.querySelector("#ov-clear-all")?.addEventListener("click", () => { state.varsValues = {}; });
   };
   if (!keys.length) {
     el.innerHTML =
-      "<span class='ov-none'>No overrides set. Every variable uses LibreLane defaults for this PDK. " +
-      "Pick a preset or edit a field to override.</span> " + viewCfg;
+      "<span class='ov-none'>No one-off settings: runs use " + fmt.escape(cfgName()) + " as it is, and LibreLane's defaults for what it doesn't set. " +
+      "Change a field or pick a preset to try a value for runs from LanEx without saving it.</span> " + viewCfg;
     wireViewCfg();
     return;
   }
   const chips = keys
     .map((k) => "<button class='ov-chip ov-chip-btn' data-ovvar='" + fmt.escape(k) +
-      "' title='Where does this setting go? Click for the exact file/line trail.'><code>" +
-      fmt.escape(k) + "</code>=<b>" + fmt.escape(String(ov[k])) + "</b></button>")
+      "' title='Where does this setting go? Click for the trail, or to save it into the config.'><code>" +
+      fmt.escape(k) + "</code>=<b>" + fmt.escape(shownValue(ov[k])) + "</b></button>")
     .join("");
   el.innerHTML =
-    "<div class='ov-head'><strong>" + keys.length + " override" + (keys.length === 1 ? "" : "s") +
-    " will be sent</strong> <span class='muted'>(preset values + overrides; unset parameters use PDK defaults; click a chip to trace sources)</span> " +
-    viewCfg + "</div>" +
+    "<div class='ov-head'><strong>" + keys.length + " one-off setting" + (keys.length === 1 ? "" : "s") +
+    " will be sent with the next run</strong> <span class='muted'>(not saved in " + fmt.escape(cfgName()) +
+    "; click one to trace it or save it there)</span> " +
+    viewCfg + " <button class='btn btn-ghost' id='ov-clear-all'>Clear all</button></div>" +
     "<div class='ov-chips'>" + chips + "</div>";
   wireViewCfg();
   el.querySelectorAll("[data-ovvar]").forEach((b) => {
-    if (b._wired) return;
-    b._wired = true;
     b.addEventListener("click", () => showOverrideTrail(b.dataset.ovvar, activeOverrides()[b.dataset.ovvar]));
   });
 }
 
-// Input-side transparency: for one override, show exactly (a) how it reaches
-// the flow (a `-c VAR=VALUE` argument — the design's own config file is never
-// edited), (b) the config file + line it supersedes, quoted, or the honest
-// statement that the file doesn't set it and nothing is inserted anywhere,
-// and (c) after a run, the resolved.json line proving the value LibreLane
-// ACTUALLY used. Both lookups are fetched up front so the dialog STATES the
-// file names, line numbers and exact lines instead of hiding them behind
-// buttons; the buttons then open each file at that highlighted line.
+// ---------------------------------------------------------------- the chip next to Run
+
+function chipHosts() {
+  const out = [];
+  const split = document.querySelector(".tb-right .run-split");
+  if (split) {
+    let c = document.getElementById("oneoff-chip");
+    if (!c) {
+      c = document.createElement("button");
+      c.id = "oneoff-chip";
+      c.type = "button";
+      c.className = "pill pill-warn chip-clickable oneoff-chip";
+      c.hidden = true;
+      c.addEventListener("click", () => openOneOffDialog());
+      split.before(c);
+    }
+    out.push(c);
+  }
+  const pad = document.querySelector("#setup-run .launch-controls");
+  if (pad) {
+    let c = document.getElementById("oneoff-chip-setup");
+    if (!c) {
+      c = document.createElement("button");
+      c.id = "oneoff-chip-setup";
+      c.type = "button";
+      c.className = "pill pill-warn chip-clickable oneoff-chip";
+      c.hidden = true;
+      c.addEventListener("click", () => openOneOffDialog());
+      pad.appendChild(c);
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+export function oneOffLabel(n) {
+  return n + " one-off setting" + (n === 1 ? "" : "s");
+}
+
+// "2 one-off settings" next to Run (top bar and Setup's launch pad) whenever
+// the next run sends any: click to see them and clear them.
+export function paintOneOffChip() {
+  if (typeof document === "undefined") return;
+  const ov = oneOffSettings();
+  const n = Object.keys(ov).length;
+  for (const c of chipHosts()) {
+    c.hidden = !n;
+    if (!n) continue;
+    c.textContent = oneOffLabel(n);
+    c.dataset.tip = "Sent with the next run from LanEx and not saved in " + cfgName() + ": " +
+      Object.keys(ov).sort().slice(0, 4).join(", ") + (n > 4 ? "…" : "") + ". Click to see or clear them.";
+    c.setAttribute("aria-label", oneOffLabel(n) + " go with the next run. Show them");
+  }
+}
+
+export async function openOneOffDialog() {
+  const { customDialog } = await import("./dialog.js");
+  const list = () => {
+    const ov = oneOffSettings();
+    const keys = Object.keys(ov).sort();
+    if (!keys.length) return "<p class='muted'>No one-off settings left. Runs use " + fmt.escape(cfgName()) + " as it is.</p>";
+    return "<div class='ov-chips'>" + keys.map((k) =>
+      "<span class='ov-chip'><code>" + fmt.escape(k) + "</code>=<b>" + fmt.escape(shownValue(ov[k])) + "</b> " +
+      "<button type='button' class='linklike' data-oo-drop='" + fmt.escape(k) + "'>Clear</button></span>").join("") + "</div>";
+  };
+  const body = () =>
+    "<p>These go with every run you start from LanEx in this project, as <code>-c</code> overrides on LibreLane's command line. " +
+    "They are not saved in " + fmt.escape(cfgName()) + ", so a terminal run of the folder doesn't use them. " +
+    "They stay until you clear them; opening another project doesn't take them along.</p>" +
+    "<div class='overrides-summary' data-oo-list>" + list() + "</div>";
+  const choice = await customDialog({
+    title: "One-off settings for the next run",
+    bodyHtml: body(),
+    buttons: [
+      { label: "Clear all", value: "clear", cls: "btn-ghost" },
+      { label: "Open All settings", value: "open", cls: "btn-ghost" },
+      { label: "Close", value: undefined, cls: "btn-primary" },
+    ],
+    onMount: (back) => {
+      back.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-oo-drop]");
+        if (!b) return;
+        delete state.varsValues[b.dataset.ooDrop];
+        const host = back.querySelector("[data-oo-list]");
+        if (host) host.innerHTML = list();
+      });
+    },
+  });
+  if (choice === "clear") state.varsValues = {};
+  else if (choice === "open") {
+    const { go } = await import("./nav.js");
+    go("setup", { section: "cfg-card" });
+    const sel = document.getElementById("var-show");
+    if (sel) { sel.value = "oneoff"; _show = "oneoff"; applyFilter(); }
+    const card = document.getElementById("cfg-card");
+    if (card && !card.open) card.open = true;
+  }
+}
+
+// ---------------------------------------------------------------- the trail of one setting
+
+// Input-side transparency: for one one-off setting, show exactly (a) how it
+// reaches the flow (a `-c VAR=VALUE` argument; All settings never writes the
+// file), (b) the config file + line it supersedes, quoted, or the honest
+// statement that the file doesn't set it, and (c) after a run, the
+// resolved.json line proving the value LibreLane ACTUALLY used. It can also be
+// saved into the config, where it then stays for every run.
 async function showOverrideTrail(varName, value) {
   const { customDialog } = await import("./dialog.js");
   const { openProvenance } = await import("./provenance.js");
@@ -391,13 +900,12 @@ async function showOverrideTrail(varName, value) {
   if (inp && inp.ok) {
     cfgHtml =
       "<p><b>" + fmt.escape(inp.rel) + "</b> sets this on <b>line " + inp.line + "</b>. " +
-      "Your override supersedes this line during execution without modifying the file on disk:</p>" +
+      "The one-off setting wins over that line for runs from LanEx; the file itself stays as it is:</p>" +
       lineRow(inp);
   } else if (inp && inp.rel) {
     cfgHtml =
       "<p><b>" + fmt.escape(inp.rel) + "</b> does <b>not</b> set <code>" + fmt.escape(varName) +
-      "</code>, and nothing is inserted into your file. The override passes as a runtime argument; " +
-      "without it, the flow uses the PDK and flow defaults.</p>";
+      "</code>. The one-off setting goes on the command line; without it, the flow uses the PDK and flow defaults.</p>";
   } else {
     cfgHtml = "<p class='muted'>" +
       fmt.escape((inp && inp.reason) || "no config file found in the design folder") + "</p>";
@@ -416,14 +924,16 @@ async function showOverrideTrail(varName, value) {
       "records the exact parameters used, which will appear here.</p>";
   }
 
+  const canSave = !!(_eff.editable && state.designDir);
   const choice = await customDialog({
     title: "Where does " + fmt.escape(varName) + " go?",
     bodyHtml:
-      "<p>This setting is passed as a command-line override. Your design's " +
-      "config file is <b>never modified</b>:</p>" +
-      "<pre class='code'>-c " + fmt.escape(varName) + "=" + fmt.escape(String(value)) + "</pre>" +
+      "<p>This is a one-off setting: runs from LanEx pass it on LibreLane's command line. " +
+      "All settings doesn't write it into " + fmt.escape(cfgName()) + ":</p>" +
+      "<pre class='code'>-c " + fmt.escape(varName) + "=" + fmt.escape(shownValue(value)) + "</pre>" +
       cfgHtml + runHtml,
     buttons: [
+      canSave ? { label: "Save to " + cfgName(), value: "save", cls: "btn-ghost" } : null,
       (inp && inp.ok) ? { label: "Open " + inp.rel + " at line " + inp.line,
                           value: "input", cls: "btn-ghost" } : null,
       (run && run.ok) ? { label: "Open resolved.json at line " + run.line,
@@ -431,26 +941,54 @@ async function showOverrideTrail(varName, value) {
       { label: "Close", value: undefined, cls: "btn-ghost" },
     ].filter(Boolean),
   });
-  if (choice === "input") {
+  if (choice === "save") {
+    await saveOneOffToConfig(varName, value);
+  } else if (choice === "input") {
     openProvenance({ kind: "input", key: varName },
-      { title: "Your config's own " + varName + " line (superseded by the override)" });
+      { title: "Your config's own " + varName + " line (the one-off setting wins over it)" });
   } else if (choice === "var") {
     openProvenance({ kind: "var", key: varName, tag: runTag },
       { title: varName + " as run '" + runTag + "' actually used it (resolved.json)" });
   }
 }
 
-// Reflect the current SYNTH_SHOW override into the quick toggle (e.g. after a
-// preset reset cleared it).
+// Turn a one-off setting into the project's own: write it into the config
+// (where it takes effect for this PDK), then drop the one-off.
+async function saveOneOffToConfig(varName, value) {
+  const v = (state.variables || []).find((x) => x.name === varName) || { name: varName };
+  let typed = value;
+  const kind = v.kind || "text";
+  if (kind === "int" || kind === "number") typed = Number(value);
+  else if (kind === "bool") typed = value === true || value === "true";
+  else if (kind === "numbers") typed = String(value).split(/[\s,]+/).filter(Boolean).map(Number);
+  else if (kind === "list") typed = listItems(String(value));
+  try {
+    const info = await api.designInfo({ keys: [varName], pdk: state.selectedPdk || null, scl: state.selectedScl || null });
+    const { writeSetting } = await import("./configscope.js");
+    const r = await writeSetting({ key: varName, value: typed, entries: ((info.settings_scoped || {})[varName]) || [],
+      label: varName, cfgName: (info.config && info.config.name) || cfgName() });
+    if (!r) return;
+    document.dispatchEvent(new CustomEvent("g:config_changed", { detail: { keys: [varName], from: "all-settings" } }));
+  } catch (ex) {
+    toast.show("Couldn't save " + varName + ": " + (ex.message || ex), "error", 8000);
+  }
+}
+
 // A link to one setting (nav.js go("setup", { setting })): open All settings
 // filtered to it, focus its field and flash the row. Returns the row's id so
 // nav.js keeps it in view while the page settles.
 export async function revealSetting(name) {
   const card = document.getElementById("cfg-card");
   if (card && !card.open) card.open = true;
+  build();
   const search = document.getElementById("var-search");
-  if (search) { search.value = name; _searchTerm = String(name).toUpperCase(); paint(); }
-  const row = document.querySelector('#vars-form .var-row[data-var="' + cssEscape(name) + '"]');
+  if (search) search.value = name;
+  _search = String(name).toUpperCase();
+  const show = document.getElementById("var-show");
+  if (show) show.value = "all";
+  _show = "all";
+  applyFilter();
+  const row = _rows.get(name) && _rows.get(name).row;
   if (!row) return null;
   row.id = "var-row-" + name;
   row.classList.add("is-flash");
@@ -459,177 +997,14 @@ export async function revealSetting(name) {
   return row.id;
 }
 
+// Reflect SYNTH_SHOW (one-off, else the config's) into the quick toggle.
 function syncReportToggles() {
   const ss = document.getElementById("cfg-synth-show");
-  if (ss) ss.checked = state.varsValues.SYNTH_SHOW === true || state.varsValues.SYNTH_SHOW === "true";
-}
-
-function paint() {
-  const root = document.getElementById("vars-form");
-  if (!root) return;
-  const nav = document.getElementById("config-nav");
-  if (!nav) return;
-  nav.innerHTML = "";
-  root.innerHTML = "";
-
-  const buckets = new Map(STAGE_GROUPS.map((g) => [g.id, []]));
-  const sorted = [...state.variables].sort((a, b) => a.name.localeCompare(b.name));
-  for (const v of sorted) {
-    if (_searchTerm && !v.name.toUpperCase().includes(_searchTerm) && !(v.description || "").toUpperCase().includes(_searchTerm))
-      continue;
-    buckets.get(groupFor(v.name, v)).push(v);
-  }
-  for (const [stageId, vs] of buckets) {
-    if (!vs.length) continue;
-    const def = STAGE_GROUPS.find((g) => g.id === stageId);
-    const heading = document.createElement("h3");
-    heading.id = "cfg-section-" + stageId;
-    heading.className = "config-anchor";
-    heading.textContent = def.name + " · " + vs.length;
-    if (def.description) {
-      const sub = document.createElement("div");
-      sub.className = "hint";
-      sub.style.marginBottom = "var(--s-3)";
-      sub.textContent = def.description;
-      root.appendChild(heading);
-      root.appendChild(sub);
-    } else {
-      root.appendChild(heading);
-    }
-    // Category tabs; jumpnav's scroll-spy underlines the one in view.
-    const navChip = document.createElement("button");
-    navChip.className = "nav-chip";
-    navChip.type = "button";
-    navChip.dataset.jump = heading.id;
-    navChip.innerHTML = fmt.escape(def.name) + " <span class='nav-count'>" + vs.length + "</span>";
-    nav.appendChild(navChip);
-    const grid = document.createElement("div");
-    grid.className = "vars-form";
-    for (const v of vs) grid.appendChild(buildRow(v));
-    root.appendChild(grid);
-  }
-  wireJumpNav(nav);
-  annotateConfigLines(root);
-}
-
-// ---- the "your config" tier -------------------------------------------
-// Between LibreLane's default and any override sits the design's OWN config
-// file. Annotate each field with what that file sets, as written, so
-// "default: 50" can never be misread when config.json/.yaml sets 45 — the
-// untouched-field value is the config's, not the default. One bulk lookup;
-// chips appear when it lands (the form never waits on it). Scoped
-// (pdk::/scl::) entries are labelled conditional: LanEx never resolves
-// whether a scope applies — that is LibreLane's job, and resolved.json is
-// the post-run proof. No chip = the file does not set that variable.
-let _cfgMapSeq = 0;
-async function annotateConfigLines(root) {
-  const seq = ++_cfgMapSeq;
-  let map = null, prov = null;
-  try {
-    map = await api.provenance({ kind: "input-map" });
-    prov = await import("./provenance.js");
-  } catch { /* no chip = no claim */ }
-  if (seq !== _cfgMapSeq || !map || !prov || map.ok === false || !map.vars) return;
-  root.querySelectorAll(".var-row[data-var]").forEach((row) => {
-    const e = map.vars[row.dataset.var];
-    if (!e || row.querySelector(".vconfig")) return;
-    const spec = prov.configChipSpec(e, map.rel);
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "vconfig" + (spec.scoped ? " vconfig-scoped" : "");
-    chip.title = spec.title;
-    chip.textContent = spec.text;  // textContent: file bytes can't inject HTML
-    chip.addEventListener("click", () =>
-      prov.openProvenance({ kind: "input", key: row.dataset.var },
-        { title: "Your config's own " + row.dataset.var + " line" }));
-    row.querySelector(".vname")?.appendChild(chip);
-  });
-}
-
-
-function buildRow(v) {
-  const row = document.createElement("div");
-  row.className = "var-row";
-  row.dataset.var = v.name;
-  const id = "var-" + v.name;
-  // B4: show LibreLane's own default for every field so a pre-filled value is
-  // never mistaken for something the user typed. Empty default => explicit
-  // "no default" (required / PDK-derived), which is itself information.
-  const defStr = (v.default === undefined || v.default === null) ? "" : String(v.default);
-  const defaultChip = defStr !== ""
-    ? "<span class='vdefault' title='LibreLane default'>default: " + fmt.escape(defStr) + "</span>"
-    : "<span class='vdefault vdefault-none' title='No LibreLane default (required, or derived from the PDK/flow)'>no default</span>";
-  row.innerHTML =
-    "<div class='vname'>" +
-    "<span class='name'>" + fmt.escape(v.name) + "</span>" +
-    (v.type ? "<span class='type'>" + fmt.escape(v.type) + "</span>" : "") +
-    (v.pdk ? "<span class='flag'>PDK</span>" : "") +
-    (v.units ? "<span class='units'>" + fmt.escape(v.units) + "</span>" : "") +
-    defaultChip +
-    "</div>" +
-    "<div class='vdesc'>" + fmt.escape(v.description || "") + "</div>" +
-    inputFor(v, id) +
-    "<button type='button' class='var-reset' title='Reset to LibreLane default' aria-label='Reset " +
-      fmt.escape(v.name) + " to default'>↺</button>";
-  const input = row.querySelector("#" + cssEscape(id));
-  const resetBtn = row.querySelector(".var-reset");
-  const syncReset = () => { if (resetBtn) resetBtn.hidden = state.varsValues[v.name] === undefined; };
-  // "modified" = the current value is an explicit override that differs from the
-  // default; the CSS gives it an accent left-border so the form scannably shows
-  // exactly what you are overriding.
-  const syncModified = () => {
-    const cur = state.varsValues[v.name];
-    row.classList.toggle("modified", cur !== undefined && String(cur) !== defStr);
-  };
-  if (input) {
-    input.addEventListener("input", (e) => {
-      const value = v.type === "bool" ? e.target.value === "true" : e.target.value;
-      state.varsValues[v.name] = value;
-      syncReset();
-      syncModified();
-      renderOverridesSummary();
-    });
-  }
-  if (resetBtn) {
-    resetBtn.addEventListener("click", () => {
-      // Drop the override so the field falls back to LibreLane's own default.
-      delete state.varsValues[v.name];
-      const def = v.default;
-      if (input) input.value = (def === undefined || def === null) ? "" : String(def);
-      syncReset();
-      syncModified();
-      renderOverridesSummary();
-    });
-  }
-  syncReset();
-  syncModified();
-  return row;
-}
-
-function inputFor(v, id) {
-  const cur = state.varsValues[v.name] !== undefined ? state.varsValues[v.name] : v.default;
-  const str = cur === null || cur === undefined ? "" : String(cur);
-  if (v.type === "bool" || v.type === "Boolean") {
-    return (
-      "<select id='" + id + "'>" +
-      "<option value='true'" + (str === "true" ? " selected" : "") + ">true</option>" +
-      "<option value='false'" + (str === "false" ? " selected" : "") + ">false</option>" +
-      "</select>"
-    );
-  }
-  // Literal / Enum variables expose their allowed values in `choices` (from the
-  // backend's typing introspection). Render a real dropdown so users can't enter
-  // an invalid value. An optional variable gets a blank "(default)" entry.
-  if (Array.isArray(v.choices) && v.choices.length) {
-    const blank = v.optional
-      ? "<option value=''" + (str === "" ? " selected" : "") + ">(default)</option>"
-      : "";
-    const opts = v.choices
-      .map((s) => "<option value='" + fmt.escape(s) + "'" + (str === String(s) ? " selected" : "") + ">" + fmt.escape(s) + "</option>")
-      .join("");
-    return "<select id='" + id + "'>" + blank + opts + "</select>";
-  }
-  return "<input type='text' id='" + id + "' value='" + fmt.escape(str) + "' />";
+  if (!ss) return;
+  const ov = (state.varsValues || {}).SYNTH_SHOW;
+  const e = _eff.map.SYNTH_SHOW;
+  const val = ov !== undefined ? ov : e ? e.value : false;
+  ss.checked = val === true || val === "true";
 }
 
 function cssEscape(s) {
@@ -637,3 +1012,5 @@ function cssEscape(s) {
   if (_) return CSS.escape(s);
   return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c);
 }
+
+export const _test = { groupFor, PRESETS };

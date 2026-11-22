@@ -6,6 +6,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
+import { applyingEntry, sectionWho, writeSetting } from "./configscope.js";
 
 let _info = null;
 let _seq = 0;
@@ -29,18 +30,33 @@ function status(html, kind) {
   el.className = "pd-status" + (kind ? " is-" + kind : "");
 }
 
-// A pdk::/scl:: section of the config that sets the same key wins for a
-// matching PDK; say so next to the field rather than let an edit look ignored.
+const NAMES = { DESIGN_NAME: "top module", CLOCK_PORT: "clock port", CLOCK_PERIOD: "clock period" };
+
+// The value a run builds with: the most specific pdk::/scl:: section that
+// applies to the picked PDK wins over the top level, as in LibreLane. The
+// field shows it, and an edit goes there (configscope.js asks where).
+export function effectiveValue(top, entries) {
+  const hit = applyingEntry(entries);
+  return hit ? hit.value : top;
+}
+
+// Where a value comes from when a section sets it, next to the field, so an
+// edit never looks ignored.
 function scopedNotes(info) {
   const out = [];
-  const names = { DESIGN_NAME: "top module", CLOCK_PORT: "clock port", CLOCK_PERIOD: "clock period" };
   for (const [key, entries] of Object.entries(info.scoped || {})) {
+    const hit = applyingEntry(entries);
     for (const e of entries) {
       if (e.applies === false) continue;
       const v = key === "CLOCK_PERIOD" ? e.value + " ns" : String(e.value);
-      out.push("The <code>" + fmt.escape(e.scope) + "</code> section of " + fmt.escape(info.config.name) +
-        " sets the " + names[key] + " to <b>" + fmt.escape(v) + "</b>" +
-        (e.applies ? " for this PDK, and that wins over the value here." : " for matching PDKs."));
+      if (hit && e.scope === hit.scope) {
+        out.push("The " + NAMES[key] + " here comes from the <code>" + fmt.escape(e.scope) + "</code> section of " +
+          fmt.escape(info.config.name) + " (<b>" + fmt.escape(v) + "</b> for " + fmt.escape(sectionWho(e)) +
+          "). A change asks whether it is for " + fmt.escape(sectionWho(e)) + " only or for every PDK.");
+      } else if (!e.applies) {
+        out.push("The <code>" + fmt.escape(e.scope) + "</code> section of " + fmt.escape(info.config.name) +
+          " sets the " + NAMES[key] + " to <b>" + fmt.escape(v) + "</b> for matching PDKs.");
+      }
     }
   }
   return out;
@@ -50,7 +66,7 @@ function overrideNotes() {
   const v = state.varsValues || {};
   const out = [];
   if (v.CLOCK_PERIOD !== undefined && v.CLOCK_PERIOD !== null && String(v.CLOCK_PERIOD).trim() !== "") {
-    out.push("All settings overrides the clock period for runs from LanEx: <b>" + fmt.escape(v.CLOCK_PERIOD) + " ns</b>.");
+    out.push("A one-off setting (All settings) replaces the clock period for runs from LanEx: <b>" + fmt.escape(v.CLOCK_PERIOD) + " ns</b>.");
   }
   return out;
 }
@@ -74,7 +90,9 @@ export async function paintDesignRow() {
   }
   if (seq !== _seq) return;
   _info = info;
-  const vals = info.values || {};
+  // What a run builds with for the picked PDK (a pdk::/scl:: section wins).
+  const vals = {};
+  for (const k of Object.keys(NAMES)) vals[k] = effectiveValue((info.values || {})[k], (info.scoped || {})[k]);
   const editable = !!(info.config && info.config.editable);
 
   // Top module: the modules in the ticked files; the config's value stays
@@ -120,15 +138,17 @@ export async function paintDesignRow() {
   import("./fs.js").then((m) => m.setTopFile(file)).catch(() => {});
 }
 
+// Save one key where it takes effect for the picked PDK: the top level, or the
+// pdk::/scl:: section that wins for it (asked once: that section only, or
+// every PDK). A one-off setting of the same key is dropped (configscope.js).
 async function save(set, remove, what) {
+  const key = Object.keys(set)[0] || (remove || [])[0];
   try {
-    const r = await api.configSet(set, remove, { pdk: state.selectedPdk || null, scl: state.selectedScl || null });
-    // A Constraints override for the same key would silently win: drop it.
-    for (const k of Object.keys(set).concat(remove || [])) {
-      if (state.varsValues && k in state.varsValues) delete state.varsValues[k];
-    }
-    if (r.changed && r.changed.length) toast.show("Saved the " + what + " to " + r.name + ".", "success", 2200);
-    document.dispatchEvent(new CustomEvent("g:config_changed"));
+    const r = await writeSetting({
+      key, value: set[key], remove: !(key in set), label: what,
+      entries: ((_info && _info.scoped) || {})[key] || [], cfgName: (_info && _info.config && _info.config.name) || "the config",
+    });
+    if (r) document.dispatchEvent(new CustomEvent("g:config_changed"));
   } catch (ex) {
     toast.show("Couldn't save the " + what + ": " + (ex.message || ex), "error", 7000);
   }
