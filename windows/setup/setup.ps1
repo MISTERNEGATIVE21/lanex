@@ -91,6 +91,11 @@ $ManifestSchema = 1
 # Below this much RAM Setup stops: WSL gets half of it, which leaves too little
 # for Docker and one LibreLane run. Below RecommendedMemoryBytes it warns.
 # Measured on the 8 GB Ship line VM (see installer-workspace/outputs).
+# These are what Windows reports as usable (TotalPhysicalMemory), which is a
+# little under the size a PC is sold with: a 6 GB PC reports about 5.8 GB and
+# an 8 GB PC about 7.8 GB, so 5 and 7 here mean "6 GB PC" and "8 GB PC". The
+# preflight hands both numbers to Setup (memory.minGb, memory.recommendedGb)
+# so its messages quote the same thresholds the check uses.
 $MinMemoryBytes = [int64]5GB
 $RecommendedMemoryBytes = [int64]7GB
 
@@ -891,6 +896,8 @@ function Invoke-Preflight {
             low = ($null -ne $facts.memoryBytes -and [int64]$facts.memoryBytes -gt 0 -and
                 [int64]$facts.memoryBytes -lt [int64]$RecommendedMemoryBytes)
             gb = if ($null -ne $facts.memoryBytes) { [math]::Round([int64]$facts.memoryBytes / 1GB, 1) } else { 0 }
+            minGb = [int]($MinMemoryBytes / 1GB)
+            recommendedGb = [int]($RecommendedMemoryBytes / 1GB)
         }
     }
 }

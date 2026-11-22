@@ -37,8 +37,11 @@ by itself and asks you to click **Install** once more; your choices are kept.
 
 **Requirements:** a 64-bit (x64) PC with Windows 11, or Windows 10 22H2 with
 its updates (build 19045.2311 or newer; Setup says so if Windows Update is
-needed first). Home, Pro and Enterprise all work. **At least 6 GB of memory**
-(8 GB recommended) and about **25 GB free** on C: for the Recommended setup.
+needed first). Home, Pro and Enterprise all work. **A PC with at least 6 GB of
+memory** (Setup checks that Windows reports at least 5 GB usable, and warns
+below 7 GB usable; a PC with 8 GB or more is recommended) and about **22 GB
+free** on C: for the Recommended setup (the Configure page shows the exact
+figure for your choice).
 Virtualization must be on in the PC's firmware (almost always is; see
 [below](#enable-virtualization)). ARM64 PCs are not supported, even with x64
 emulation. In a virtual machine, the host must allow nested virtualization.
@@ -47,7 +50,7 @@ emulation. In a virtual machine, the host must allow nested virtualization.
 
 | | Windows 11 | Windows 10 |
 |---|---|---|
-| Time from Install to "Ready to design", including the restart | 15 to 17 min | 17 to 18 min |
+| Time from Install to "Ready to design", including the restart | 15 to 18 min | 17 to 18 min |
 | Downloaded | 2.35 GB | 2.35 GB |
 | Disk used afterwards | 13.9 GB | 13.9 GB |
 
@@ -100,7 +103,10 @@ private Linux environment of its own. In order:
    and imports it only if its SHA-256 matches the one built into Setup.
 5. **Imports it as a private distro named `lanex`** with `wsl --import`, the
    way Docker Desktop and Rancher Desktop do it: no Microsoft Store, no Ubuntu
-   first-run screen.
+   first-run screen. If you already have a distro called `lanex`, Setup leaves
+   it alone and names its own `lanex-` plus eight characters instead; the name
+   it used is recorded in `%LOCALAPPDATA%\LanEx\installer-state.json`
+   (see [Uninstalling](#windows-uninstall)).
 6. **Provisions it** from fixed sources: Ubuntu packages from a dated Ubuntu
    archive snapshot, Docker from Ubuntu, and Python packages from a lock file
    where every file is pinned by hash. LanEx itself is installed with the same
@@ -111,7 +117,8 @@ private Linux environment of its own. In order:
    part passes its own check. Cancel stops cleanly; running Setup again reuses
    everything already verified.
 8. **Creates the Start-menu entries**: **LanEx**, **LanEx Project Files** (the
-   folder your designs are in), **Repair LanEx**, and a desktop shortcut.
+   folder your designs are in), **Repair LanEx** and **Uninstall or remove
+   LanEx**, plus a desktop shortcut if you leave its box ticked on the last page.
 
 ### Unattended Windows setup
 
@@ -126,6 +133,8 @@ that needs a restart. LanEx-specific selection flags are:
   or conflicting variants fail before WSL is changed.
 - `/ALLOWWSLUPDATE=1` explicitly permits a required machine-wide WSL runtime
   update. Without it, silent setup stops with recovery guidance.
+- `/DESKTOPSHORTCUT=0` leaves out the desktop shortcut (a silent install makes
+  one by default, like the ticked box on the wizard's last page).
 
 Selection files contain either the choices object or `{ "choices": { ... } }`.
 Supported fields are `profile`, `engine` (`docker`, `podman`, or `none`),
@@ -146,7 +155,7 @@ mode never waits for a hidden Retry or WSL-update confirmation.
 | | |
 |---|---|
 | ✅ Turns on Virtual Machine Platform and Windows Subsystem for Linux, installs the WSL app | only if they are off or missing |
-| ✅ Creates one new WSL distro called `lanex` | entirely its own |
+| ✅ Creates one new WSL distro called `lanex` (`lanex-` plus eight characters if you already have a `lanex`) | entirely its own |
 | ✅ Writes to `%LOCALAPPDATA%\LanEx`, `%LOCALAPPDATA%\Programs\LanEx` and `%USERPROFILE%\LanEx-Projects` | user-owned |
 | ❌ Your existing WSL distros | never started, stopped, changed or made default (tested: a stock Ubuntu with a file in it, before and after) |
 | ❌ Your Python, your PATH, your registry beyond the standard uninstall entry | untouched |
@@ -156,12 +165,14 @@ mode never waits for a hidden Retry or WSL-update confirmation.
 
 | What | Where |
 |---|---|
-| **Your designs and run results** | `%USERPROFILE%\LanEx-Projects` (the *LanEx Project Files* shortcut). If your Windows user folder has a space in its name, inside the LanEx environment instead: `\\wsl.localhost\lanex\home\lanex\lanex-projects` |
+| **Your designs and run results** | `%USERPROFILE%\LanEx-Projects` (the *LanEx Project Files* shortcut). If your Windows user folder has a space in its name, inside the LanEx environment instead: `\\wsl.localhost\lanex\home\lanex\lanex-projects` (with your environment's name in place of the first `lanex`) |
 | The launcher (`LanEx.exe`) | `%LOCALAPPDATA%\Programs\LanEx` |
 | The Linux environment's virtual disk (tools, PDKs) | `%LOCALAPPDATA%\LanEx\appliance\distro` |
 | Setup's own copy and the download cache | `%LOCALAPPDATA%\LanEx\installer-cache` |
 | Setup and launcher logs: **ask for these first when something is wrong** | `%LOCALAPPDATA%\LanEx\logs` |
-| The app window's browser profile | `%LOCALAPPDATA%\lanex\app-profile` |
+| The app window's browser profile | `%LOCALAPPDATA%\LanEx\app-profile` |
+| Backups made when uninstalling | `%LOCALAPPDATA%\LanEx\backups` (yours: uninstalling never deletes them) |
+| Which WSL distro is LanEx's | `%LOCALAPPDATA%\LanEx\installer-state.json`, under `appliance.name` |
 
 **The tray icon** is the launcher's entire interface: **Open LanEx** re-opens the
 window, **Open project files** opens the folder above, **Open LanEx shell** gives
@@ -184,32 +195,48 @@ your own. It opens in your projects folder, and closing it changes nothing.
 
 <a id="windows-uninstall"></a>
 
-**Uninstalling** (Windows Settings → Apps → LanEx → Uninstall) asks one question
-first:
+**Uninstalling** (Start menu → LanEx (EDA) → **Uninstall or remove LanEx**, or
+Windows Settings → Apps → LanEx → Uninstall) asks one question first:
 
 - **Keep your projects, tools and PDKs (Yes, recommended):** removes the LanEx
   app and its shortcuts and keeps everything else, so installing again takes
-  minutes and finds your projects. This is what most people want.
+  minutes and finds your projects. This is what most people want. The last
+  message lists what was kept, with the name of LanEx's environment.
 - **No**, then a second question: **back up** the LanEx environment to a file
   (several GB, in `%LOCALAPPDATA%\LanEx\backups`) and remove only the app, or
-  **remove the LanEx environment for good** (its tools, PDKs, run results, the
-  download cache and logs; it asks once more, and cannot be undone).
+  **remove the LanEx environment for good**. That last choice asks once more,
+  listing what it deletes (the environment by its recorded name, with its tools,
+  PDKs and run results, the download cache and the logs) and what it keeps
+  (your projects, your earlier backups, your other WSL distros), and it cannot be
+  undone. It first checks that the environment is the one LanEx created; if it
+  cannot prove that, it deletes nothing.
 
-Either way, uninstalling never deletes `%USERPROFILE%\LanEx-Projects`, never
-touches your other WSL distros, and never turns Windows features off.
+Either way, uninstalling never deletes `%USERPROFILE%\LanEx-Projects` or your
+backups, never touches your other WSL distros, and never turns Windows features
+off.
 
-To remove what *Keep* left behind later, open PowerShell and run:
+**To remove what *Keep* left behind later**, the safe way is: install LanEx
+again (it reuses everything and takes a few minutes), then open **Uninstall or
+remove LanEx** and answer **No** twice.
+
+By hand, never assume the name `lanex`: if you already had a distro with that
+name, LanEx's is called `lanex-` plus eight characters, and `wsl --unregister`
+on the wrong name deletes *your* distro. Ask LanEx's own record for the name, in
+PowerShell:
 
 ```powershell
-wsl --unregister lanex
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\LanEx"
+(Get-Content "$env:LOCALAPPDATA\LanEx\installer-state.json" -Raw | ConvertFrom-Json).appliance.name
+wsl -l -v
 ```
 
-The first line deletes the LanEx environment (tools, PDKs and anything stored
-inside it); the second deletes the download cache and logs. Delete
-`%USERPROFILE%\LanEx-Projects` yourself only if you no longer want your designs.
-WSL itself stays installed; to remove it too, uninstall *Windows Subsystem for
-Linux* from Settings → Apps.
+The first line prints the name LanEx recorded (the uninstall message shows it
+too); check that `wsl -l -v` lists it, then run `wsl --unregister` with exactly
+that name. That deletes the LanEx environment (tools, PDKs and anything stored
+inside it). Then delete the `appliance`, `installer-cache` and `logs` folders in
+`%LOCALAPPDATA%\LanEx` (the download cache and logs); keep `backups` unless you
+no longer want them. Delete `%USERPROFILE%\LanEx-Projects` yourself only if you
+no longer want your designs. WSL itself stays installed; to remove it too,
+uninstall *Windows Subsystem for Linux* from Settings → Apps.
 
 **Using a standard Windows account?** You can run Setup yourself. If the WSL
 features are off, an administrator can enter their credentials at the UAC
@@ -606,9 +633,10 @@ Check your installed version any time with `pipx list` (or `pip show lanex`).
 ### Uninstalling LanEx
 
 **Installed with LanEx-Setup.exe on Windows?** None of the layers below apply.
-Go to Windows **Settings → Apps → Installed apps → LanEx → Uninstall**; what it
-keeps, what it can remove, and the two commands that remove the rest are in
-[Uninstalling on Windows](#windows-uninstall).
+Open **Uninstall or remove LanEx** in the Start menu (or Windows **Settings →
+Apps → Installed apps → LanEx → Uninstall**); what it keeps, what it can remove,
+and how to find the name of LanEx's environment before removing it by hand are
+in [Uninstalling on Windows](#windows-uninstall).
 
 Otherwise, removal is in three layers — the app, its data, and the heavy things
 it *helped* you install (the container image, PDKs, EDA tools). Do as many as you

@@ -50,7 +50,7 @@ A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librela
 2. If Windows asks to restart, let it. Setup carries on after you sign in.
 3. Click **Finish**. LanEx opens.
 
-<sub>Windows 11, or Windows 10 22H2 · 64-bit · 8 GB memory · 23 GB free disk · about 15 minutes</sub>
+<sub>Windows 11, or Windows 10 22H2 · 64-bit · 6 GB memory (8 GB recommended) · 22 GB free disk · about 15 to 18 minutes</sub>
 
 > [!TIP]
 > If Windows says "Windows protected your PC", click **More info**, then **Run anyway**. The installer isn't code-signed yet.
