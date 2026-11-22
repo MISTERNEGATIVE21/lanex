@@ -216,7 +216,7 @@ body.theme-light .tl-tile-ver { color: var(--accent); }
 .tl-var-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pass); align-self: start; margin-top: 6px; }
 .tl-var.is-off .tl-var-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-muted); }
 .tl-var.is-custom .tl-var-dot { background: var(--warn); }
-.tl-var.is-missing .tl-var-dot { background: var(--fail); }
+.tl-var.is-missing .tl-var-dot, .tl-var.is-broken .tl-var-dot { background: var(--fail); }
 .tl-var.is-busy .tl-var-dot { background: var(--met1); animation: tl-pulse 1.2s ease-in-out infinite; }
 .tl-var-what { min-width: 0; }
 .tl-var-name { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text-strong); }

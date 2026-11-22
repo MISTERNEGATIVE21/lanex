@@ -138,6 +138,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.pdk_root:
         os.environ["PDK_ROOT"] = args.pdk_root
+    else:
+        # The PDK folder chosen on the Tools page, kept across restarts.
+        try:
+            from .controller.installer import apply_saved_pdk_root
+            apply_saved_pdk_root()
+        except Exception:  # pragma: no cover - a broken settings file
+            pass
 
     if args.pull_image:
         return _pull_image_cli()
@@ -365,8 +372,9 @@ def _pull_image_cli() -> int:
     if not resolved.get("ready"):
         sys.stderr.write(
             "No usable Docker or Podman engine found.\n"
-            "Install one first (Linux: `curl -fsSL https://get.docker.com | sudo sh`, "
-            "or `sudo apt install -y podman`; macOS: `brew install podman`; "
+            "Install one first (Linux: `sudo apt install -y podman` or "
+            "`sudo apt install -y docker.io`; Fedora: `sudo dnf install -y podman`; "
+            "macOS: `brew install podman`; "
             "Windows: Docker Desktop with the WSL2 backend), then re-run "
             "`lanex --pull-image`. Or just run `lanex` and use the Tools tab — "
             "it can install the engine for you.\n"

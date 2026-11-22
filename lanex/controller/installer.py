@@ -187,6 +187,7 @@ def _begin_job(key: str) -> bool:
         _in_progress.add(key)
     # A fresh job must not inherit a stale cancel from a previous attempt.
     _clear_cancelled(key)
+    _start_install_log(key)
     return True
 
 
@@ -224,7 +225,83 @@ def _end_pdk_family(family: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _emit(kind: str, payload: Dict[str, Any]) -> None:
+    key = payload.get("key") if isinstance(payload, dict) else None
+    if key and kind.startswith("installer_"):
+        path = _log_event(str(key), kind, payload)
+        # Every failure says where the whole log is (AGENTS.md: the install
+        # log's path on every failure).
+        if path and (kind == "installer_error" or
+                     (kind == "installer_result" and not payload.get("ok")) or
+                     (kind == "installer_done" and payload.get("rc") not in (0, None))):
+            payload = dict(payload)
+            payload.setdefault("log_path", path)
     bus.emit(kind, payload)
+
+
+# ---------------------------------------------------------------------------
+# Install logs on disk: one file per job ($LANEX_HOME/logs/install/<key>.log),
+# so a failure has something to point at after the Logs panel is gone. The
+# previous attempt's log is kept as <key>.prev.log.
+# ---------------------------------------------------------------------------
+
+_log_lock = threading.Lock()
+
+
+def install_log_path(key: str) -> Optional[Path]:
+    try:
+        from . import platform_env
+
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", key).strip("-.") or "install"
+        return platform_env.home() / "logs" / "install" / f"{safe}.log"
+    except Exception:
+        return None
+
+
+def _start_install_log(key: str) -> None:
+    path = install_log_path(key)
+    if path is None:
+        return
+    try:
+        with _log_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                path.replace(path.with_suffix(".prev.log"))
+            path.write_text(f"# LanEx install log: {key}, started "
+                            f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _log_event(key: str, kind: str, payload: Dict[str, Any]) -> Optional[str]:
+    path = install_log_path(key)
+    if path is None:
+        return None
+    if kind == "installer_line":
+        text = str(payload.get("line", ""))
+    elif kind == "installer_started":
+        argv = payload.get("argv")
+        text = "$ " + (" ".join(str(a) for a in argv) if isinstance(argv, list) else str(argv or ""))
+    elif kind == "installer_done":
+        text = f"[exit {payload.get('rc')}] {payload.get('label', '')}".rstrip()
+    elif kind == "installer_error":
+        text = "ERROR: " + str(payload.get("message") or payload.get("error") or "install failed")
+    elif kind == "installer_result":
+        text = ("RESULT: ok" if payload.get("ok") else
+                "RESULT: failed: " + str(payload.get("reason") or payload.get("guidance") or ""))
+    elif kind == "installer_progress":
+        return str(path) if path.exists() else None   # the [active] line carries it
+    else:
+        text = str(payload.get("message") or "")
+    if not text:
+        return str(path) if path.exists() else None
+    try:
+        with _log_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8", errors="replace") as fh:
+                fh.write(time.strftime("%H:%M:%S ") + text.rstrip("\n") + "\n")
+        return str(path)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +701,9 @@ def detect_environment() -> Dict[str, Any]:
         "conda": _check_cmd("conda") or _check_cmd("mamba"),
         "apt": _check_cmd("apt-get") if is_linux else False,
         "apt_fast": _check_cmd("apt-fast") if is_linux else False,
+        # Fedora/RHEL: only when there is no apt (a Debian box with a stray
+        # dnf binary still uses apt).
+        "dnf": (_check_cmd("dnf") and not _check_cmd("apt-get")) if is_linux else False,
         # PATH-independent: brew's two canonical prefixes are probed directly,
         # since a pipx/app-window launch may never have sourced `brew shellenv`.
         "brew": (_check_cmd("brew") or _brew_path() is not None) if is_macos else False,
@@ -682,6 +762,93 @@ def _strategies_for(env: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+# ---- Pinned Python packages ----
+# LanEx is tested against exact versions (pyproject pins librelane and ciel;
+# windows/setup/constraints.txt pins the whole tree). A Tools-page pip install
+# must install those, never "whatever PyPI has today": an unpinned
+# `pip install --upgrade librelane` moved the flow to a LibreLane this release
+# was never tested with, and with it the container image.
+
+_CONSTRAINTS_NAME = "constraints.txt"
+
+
+def pip_constraints_file() -> Optional[str]:
+    """The constraints file Tools-page pip installs use, or None.
+
+    First found of: ``$LANEX_PIP_CONSTRAINT``; ``$LANEX_HOME/constraints.txt``;
+    the copy shipped in the package (``lanex/data/constraints.txt``, kept equal
+    to ``windows/setup/constraints.txt`` by a test); a source checkout's
+    ``windows/setup/constraints.txt``. A file is only used when it pins
+    librelane (a truncated download must not unpin everything)."""
+    cands: List[Path] = []
+    env = os.environ.get("LANEX_PIP_CONSTRAINT")
+    if env:
+        cands.append(Path(env))
+    try:
+        from . import platform_env
+        cands.append(platform_env.home() / _CONSTRAINTS_NAME)
+    except Exception:
+        pass
+    pkg = Path(__file__).resolve().parents[1]
+    cands.append(pkg / "data" / _CONSTRAINTS_NAME)
+    cands.append(pkg.parent / "windows" / "setup" / _CONSTRAINTS_NAME)
+    for c in cands:
+        try:
+            if c.is_file() and re.search(r"(?m)^librelane==", c.read_text(encoding="utf-8")):
+                return str(c)
+        except Exception:
+            continue
+    return None
+
+
+def _pins_from_file(path: Optional[str]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if not path:
+        return out
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            m = re.match(r"^([A-Za-z0-9_.\-]+)==([^\s;]+)$", line)
+            if m:
+                out[m.group(1).lower().replace("_", "-")] = m.group(2)
+    except Exception:
+        pass
+    return out
+
+
+def pinned_requirement(pkg: str) -> str:
+    """``pkg==X`` at the version LanEx requires, else the bare name.
+
+    LanEx's own metadata (``pyproject`` dependencies) first, then the
+    constraints file."""
+    name = pkg.lower().replace("_", "-")
+    try:
+        from importlib.metadata import requires
+
+        for req in requires("lanex") or []:
+            spec = req.split(";", 1)[0].replace(" ", "")
+            m = re.match(r"^([A-Za-z0-9_.\-]+)==([^\s,]+)$", spec)
+            if m and m.group(1).lower().replace("_", "-") == name:
+                return f"{name}=={m.group(2)}"
+    except Exception:
+        pass
+    ver = _pins_from_file(pip_constraints_file()).get(name)
+    return f"{name}=={ver}" if ver else name
+
+
+def _pip_install_argv(*packages: str, upgrade: bool = False) -> List[str]:
+    """``python -m pip install`` into LanEx's own interpreter, pinned."""
+    py = sys.executable or "python3"
+    argv = [py, "-m", "pip", "install"]
+    if upgrade:
+        argv.append("--upgrade")
+    argv += [pinned_requirement(p) for p in packages]
+    cfile = pip_constraints_file()
+    if cfile:
+        argv += ["-c", cfile]
+    return argv
+
+
 # ---- Strategy: pip ----
 
 # Only tools that genuinely ship a working pip/WASM build. Notably there is NO
@@ -689,11 +856,12 @@ def _strategies_for(env: Dict[str, Any]) -> List[Dict[str, Any]]:
 # `verilator` package is not the real simulator — so neither is offered here.
 @_strategy(["pip"], "pip install", priority=10)
 def _strategy_pip(env: Dict[str, Any], key: str) -> Optional[List[str]]:
-    py = sys.executable or "python3"
     mapping = {
-        "yosys": [py, "-m", "pip", "install", "yowasp-yosys"],
-        "ciel": [py, "-m", "pip", "install", "--upgrade", "ciel"],
-        "librelane": [py, "-m", "pip", "install", "--upgrade", "librelane"],
+        "yosys": _pip_install_argv("yowasp-yosys"),
+        # --upgrade with an exact pin: brings a drifted copy back to the
+        # tested version, never past it.
+        "ciel": _pip_install_argv("ciel", upgrade=True),
+        "librelane": _pip_install_argv("librelane", upgrade=True),
     }
     return mapping.get(key)
 
@@ -753,23 +921,40 @@ def _strategy_apt(env: Dict[str, Any], key: str) -> Optional[List[str]]:
         "iverilog": base + ["iverilog"],
         "graphviz": base + ["graphviz"],
         "gtkwave": base + ["gtkwave"],
-        "ciel": ["sh", "-c", f"sudo {apt} {apt_options} install -y python3-pip && pip3 install ciel 2>/dev/null || pipx install ciel 2>/dev/null || pip3 install --break-system-packages ciel"],
-        # Container engines: Podman is the rootless, daemonless choice and is the
-        # simplest to bring up on Debian/Ubuntu. Docker via apt installs the
-        # daemon (you may then need to add your user to the `docker` group).
+        # Pinned like the pip strategy: the version LanEx requires.
+        "ciel": ["sh", "-c", f"sudo {apt} {apt_options} install -y python3-pip && "
+                 f"pip3 install '{pinned_requirement('ciel')}' 2>/dev/null || "
+                 f"pip3 install --break-system-packages '{pinned_requirement('ciel')}'"],
+        # Container engines come from the distribution's own signed packages:
+        # Podman is the rootless, daemonless choice and is the simplest to
+        # bring up on Debian/Ubuntu. Docker via apt is `docker.io`, the
+        # distribution's build (you may then need to add your user to the
+        # `docker` group). Never `curl get.docker.com | sudo sh` (audit G24):
+        # that runs whatever the script says today, as root, unchecked.
         "podman": base + ["podman"],
         "docker": base + ["docker.io"],
     }
     return mapping.get(key)
 
 
-# ---- Strategy: official Docker convenience script (Linux) ----
-# The cross-distro method Docker documents. Needs curl + sudo. Linux only.
-@_strategy(["curl"], "get.docker.com script (Linux)", priority=34)
-def _strategy_docker_script(env: Dict[str, Any], key: str) -> Optional[List[str]]:
-    if key != "docker" or env.get("os") != "linux":
+# ---- Strategy: dnf (Fedora / RHEL) ----
+# The distribution's own packages again: podman everywhere, Docker as Fedora's
+# `moby-engine` build. RHEL has no Docker package; podman is the engine there.
+@_strategy(["dnf"], "dnf install (Fedora/RHEL)", priority=32)
+def _strategy_dnf(env: Dict[str, Any], key: str) -> Optional[List[str]]:
+    if env.get("os") != "linux":
         return None
-    return ["sh", "-c", "curl -fsSL https://get.docker.com | sudo sh"]
+    base = ["sudo", "dnf", "install", "-y"]
+    mapping = {
+        "podman": base + ["podman"],
+        "docker": base + ["moby-engine"],
+        "yosys": base + ["yosys"],
+        "iverilog": base + ["iverilog"],
+        "verilator": base + ["verilator"],
+        "graphviz": base + ["graphviz"],
+        "gtkwave": base + ["gtkwave"],
+    }
+    return mapping.get(key)
 
 
 # ---- Strategy: brew (macOS) ----
@@ -825,9 +1010,10 @@ def _strategy_choco(env: Dict[str, Any], key: str) -> Optional[List[str]]:
         # Netgen on Windows need WSL2 (where the Linux strategies apply).
         "klayout": ["choco", "install", "-y", "klayout"],
         "graphviz": ["choco", "install", "-y", "graphviz"],
-        # Docker Desktop (WSL2 backend) is the supported Windows path.
-        "docker": ["choco", "install", "-y", "docker-desktop"],
-        "podman": ["choco", "install", "-y", "podman-cli"],
+        # No engines: Docker Desktop has a subscription agreement the person
+        # must accept themselves (a silent package install accepts it for
+        # them), and podman-cli is a client with no engine. _install_guidance
+        # points at Docker's own page instead.
     }
     return mapping.get(key)
 
@@ -1141,7 +1327,8 @@ def _install_env() -> Dict[str, str]:
 
 
 def _run_argv_on_tty(argv: List[str], *, label: str, key: str,
-                     env_extra: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                     env_extra: Optional[Dict[str, str]] = None,
+                     emit_done: bool = True) -> Dict[str, Any]:
     """Run a privileged install attached to the controlling terminal.
 
     ``sudo`` prompts for the password on the terminal where the GUI was
@@ -1185,7 +1372,8 @@ def _run_argv_on_tty(argv: List[str], *, label: str, key: str,
             wd.cancel()
             _active_installs.pop(key, None)
         rc = proc.returncode
-        _emit("installer_done", {"key": key, "rc": rc, "label": label})
+        if emit_done:
+            _emit("installer_done", {"key": key, "rc": rc, "label": label})
         return {"ok": rc == 0, "rc": rc, "output": [], "label": label}
     except Exception as ex:
         _emit("installer_error", {"key": key, "error": str(ex), "label": label})
@@ -1201,8 +1389,12 @@ def _run_argv(argv: List[str], *, label: str, key: str,
               timeout_s: Optional[float] = None,
               env_extra: Optional[Dict[str, str]] = None,
               expect_bytes: Optional[int] = None,
-              stall_s: Optional[float] = None) -> Dict[str, Any]:
+              stall_s: Optional[float] = None,
+              emit_done: bool = True) -> Dict[str, Any]:
     """Run an install command, streaming output to the event bus.
+
+    *emit_done* False leaves the ``installer_done`` event to the caller (a
+    retry loop reports one outcome for the whole job, not one per attempt).
 
     *timeout_s* overrides the default watchdog ceiling — the image pull passes a
     higher one because a multi-GB download on a slow line legitimately exceeds
@@ -1281,7 +1473,8 @@ def _run_argv(argv: List[str], *, label: str, key: str,
                     "your login password to continue the install."})
     _emit("installer_started", {"key": key, "argv": argv, "label": label})
     if inherit_tty:
-        return _run_argv_on_tty(argv, label=label, key=key, env_extra=env_extra)
+        extra: Dict[str, Any] = {} if emit_done else {"emit_done": False}
+        return _run_argv_on_tty(argv, label=label, key=key, env_extra=env_extra, **extra)
     try:
         # PEP 668 bypass so pip works system-wide (typical on Debian/Ubuntu);
         # Linux-only PATH so WSL doesn't resolve Windows build tools.
@@ -1421,7 +1614,8 @@ def _run_argv(argv: List[str], *, label: str, key: str,
             _active_installs.pop(key, None)
 
         rc = proc.returncode
-        _emit("installer_done", {"key": key, "rc": rc, "label": label})
+        if emit_done:
+            _emit("installer_done", {"key": key, "rc": rc, "label": label})
         result: Dict[str, Any] = {
             "ok": rc == 0 and not stalled["hit"],
             "rc": rc,
@@ -2197,21 +2391,24 @@ def _macos_engine_blocker(key: str) -> Optional[str]:
             "machine with macOS 13+.")
 
 
-def _podman_pkg_url() -> str:
-    """The official podman macOS installer package for this CPU.
+# The vendors' own download pages. LanEx used to download Docker.dmg and the
+# podman .pkg itself and install them unchecked, accepting Docker's licence on
+# the person's behalf (audit G24). Without Homebrew (which checks every
+# download against the cask's SHA-256) the person now gets the vendor's page:
+# they download it, and they accept Docker's terms themselves.
+_DOCKER_MAC_PAGE = "https://docs.docker.com/desktop/setup/install/mac-install/"
+_DOCKER_TERMS_URL = "https://www.docker.com/legal/docker-subscription-service-agreement/"
+_PODMAN_MAC_PAGE = "https://podman.io/docs/installation#macos"
 
-    GitHub's ``releases/latest/download/<asset>`` redirect always points at the
-    newest release, so no API call (or token) is needed. This is the fallback
-    when Homebrew has no bottle (Tier-3 configs, e.g. Intel Macs on a macOS
-    brew stopped building for) — the pkg is prebuilt for both CPUs and installs
-    to ``/opt/podman`` regardless of brew's support tiers."""
-    return ("https://github.com/containers/podman/releases/latest/download/"
-            f"podman-installer-macos-{_mac_arch()}.pkg")
+
+def _podman_pkg_url() -> str:
+    """Where podman's official macOS installer is offered (the vendor page)."""
+    return _PODMAN_MAC_PAGE
 
 
 def _docker_dmg_url() -> str:
-    """Docker Desktop's official direct-download DMG for this CPU."""
-    return f"https://desktop.docker.com/mac/main/{_mac_arch()}/Docker.dmg"
+    """Where Docker Desktop for Mac is offered (the vendor page)."""
+    return _DOCKER_MAC_PAGE
 
 
 def _docker_app_path() -> Optional[str]:
@@ -2302,8 +2499,9 @@ def start_engine(engine: str, *, key: Optional[str] = None,
                 return {"ok": False, "reason": g, "guidance": g}
             _emit("installer_info", {"key": key, "message":
                   "Starting Docker Desktop — the docker daemon only runs while the app "
-                  "does. On its FIRST launch, approve Docker's own prompts in the app "
-                  "window; this can take a minute or two."})
+                  "does. On its FIRST launch Docker shows its subscription service "
+                  "agreement: read it and accept it in Docker's window if you agree "
+                  "(LanEx never accepts it for you). This can take a minute or two."})
             try:
                 subprocess.Popen(["open", app], stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)
@@ -2353,7 +2551,7 @@ def start_engine(engine: str, *, key: Optional[str] = None,
         pass
     if sys.platform == "darwin" and engine == "docker":
         g = ("Docker Desktop didn't become ready. Bring its window to the front and "
-             "finish the first-run prompts (service agreement / privileged helper); "
+             "finish its first-run prompts yourself (the service agreement, the privileged helper); "
              "wait for the whale icon to settle, then Recheck.")
     elif sys.platform.startswith("linux") and "permission denied" in (_rc_msg or "").lower():
         g = ("The daemon runs but refuses your user — click ‘Enable Docker for my "
@@ -2393,161 +2591,50 @@ def start_engine_async(engine: str) -> Dict[str, Any]:
 
 
 def _install_podman_pkg_darwin(key: str = "podman") -> Dict[str, Any]:
-    """Install podman from the official macOS ``.pkg`` (no Homebrew involved).
+    """podman without Homebrew: hand the person to podman's own page.
 
-    The fallback when brew has **no bottle** (Tier-3: an OS/CPU combo brew
-    stopped building for — brew's only other offer is a source build needing
-    the whole Go toolchain) or when brew isn't installed at all. The pkg is
-    prebuilt for arm64 AND amd64 and lands in ``/opt/podman``."""
-    from . import platform_env
-
+    Used when brew has **no bottle** (Tier-3: an OS/CPU combo brew stopped
+    building for) or brew isn't installed at all. LanEx used to download the
+    newest ``.pkg`` from GitHub and run ``installer -pkg`` on it unchecked; it
+    no longer installs a download it cannot check (audit G24). Returns
+    ``ok: False`` with ``manual: True``, the page, and the steps."""
     blocker = _macos_engine_blocker("podman")
     if blocker:
         _emit("installer_error", {"key": key, "message": blocker})
         return {"ok": False, "reason": blocker, "guidance": blocker}
-    url = _podman_pkg_url()
-    dest = platform_env.home() / "tools"
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        dest = Path(tempfile.gettempdir())
-    pkg = dest / f"podman-installer-macos-{_mac_arch()}.pkg"
-    _emit("installer_info", {"key": key, "message":
-          "installing podman from its official installer package "
-          "(prebuilt for this Mac — no Homebrew needed)…"})
-    res = _run_argv(["curl", "-fL", "--retry", "3", "-o", str(pkg), url],
-                    label="download podman installer", key=key, timeout_s=1800)
-    if _is_cancelled(key):
-        return _cancelled_result(key)
-    if not res.get("ok") or not pkg.is_file():
-        g = ("Couldn't download the podman installer package. Check your network, "
-             "or download it yourself from https://podman.io/docs/installation "
-             "and run it, then click ‘Pull image’.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
-    # `installer -pkg` needs root; _run_argv escalates (terminal prompt, or the
-    # macOS askpass dialog when there's no terminal).
-    res = _run_argv(["sudo", "installer", "-pkg", str(pkg), "-target", "/"],
-                    label="installer -pkg podman", key=key)
-    if _is_cancelled(key):
-        return _cancelled_result(key)
-    try:
-        pkg.unlink()
-    except Exception:
-        pass
-    platform_env.ensure_darwin_path()   # /opt/podman/bin is a fixed prefix it adds
-    if res.get("needs_sudo"):
-        return {"ok": False, "needs_sudo": True,
-                "reason": res.get("guidance") or "podman pkg install needs an admin password",
-                "guidance": res.get("guidance")}
-    if not (_verify_install("podman") or os.access("/opt/podman/bin/podman", os.X_OK)):
-        g = ("The podman package didn't install (see the Install logs). Manual "
-             "path: https://podman.io/docs/installation → macOS pkg, then "
-             "`podman machine init && podman machine start`.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
-    _setup_podman_machine(key)
-    return {"ok": True, "method": "pkg", "label": "official podman .pkg installer"}
+    g = ("LanEx can only install podman through Homebrew, which checks the download. "
+         "Get podman's macOS installer from its own page, " + _PODMAN_MAC_PAGE + ", run it, "
+         "then in Terminal run `podman machine init && podman machine start`, and click "
+         "Check again here. Or install Homebrew (https://brew.sh) and click Install again.")
+    _emit("installer_error", {"key": key, "message": g})
+    return {"ok": False, "manual": True, "reason": g, "guidance": g,
+            "url": _PODMAN_MAC_PAGE, "url_label": "Open podman's download page",
+            "commands": ["podman machine init", "podman machine start"]}
 
 
 def _install_docker_dmg_darwin(key: str = "docker") -> Dict[str, Any]:
-    """Install Docker Desktop from the official DMG (no Homebrew involved).
+    """Docker Desktop without Homebrew: hand the person to Docker's own page.
 
-    Fallback when brew is absent or the cask install failed. Uses Docker's own
-    documented automated path: mount the DMG and run the bundled
-    ``install --accept-license --user=<login>`` CLI (root via the normal
-    escalation — terminal prompt or the macOS askpass dialog). The
-    ``--user`` pre-provisioning also skips Docker's first-run admin prompt."""
-    import getpass
-    from . import platform_env
-
+    Used when brew is absent or the cask install failed. LanEx used to
+    download Docker.dmg and run its bundled installer with
+    ``--accept-license``, accepting Docker's subscription agreement on the
+    person's behalf, from a download nothing checked (audit G24). Now the
+    person downloads it from Docker, and accepts Docker's terms themselves in
+    Docker Desktop's first window. Returns ``ok: False`` with ``manual: True``,
+    the page, and the terms link."""
     blocker = _macos_engine_blocker("docker")
     if blocker:
         _emit("installer_error", {"key": key, "message": blocker})
         return {"ok": False, "reason": blocker, "guidance": blocker}
-    dest = platform_env.home() / "tools"
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        dest = Path(tempfile.gettempdir())
-    dmg = dest / "Docker.dmg"
-    # Headroom warning (never blocks): ~1.5 GB DMG + ~4 GB installed app/VM.
-    try:
-        free_gb = shutil.disk_usage(str(dest)).free / (1024 ** 3)
-        if free_gb < 6:
-            _emit("installer_info", {"key": key, "message": (
-                f"Low disk space: ~{free_gb:.1f} GB free. Docker Desktop needs "
-                "roughly 6 GB (download + installed app) — free some space if "
-                "the install fails.")})
-    except Exception:
-        pass
-    _emit("installer_info", {"key": key, "message":
-          "downloading Docker Desktop from docker.com (large — roughly 1.5 GB)…"})
-    res = _run_argv(["curl", "-fL", "--retry", "3", "-o", str(dmg), _docker_dmg_url()],
-                    label="download Docker.dmg", key=key, timeout_s=2 * 3600)
-    if _is_cancelled(key):
-        return _cancelled_result(key)
-    if not res.get("ok") or not dmg.is_file():
-        g = ("Couldn't download Docker Desktop. Check your network, or download it "
-             "from https://docs.docker.com/desktop/setup/install/mac-install/, open "
-             "Docker.app once, then click ‘Pull image’.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
-    mnt = "/Volumes/lanex-docker-install"
-    # A cancelled/crashed earlier attempt can leave the volume mounted — attach
-    # would then fail "mount point is busy". Quiet best-effort detach first.
-    try:
-        subprocess.run(["hdiutil", "detach", mnt, "-force"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=30)
-    except Exception:
-        pass
-    res = _run_argv(["hdiutil", "attach", str(dmg), "-nobrowse", "-readonly",
-                     "-mountpoint", mnt], label="mount Docker.dmg", key=key)
-    if not res.get("ok"):
-        g = ("Couldn't mount the downloaded Docker.dmg — open it manually from "
-             f"{dmg} (drag Docker to Applications), open Docker.app once, then "
-             "click ‘Pull image’.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
-    try:
-        user = ""
-        try:
-            user = getpass.getuser()
-        except Exception:
-            user = os.environ.get("USER", "")
-        argv = ["sudo", f"{mnt}/Docker.app/Contents/MacOS/install", "--accept-license"]
-        if user:
-            argv.append(f"--user={user}")
-        res = _run_argv(argv, label="Docker Desktop install", key=key)
-    finally:
-        # Unmount + delete the DMG whatever happened (the copy in /Applications
-        # is what matters); best-effort — a busy volume shouldn't fail the install.
-        try:
-            subprocess.run(["hdiutil", "detach", mnt, "-force"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=60)
-        except Exception:
-            pass
-        try:
-            dmg.unlink()
-        except Exception:
-            pass
-    if _is_cancelled(key):
-        return _cancelled_result(key)
-    if res.get("needs_sudo"):
-        return {"ok": False, "needs_sudo": True,
-                "reason": res.get("guidance") or "Docker Desktop install needs an admin password",
-                "guidance": res.get("guidance")}
-    if not _docker_app_path():
-        g = ("Docker Desktop didn't install (see the Install logs). Manual path: "
-             "https://docs.docker.com/desktop/setup/install/mac-install/, open "
-             "Docker.app once, then click ‘Pull image’.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
-    platform_env.ensure_darwin_path()   # the bundle's Resources/bin carries the CLI
-    start_engine("docker", key=key, wait_s=240.0)
-    return {"ok": True, "method": "dmg", "label": "Docker Desktop DMG install"}
+    g = ("LanEx can only install Docker Desktop through Homebrew, which checks the download. "
+         "Get it from Docker's own page, " + _DOCKER_MAC_PAGE + ", drag Docker to Applications "
+         "and open it once. Docker Desktop then shows its subscription service agreement "
+         "(" + _DOCKER_TERMS_URL + "): read it and accept it there if you agree. Then click "
+         "Check again here. Or install Homebrew (https://brew.sh) and click Install again.")
+    _emit("installer_error", {"key": key, "message": g})
+    return {"ok": False, "manual": True, "reason": g, "guidance": g,
+            "url": _DOCKER_MAC_PAGE, "url_label": "Open Docker's download page",
+            "terms_url": _DOCKER_TERMS_URL}
 
 
 def _install_gtkwave_macos(key: str) -> Dict[str, Any]:
@@ -2621,17 +2708,18 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
 
     * cask renamed ``docker`` → ``docker-desktop`` (use the current name);
     * leftover CLI symlinks from a previous Docker install → retry ``--force``;
-    * no Homebrew at all, or the cask fails → the official DMG / pkg installers
-      (no dead end that just links to a website);
-    * podman "no bottle available" (Tier-3 brew config) → the official podman
-      ``.pkg`` rather than a doomed source build;
+    * no Homebrew at all, or the cask fails → the vendor's own download page,
+      with the exact steps (LanEx installs only what Homebrew checks, and never
+      accepts Docker's agreement for the person; audit G24);
+    * podman "no bottle available" (Tier-3 brew config) → podman's own page
+      rather than a doomed source build;
     * an installed engine still isn't a REACHABLE engine — chain
       :func:`start_engine` so 'installed' means 'usable', not 'a binary exists'.
     """
     # Version floor FIRST — before brew even tries. The docker-desktop cask
     # depends_on macOS ≥ 13 anyway (it would fail with a brew-flavored message),
-    # and the DMG/pkg fallbacks would burn a multi-GB download on an app that
-    # can't launch. One honest message with the actual options instead.
+    # and a manual download would be a multi-GB file for an app that can't
+    # launch. One honest message with the actual options instead.
     blocker = _macos_engine_blocker(key)
     if blocker:
         _emit("installer_error", {"key": key, "message": blocker})
@@ -2639,11 +2727,11 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
 
     brew = _brew_path()
     if not brew:
-        # No Homebrew is not a dead end — both engines have official installers.
+        # No Homebrew: the vendor's page, with the steps.
         _emit("installer_info", {"key": key, "message":
-              "Homebrew isn't installed — using the official "
-              + ("Docker Desktop DMG" if key == "docker" else "podman package")
-              + " instead."})
+              "Homebrew isn't installed, so LanEx can't check a "
+              + ("Docker Desktop" if key == "docker" else "podman")
+              + " download. Here is the vendor's own page and the steps."})
         return (_install_docker_dmg_darwin(key) if key == "docker"
                 else _install_podman_pkg_darwin(key))
 
@@ -2675,15 +2763,14 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
             # means 'usable', not 'a binary exists' — the wait is what lets the
             # UI chain straight into the image pull.
             _emit("installer_info", {"key": key, "message":
-                  "Docker Desktop installed. Starting it — approve its first-run "
-                  "prompts in the Docker window if they appear…"})
+                  "Docker Desktop installed. Starting it. Docker shows its subscription "
+                  "service agreement in its own window: accept it there if you agree…"})
             start_engine("docker", key=key, wait_s=240.0)
             return {"ok": True, "method": "brew", "label": "brew install --cask docker-desktop"}
-        # brew couldn't do it — fall back to Docker's own DMG installer rather
-        # than dead-ending on a docs link.
+        # brew couldn't do it: the vendor page and the steps.
         _emit("installer_info", {"key": key, "message":
-              "the Homebrew cask didn't install Docker Desktop — falling back to "
-              "the official DMG installer…"})
+              "the Homebrew cask didn't install Docker Desktop (the output above says "
+              "why). Here is Docker's own page and the steps."})
         return _install_docker_dmg_darwin(key)
 
     # podman
@@ -2695,14 +2782,14 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
         if _brew_no_bottle(out):
             # Tier-3 brew config (an OS/CPU combo brew stopped building for) —
             # brew's only offer is a source build needing the whole Go
-            # toolchain. The official pkg is prebuilt for every Mac instead.
+            # toolchain. podman's own installer is prebuilt for every Mac.
             _emit("installer_info", {"key": key, "message":
-                  "Homebrew has no prebuilt podman for this Mac (Tier-3 config) — "
-                  "falling back to the official podman installer package…"})
+                  "Homebrew has no prebuilt podman for this Mac (Tier-3 config). "
+                  "Here is podman's own page and the steps."})
         else:
             _emit("installer_info", {"key": key, "message":
-                  "brew couldn't install podman — falling back to the official "
-                  "podman installer package…"})
+                  "brew couldn't install podman (the output above says why). "
+                  "Here is podman's own page and the steps."})
         return _install_podman_pkg_darwin(key)
     _setup_podman_machine(key)
     return {"ok": True, "method": "brew", "label": "brew install podman"}
@@ -2854,12 +2941,15 @@ def _install_guidance(key: str) -> str:
     """Actionable next step when automatic install isn't possible here."""
     if key in ("docker", "podman"):
         return (
-            "Install a container engine for the recommended run mode. Linux: "
-            "`sudo apt install podman` (or Docker via https://get.docker.com). "
-            "macOS: Docker Desktop (`brew install --cask docker-desktop`, then open "
-            "Docker.app once) or `brew install podman` followed by "
-            "`podman machine init && podman machine start`. Windows: Docker Desktop "
-            "with the WSL2 backend. After installing, click ‘Pull image’."
+            "Install a container engine from your system's own packages, then click "
+            "‘Pull image’. Debian/Ubuntu: `sudo apt install podman` (or "
+            "`sudo apt install docker.io`). Fedora: `sudo dnf install podman` (or "
+            "`sudo dnf install moby-engine`). Other systems: Docker's instructions at "
+            "https://docs.docker.com/engine/install/ or podman's at "
+            "https://podman.io/docs/installation. macOS: `brew install podman` then "
+            "`podman machine init && podman machine start`, or Docker Desktop "
+            "(`brew install --cask docker-desktop`, then open it once and accept "
+            "Docker's agreement yourself). Windows: Docker Desktop with the WSL2 backend."
         )
     if key in _HARD_TOOLS:
         return (
@@ -3312,18 +3402,9 @@ def pull_image() -> Dict[str, Any]:
             pull_cmd = [eng, "pull", image]
             if local.get("sg_wrap"):
                 pull_cmd = tools.sg_wrap_argv([eng, "pull", image])
-            # 4h ceiling instead of the default 1h: a multi-GB pull on a slow
-            # connection is healthy long past the generic install watchdog.
-            res = _run_argv(pull_cmd, label=f"{eng} pull", key=key, timeout_s=4 * 3600)
-            if (not res.get("ok")) and _docker_cred_helper_error("\n".join(res.get("output") or [])):
-                # Docker Desktop's credsStore helper isn't on PATH. The LibreLane
-                # image is public, so retry with an isolated config that has no
-                # credential store — no login is needed for a public pull.
-                _emit("installer_info", {"key": key, "message":
-                      "Docker's credential helper isn't on PATH — retrying the pull without it "
-                      "(the LibreLane image is public, so no login is required)…"})
-                res = _run_argv(pull_cmd, label=f"{eng} pull (no credential helper)",
-                                key=key, timeout_s=4 * 3600, env_extra=_no_creds_docker_env())
+            res = _pull_with_retries(pull_cmd, eng, key)
+            if res.get("cancelled"):
+                return
             if res.get("ok"):
                 record_image_digest(eng, image, sg_wrap=bool(local.get("sg_wrap")))
             else:
@@ -3331,6 +3412,10 @@ def pull_image() -> Dict[str, Any]:
                 rem = platform_env.network_remediation("\n".join(res.get("output") or []))
                 if rem:
                     _emit("installer_error", {"key": key, "message": rem})
+            # One done event for the whole job, after the last attempt: the
+            # Tools page reports the outcome once, not after each retry.
+            _emit("installer_done", {"key": key, "rc": res.get("rc") if res.get("rc") is not None else (0 if res.get("ok") else 1),
+                                     "label": f"{eng} pull", "attempts": res.get("attempts", 1)})
         finally:
             _end_job(key)
 
@@ -3339,14 +3424,80 @@ def pull_image() -> Dict[str, Any]:
     return {"ok": True, "status": "started", "image": image, "engine": engine}
 
 
+# What a pull failure looks like when another attempt cannot help.
+_PULL_PERMANENT_FAILURES = (
+    "manifest unknown", "not found: manifest", "unauthorized", "denied:",
+    "no space left on device", "invalid reference format", "repository does not exist",
+)
+_PULL_MAX_ATTEMPTS = 4
+_PULL_RETRY_DELAYS = (15, 30, 60)
+
+
+def _pull_with_retries(pull_cmd: List[str], eng: str, key: str) -> Dict[str, Any]:
+    """The Tools page's image pull, retried a bounded number of times.
+
+    A dropped connection, a laptop that slept or a VPN reconnecting fails a
+    pull at once; layers already fetched stay in the engine's store, so each
+    retry resumes. Permanent failures (no such image, a full disk) stop at
+    once. A step quiet for ``_DOWNLOAD_STALL_S`` is killed and retried. Returns
+    the last attempt's result plus ``attempts`` (``cancelled`` when the person
+    stopped it)."""
+    env_extra: Optional[Dict[str, str]] = None
+    res: Dict[str, Any] = {"ok": False}
+    attempt = 0
+    while attempt < _PULL_MAX_ATTEMPTS:
+        attempt += 1
+        if _is_cancelled(key):
+            _cancelled_result(key)
+            return {"ok": False, "cancelled": True, "attempts": attempt}
+        label = f"{eng} pull" + (f" (attempt {attempt} of {_PULL_MAX_ATTEMPTS})" if attempt > 1 else "")
+        # 4h ceiling instead of the default 1h: a multi-GB pull on a slow
+        # connection is healthy long past the generic install watchdog.
+        res = _run_argv(pull_cmd, label=label, key=key, timeout_s=4 * 3600,
+                        env_extra=env_extra, stall_s=_DOWNLOAD_STALL_S, emit_done=False)
+        res["attempts"] = attempt
+        if res.get("ok"):
+            return res
+        if _is_cancelled(key) or (res.get("rc") in (-15, -9) and not res.get("stalled")):
+            _cancelled_result(key)
+            return {"ok": False, "cancelled": True, "attempts": attempt}
+        blob = "\n".join(res.get("output") or [])
+        if env_extra is None and _docker_cred_helper_error(blob):
+            # Docker Desktop's credsStore helper isn't on PATH. The LibreLane
+            # image is public, so retry with an isolated config that has no
+            # credential store — no login is needed for a public pull.
+            _emit("installer_info", {"key": key, "message":
+                  "Docker's credential helper isn't on PATH — retrying the pull without it "
+                  "(the LibreLane image is public, so no login is required)…"})
+            env_extra = _no_creds_docker_env()
+            continue
+        if any(m in blob.lower() for m in _PULL_PERMANENT_FAILURES):
+            return res
+        if attempt >= _PULL_MAX_ATTEMPTS:
+            return res
+        delay = _PULL_RETRY_DELAYS[min(attempt - 1, len(_PULL_RETRY_DELAYS) - 1)]
+        msg = (f"The download stopped (attempt {attempt} of {_PULL_MAX_ATTEMPTS}). Trying again "
+               f"in {delay} s; layers already downloaded are kept.")
+        _emit("installer_info", {"key": key, "message": msg})
+        _emit("installer_line", {"key": key, "label": label, "line": msg})
+        deadline = time.time() + delay
+        while time.time() < deadline:
+            if _is_cancelled(key):
+                _cancelled_result(key)
+                return {"ok": False, "cancelled": True, "attempts": attempt}
+            time.sleep(0.5)
+    return res
+
+
 def record_image_digest(engine: str, image: str, *, sg_wrap: bool = False) -> Optional[str]:
     """Record the pulled image's immutable digest in ``$LANEX_HOME/image.lock``.
 
     Cheap upstream-independence insurance: if the registry ever re-tags or
     rebuilds ``:X.Y.Z``, the lock file proves which exact bytes this install
     validated against (``docker pull ghcr.io/...@sha256:...`` restores them).
-    Purely a record — image resolution is unchanged (it stays LibreLane's own
-    version-tag scheme). Best-effort; never raises; returns the digest or None.
+    The lock also names the LibreLane it was pulled for: after an upgrade
+    :func:`container_run.image_ref` ignores a lock made for another LibreLane
+    (audit G15). Best-effort; never raises; returns the digest or None.
     """
     try:
         argv = [engine, "image", "inspect", image, "--format", "{{index .RepoDigests 0}}"]
@@ -3356,17 +3507,21 @@ def record_image_digest(engine: str, image: str, *, sg_wrap: bool = False) -> Op
         rc, out, _err = _shell_exec_quiet(argv, timeout=15.0)
         digest = (out or "").strip().splitlines()[0].strip() if rc == 0 and (out or "").strip() else ""
         from . import platform_env
+        from .container_run import installed_librelane_version
         home = platform_env.home()
         home.mkdir(parents=True, exist_ok=True)
-        (home / "image.lock").write_text(
+        tmp = home / "image.lock.tmp"
+        tmp.write_text(
             json.dumps({
                 "image": image,
                 "digest": digest,
                 "engine": engine,
+                "librelane_version": installed_librelane_version(),
                 "recorded": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }, indent=2) + "\n",
             encoding="utf-8",
         )
+        tmp.replace(home / "image.lock")
         return digest or None
     except Exception:
         return None
@@ -3646,17 +3801,25 @@ def uninstall_tool(key: str) -> Dict[str, Any]:
     if key in ("docker", "podman") and sys.platform == "darwin":
         return _uninstall_engine_macos(key)
 
+    own = own_dependency_reason(key)
+    if own:
+        return {"ok": False, "own_dependency": True, "key": key, "reason": own}
+
     env = detect_environment()
     tried: List[str] = []
     cmds = []
 
     if env.get("pip") or env.get("pip3"):
+        # LanEx's own interpreter: a pip in some other Python (the system
+        # `python3`) answers "Skipping X as it is not installed" with exit 0,
+        # which used to read as a successful removal.
+        py = sys.executable or "python3"
         pip_map = {
-            "yosys": ["python3", "-m", "pip", "uninstall", "-y", "yowasp-yosys"],
+            "yosys": [py, "-m", "pip", "uninstall", "-y", "yowasp-yosys"],
             # (no openroad pip package exists — see _verify_install)
-            "verilator": ["python3", "-m", "pip", "uninstall", "-y", "verilator"],
-            "ciel": ["python3", "-m", "pip", "uninstall", "-y", "ciel"],
-            "librelane": ["python3", "-m", "pip", "uninstall", "-y", "librelane"],
+            "verilator": [py, "-m", "pip", "uninstall", "-y", "verilator"],
+            "ciel": [py, "-m", "pip", "uninstall", "-y", "ciel"],
+            "librelane": [py, "-m", "pip", "uninstall", "-y", "librelane"],
         }
         if key in pip_map:
             cmds.append(("pip uninstall", pip_map[key]))
@@ -3726,13 +3889,57 @@ def uninstall_tool(key: str) -> Dict[str, Any]:
         if key in conda_map:
             cmds.append(("conda remove", conda_map[key]))
 
+    ran_ok: List[str] = []
     for label, argv in cmds:
         result = _run_argv(argv, label=label, key=key)
         if result.get("ok"):
-            return {"ok": True, "method": label, "key": key}
+            # A removal command that exits 0 is not proof: pip skips a package
+            # it doesn't have, apt removes one copy while another (pipx,
+            # conda, a hand install) stays on PATH. Gone is what the probe says.
+            if not _verify_install(key):
+                return {"ok": True, "method": label, "key": key}
+            ran_ok.append(label)
+            tried.append(f"{label}: finished, but {key} is still installed")
+            continue
         tried.append(f"{label}: exit {result.get('rc', '?')}")
 
+    if ran_ok:
+        where = _installed_path(key)
+        reason = (f"{key} is still installed" + (f" at {where}" if where else "") +
+                  ". LanEx's removal (" + ", ".join(ran_ok) + ") did not remove that copy: "
+                  "it was installed another way (pipx, conda, Nix or by hand). Remove it "
+                  "the way it was installed, then click Check again.")
+        return {"ok": False, "still_installed": True, "path": where, "tried": tried, "reason": reason}
     return {"ok": False, "tried": tried, "reason": "No uninstall method succeeded"}
+
+
+def _installed_path(key: str) -> str:
+    """Where the probe finds *key* now ("" when it doesn't)."""
+    from . import platform_env
+
+    names = {"iverilog": ["iverilog"], "graphviz": ["dot"], "yosys": ["yosys", "yowasp-yosys"]}
+    for name in names.get(key, [key]):
+        hit = platform_env.usable_which(name)
+        if hit:
+            return str(hit)
+    return ""
+
+
+# Python packages LanEx itself runs on: removing them from LanEx's own
+# environment would break the app, so the Tools page refuses and says why.
+_OWN_DEPENDENCIES = ("librelane", "ciel")
+
+
+def own_dependency_reason(key: str) -> str:
+    """Why *key* can't be removed from the Tools page, or "" when it can."""
+    if key in ("python", "pip"):
+        return f"{key} is the Python LanEx runs on; it can't be removed from here."
+    if key in _OWN_DEPENDENCIES and _py_module_available(key):
+        label = "LibreLane" if key == "librelane" else "ciel"
+        return (f"{label} is part of LanEx's own Python environment (LanEx runs on it), so "
+                "removing it would break LanEx. The Tools page doesn't. Its version comes "
+                "with LanEx: update LanEx to change it.")
+    return ""
 
 
 def uninstall_pdk(pdk: str) -> Dict[str, Any]:
@@ -3793,6 +4000,111 @@ def uninstall_pdk(pdk: str) -> Dict[str, Any]:
     if removed:
         return {"ok": True, "method": "ciel rm", "key": pdk, "family": family, "removed": removed, "tried": tried}
     return {"ok": False, "key": pdk, "family": family, "tried": tried, "reason": "Could not remove PDK"}
+
+
+# ---- The PDK folder (PDK_ROOT), kept across restarts ----
+# The Tools page's "Change" used to set PDK_ROOT for this server process only,
+# so the next start went back to ~/.ciel and the PDKs "vanished". It is now
+# saved in $LANEX_HOME/settings.json (the server-side settings file that
+# runresources already reads) and applied at start. Precedence: --pdk-root,
+# then a PDK_ROOT already in the environment, then the saved folder, then
+# ciel's default.
+
+def _settings_path() -> Path:
+    from . import platform_env
+
+    return platform_env.home() / "settings.json"
+
+
+def _read_settings() -> Dict[str, Any]:
+    try:
+        p = _settings_path()
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8") or "{}")
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _write_settings(data: Dict[str, Any]) -> None:
+    p = _settings_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(p)
+
+
+def saved_pdk_root() -> str:
+    v = _read_settings().get("pdk_root")
+    return v if isinstance(v, str) else ""
+
+
+def apply_saved_pdk_root() -> Optional[str]:
+    """At start: use the saved PDK folder unless PDK_ROOT is already set."""
+    if os.environ.get("PDK_ROOT"):
+        return None
+    saved = saved_pdk_root()
+    if saved:
+        os.environ["PDK_ROOT"] = saved
+        return saved
+    return None
+
+
+def pdk_root_info() -> Dict[str, Any]:
+    env = os.environ.get("PDK_ROOT") or ""
+    saved = saved_pdk_root()
+    if env and saved and os.path.normpath(env) == os.path.normpath(saved):
+        source = "saved"
+    elif env:
+        source = "environment"
+    else:
+        source = "default"
+    return {"ok": True, "pdk_root": env or ciel_home(), "source": source,
+            "saved": saved, "default": os.path.expanduser("~/.ciel")}
+
+
+def set_pdk_root(value: Optional[str]) -> Dict[str, Any]:
+    """Change the PDK folder now and for every later start.
+
+    An empty value goes back to the default (the saved folder is forgotten).
+    The folder is created when it doesn't exist. A path with whitespace is
+    refused: LibreLane splits file lists on spaces."""
+    from . import platform_env
+
+    raw = (value or "").strip()
+    data = _read_settings()
+    if not raw:
+        data.pop("pdk_root", None)
+        try:
+            _write_settings(data)
+        except Exception as ex:
+            return {"ok": False, "reason": f"could not save the setting: {ex}"}
+        os.environ.pop("PDK_ROOT", None)
+        return pdk_root_info()
+    path = os.path.abspath(os.path.expanduser(platform_env.to_host_path(raw)))
+    if any(c.isspace() for c in path):
+        return {"ok": False, "reason": "The PDK folder can't have spaces in its path "
+                "(LibreLane splits file lists on spaces). Pick a folder without spaces."}
+    try:
+        Path(path).mkdir(parents=True, exist_ok=True)
+    except Exception as ex:
+        return {"ok": False, "reason": f"LanEx could not create {path}: {ex}"}
+    if not os.access(path, os.W_OK):
+        return {"ok": False, "reason": f"{path} is not writable by you, so PDKs can't be installed there."}
+    data["pdk_root"] = path
+    try:
+        _write_settings(data)
+    except Exception as ex:
+        return {"ok": False, "reason": f"could not save the setting: {ex}"}
+    os.environ["PDK_ROOT"] = path
+    return pdk_root_info()
+
+
+def installing_pdks() -> List[str]:
+    """PDK variants with an install job running now (for a reloaded page)."""
+    with _in_progress_lock:
+        return sorted(k[4:] for k in _in_progress if k.startswith("pdk:"))
 
 
 # ---- Legacy API (backward compat) ----

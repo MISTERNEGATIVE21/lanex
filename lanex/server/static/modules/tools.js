@@ -85,9 +85,15 @@ async function loadPdkRoot() {
     const rootInfo = await api.getPdkRoot();
     if (rootInfo && rootInfo.ok && rootInfo.pdk_root) {
       _pdkRoot = rootInfo.pdk_root;
-      if (input) input.value = rootInfo.pdk_root;
+      if (input) input.value = rootInfo.source === "default" ? "" : rootInfo.pdk_root;
+      if (input && rootInfo.default) input.placeholder = "Empty: the default, " + rootInfo.default;
       const shown = document.getElementById("tl-pdkroot-path");
-      if (shown) { shown.textContent = _pdkRoot; shown.title = _pdkRoot; }
+      if (shown) {
+        shown.textContent = _pdkRoot;
+        shown.title = _pdkRoot + ({ saved: " (your choice, used every time LanEx starts)",
+          environment: " (from PDK_ROOT in the environment LanEx was started from)",
+          default: " (the default)" }[rootInfo.source] || "");
+      }
     }
   } catch (ex) {
     console.warn("Failed to load PDK root:", ex);
@@ -191,6 +197,55 @@ function sizeStr(mb, { approx = false } = {}) {
 function kvHtml(rows) {
   return "<dl class='tl-kv'>" + rows.filter(Boolean).map(([k, v, title]) =>
     "<div><dt>" + esc(k) + "</dt><dd" + (title ? " title='" + esc(title) + "'" : "") + ">" + v + "</dd></div>").join("") + "</dl>";
+}
+
+// ------------------------------------------------------------------ install requests
+// The server refuses a second install request from the same browser within a
+// second (HTTP 429). A double click, or two Installs clicked in quick
+// succession, used to leave the button stuck on "Installing…": now the same
+// job is asked for only once at a time, and a 429 waits the second out and
+// asks again (the server's job guard answers "already running" when the first
+// request started it).
+const _requesting = new Set();
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export async function requestJob(key, fn, wait = _sleep) {
+  if (_requesting.has(key)) return { ok: true, in_progress: true, duplicate: true };
+  _requesting.add(key);
+  try {
+    try {
+      return await fn();
+    } catch (ex) {
+      if (!ex || ex.status !== 429) throw ex;
+      await wait(1100);
+      return await fn();
+    }
+  } finally {
+    _requesting.delete(key);
+  }
+}
+
+// " Full log: <path>" for a failure the server wrote a log for.
+export function logHint(r) {
+  return r && r.log_path ? " Full log: " + r.log_path : "";
+}
+
+// What to do by hand when LanEx won't install something itself (a download it
+// can't check, a vendor agreement the person must accept): the steps, the
+// vendor's page and terms as links the person clicks, and the log.
+function manualStepsDialog(key, r) {
+  const cmds = Array.isArray(r.commands) && r.commands.length
+    ? "<pre class='code'>" + esc(r.commands.join("\n")) + "</pre>" : "";
+  const links = [
+    r.url ? "<a class='btn btn-sm btn-primary' href='" + esc(r.url) + "' target='_blank' rel='noopener'>" + esc(r.url_label || "Open the download page") + " ↗</a>" : "",
+    r.terms_url ? "<a class='btn btn-sm btn-ghost' href='" + esc(r.terms_url) + "' target='_blank' rel='noopener'>Read the terms ↗</a>" : "",
+  ].join("");
+  return customDialog({
+    title: esc("Install " + key + " yourself"),
+    bodyHtml: "<p>" + esc(r.guidance || r.reason || "") + "</p>" + cmds +
+      (links ? "<div class='tl-fix-acts'>" + links + "</div>" : "") +
+      (r.log_path ? "<p class='hint'>Install log: <code>" + esc(r.log_path) + "</code></p>" : ""),
+    buttons: [{ label: "Close", value: "close", cls: "btn-ghost" }],
+  });
 }
 
 // ------------------------------------------------------------------ render
@@ -395,7 +450,7 @@ async function renderRecommendedTools(info) {
           "Your projects and run results are kept. Install it again from this card any time." }))) return;
       try {
         const r = await api.uninstallTool(key);
-        toast.show(r.ok ? label + " removed" : label + " remove failed", r.ok ? "info" : "error");
+        toast.show(r.ok ? label + " removed" : label + " was not removed: " + (r.reason || "unknown") + logHint(r), r.ok ? "info" : "error");
       } catch (ex) { toast.show(label + " remove error: " + (ex.message || ex), "error"); }
       renderTools();
     }));
@@ -403,7 +458,8 @@ async function renderRecommendedTools(info) {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = "Building…";
     try {
-      const r = await api.installTool("gds3d");
+      const r = await requestJob("gds3d", () => api.installTool("gds3d"));
+      if (r && r.duplicate) return;
       if (r && r.in_progress) toast.show("GDS3D compilation already in progress. Check the Logs panel.", "info");
       else if (r && r.ok === false) toast.show(r.guidance || r.error || "Build could not start. Follow the manual build steps instead.", "warn");
       else toast.show("GDS3D build started. Progress is in the Logs panel.", "success");
@@ -457,20 +513,21 @@ function wireStatic() {
     if (!row.hidden) document.getElementById("pdk-root-input")?.focus();
   });
   document.getElementById("btn-save-pdk-root")?.addEventListener("click", async () => {
+    // Empty goes back to the default folder.
     const val = document.getElementById("pdk-root-input").value.trim();
-    if (!val) return;
     try {
       const res = await api.setPdkRoot(val);
       if (res.ok) {
-        toast.show("PDK folder set to " + res.pdk_root, "success");
+        toast.show((res.source === "default" ? "PDK folder back to the default, " : "PDK folder set to ") + res.pdk_root +
+          ". LanEx keeps it for every start.", "success");
         const row = document.getElementById("tl-pdkroot-form");
         if (row) row.hidden = true;
-        renderTools();
+        renderTools(true);
       } else {
         toast.show("Could not change the PDK folder", "error");
       }
     } catch (ex) {
-      toast.show("Error: " + ex.message, "error");
+      toast.show("Could not change the PDK folder: " + ex.message, "error");
     }
   });
   // One open "More" menu at a time; a click elsewhere closes it.
@@ -568,9 +625,17 @@ export function attentionItems(info, { runMode = "container", installJobs = {}, 
       detail: "Update it with your system's package manager." });
   }
 
+  const stale = c.image_stale_record || null;
   if (pulling) {
     items.push({ key: "image", tone: "busy", show: "tl-image", title: "Downloading the LibreLane image",
       detail: "The progress is under Flow engine. Layers already fetched stay cached if it stops." });
+  } else if (!c.image_present && stale) {
+    // An upgrade brought a new LibreLane; the image on record is the old one's.
+    items.push({ key: "image", tone: engTone, show: "tl-image",
+      title: "LibreLane " + (c.librelane_version || "") + " needs its own image",
+      detail: "The image on record is for LibreLane " + (stale.librelane_version || "an older version") +
+        ". Runs use the image that matches the installed LibreLane, so download it once." + onlyContainer,
+      fix: c.ready ? { label: "Update image", id: "btn-pull-image" } : null });
   } else if (!c.image_present) {
     items.push({ key: "image", tone: engTone, show: "tl-image",
       title: "The LibreLane image is not downloaded",
@@ -591,11 +656,19 @@ export function attentionItems(info, { runMode = "container", installJobs = {}, 
       fix: { label: "Install ciel", id: "install-ciel-btn" } });
   }
   const installed = pdk.installed_pdks || [];
-  const busyPdks = Object.keys(cat).filter((k) => installJobs["pdk:" + k]);
+  const running = new Set(pdk.installing_pdks || []);
+  const busyPdks = Object.keys(cat).filter((k) => installJobs["pdk:" + k] || running.has(k));
   for (const k of busyPdks)
     items.push({ key: "pdk-busy-" + k, tone: "busy", show: "tl-pdk-" + k, title: "Installing " + k,
       detail: "The download runs in the background; the Logs panel shows its progress." });
-  if (!installed.length && !busyPdks.length) {
+  for (const k of pdk.incomplete_pdks || []) {
+    if (busyPdks.includes(k) || installed.includes(k)) continue;
+    items.push({ key: "pdk-incomplete-" + k, tone: "fail", show: "tl-pdk-" + k,
+      title: k + " did not finish installing",
+      detail: "The last install stopped while unpacking, so LanEx doesn't use it. Repair finishes it; files already downloaded are kept.",
+      fix: { label: "Repair " + k, id: "tl-pdk-" + k, sel: ".pdk-install-btn" } });
+  }
+  if (!installed.length && !busyPdks.length && !(pdk.incomplete_pdks || []).length) {
     const def = Object.entries(cat).find(([, p]) => (p.default_variant || p.recommended) && !p.note);
     items.push({ key: "pdk-none", tone: "fail", show: def ? "tl-pdk-" + def[0] : "tools-pdk",
       title: "No PDK installed",
@@ -923,14 +996,15 @@ export function updatePullProgress(line) {
   if (lay) lay.textContent = _pullLayerLabel();
 }
 
-export function finishPull(rc) {
+export function finishPull(rc, logPath) {
   const wasCancelled = _pull.cancelledByUser;
   _pull.cancelledByUser = false;
   _pull.active = false;
   clearInterval(_pull.timer);
   if (wasCancelled) { renderTools(); return; }   // the cancel click already toasted
   if (rc === 0) toast.show("Image download complete. Container mode is ready.", "success");
-  else toast.show("Image download failed (exit " + rc + "). The Logs panel has the details; Download again resumes.", "error");
+  else toast.show("Image download failed (exit " + rc + "). Download again resumes where it stopped." +
+    (logPath ? " Full log: " + logPath : " The Logs panel has the details."), "error");
   renderTools();   // re-probe → image_present / daemon state refresh
 }
 
@@ -986,6 +1060,13 @@ function engineTilesHtml(c, info) {
   } else if (c.image_present) {
     iStatus = c.image_custom ? "custom" : "ready";
     iText = c.image_custom ? "Custom image" : "Downloaded";
+  } else if (c.image_stale_record) {
+    // LibreLane was upgraded: the recorded image belongs to the old version,
+    // and the one runs need is not here yet (a problem, like a missing image).
+    iStatus = "missing"; iText = "Update needed";
+    iAction = c.ready
+      ? act("Update image", "", "id='btn-pull-image'", { primary: true, title: "Download the image that matches LibreLane " + (c.librelane_version || "") })
+      : act("Update image", "", "disabled title='Needs a working container engine first'");
   } else {
     iStatus = "missing"; iText = "Not downloaded";
     iAction = c.ready
@@ -1008,6 +1089,8 @@ function engineTilesHtml(c, info) {
       kvHtml([
         [c.image_present ? "On disk" : "Download", esc(c.image_present ? sizeStr(c.image_size_mb) : sizeStr(c.image_approx_mb, { approx: true })) || "—"],
         digest && ["Digest", digest, c.image || ""],
+        !c.image_present && c.image_stale_record && ["On record", "LibreLane " + esc(c.image_stale_record.librelane_version || "?") +
+          " <span class='tl-bad'>older</span>", c.image_stale_record.image || ""],
         inImage.length && ["Holds", esc(inImage.join(", "))],
       ]) +
       "<div class='tl-tile-act'>" + iAction + "</div>" +
@@ -1148,7 +1231,8 @@ async function installEngine(key) {
   document.querySelectorAll("[id^=btn-install-], .engine-install").forEach((b) => { b.disabled = true; });
   toast.show("Installing " + key + " with the package manager. Progress is in the Logs panel.", "info");
   try {
-    const result = await api.installTool(key);
+    const result = await requestJob(key, () => api.installTool(key));
+    if (result.duplicate) return;
     if (result.status === "started") {
       // Async: the outcome arrives as an SSE `installer_result` event, which
       // toasts the result and chains the image pull ("in one go") on success.
@@ -1178,7 +1262,7 @@ async function removeEngine(key) {
       toast.show(name + " removed via " + (r.method || "?"), "info");
       renderLogs.append({ payload: { message: "✓ " + key + " removed" } });
     } else {
-      toast.show(name + " removal failed: " + (r.reason || ""), "error");
+      toast.show(name + " removal failed: " + (r.reason || "") + logHint(r), "error");
       renderLogs.append({ payload: { message: "✗ " + key + " removal: " + (r.reason || ""), level: "ERROR" } });
     }
   } catch (ex) {
@@ -1230,7 +1314,7 @@ export function paintLocalToolsGrid(info) {
     else action = openBtn;
     const menu = [];
     if (!t.installed && openBtn && action !== openBtn) menu.push(menuItem("Open from the image", "ct-open", "data-key='" + t.key + "'"));
-    if (t.installed && !NO_REMOVE.has(t.key)) menu.push(menuItem("Uninstall " + t.label, "uninstall-btn", "data-key='" + t.key + "' data-label='" + esc(t.label) + "'", { danger: true }));
+    if (t.installed && !NO_REMOVE.has(t.key) && !t.own_dependency) menu.push(menuItem("Uninstall " + t.label, "uninstall-btn", "data-key='" + t.key + "' data-label='" + esc(t.label) + "'", { danger: true }));
     card.innerHTML = rowHtml({
       id: "tl-local-" + t.key, name: esc(t.label), label: t.label, status, chip, warn, inst: !!t.installed,
       purpose: esc(t.what || ""), purposeTitle: t.installed ? "Path: " + (t.path || "—") : (t.container_only ? (t.install_recipe || "") : ""),
@@ -1331,10 +1415,12 @@ export function renderPdkStore(info) {
     document.getElementById("install-ciel-btn")?.addEventListener("click", () => installByKey("ciel"));
   }
 
+  const incomplete = new Set(pdkInfo.incomplete_pdks || []);
+  const running = new Set(pdkInfo.installing_pdks || []);
   const variantHtml = (key) => {
     const p = catalog[key] || {};
     const isInstalled = installed.has(key);
-    const busy = !!state.installJobs["pdk:" + key];
+    const busy = !!state.installJobs["pdk:" + key] || running.has(key);
     const v = versions[key] || {};
     const differs = isInstalled && v.installed && v.pinned && v.installed !== v.pinned;
     const measured = (pdkInfo.installed_sizes_mb || {})[key];
@@ -1344,6 +1430,12 @@ export function renderPdkStore(info) {
     if (busy) {
       status = "busy"; ver = "<span class='tl-var-busy'><span class='spinner-sm'></span> Installing</span>";
       action = act("Cancel", "pdk-cancel-btn", "data-pdk='" + esc(key) + "'");
+    } else if (incomplete.has(key) && !isInstalled) {
+      // The last install stopped while unpacking: never shown as ready.
+      status = "broken"; ver = "<span class='tl-bad'>Download incomplete</span>";
+      warn = "The last install stopped before it finished unpacking, so LanEx doesn't use it. " +
+        "Repair unpacks it again; files already downloaded are kept.";
+      action = act("Repair", "pdk-install-btn", "data-pdk='" + esc(key) + "'", { primary: true, title: "Finish the install" });
     } else if (isInstalled) {
       status = differs ? "custom" : "ready";
       if (differs) {
@@ -1367,7 +1459,11 @@ export function renderPdkStore(info) {
     const n = libCount(p);
     const menu = [];
     if (n && !busy) menu.push(menuItem("Libraries (" + n + ")…", "pdk-libs-btn", "data-pdk='" + esc(key) + "'"));
-    if (isInstalled && !busy) menu.push(menuItem("Remove the " + pdkFamily(catalog, key) + " family", "pdk-uninstall-btn", "data-pdk='" + esc(key) + "'", { danger: true }));
+    // ciel keeps every variant of a family in one download, so removal is per
+    // family: the item says which variants go with it.
+    const famKeys = Object.keys(catalog).filter((k) => pdkFamily(catalog, k) === pdkFamily(catalog, key) && installed.has(k));
+    if (isInstalled && !busy) menu.push(menuItem(famKeys.length > 1
+      ? "Remove " + famKeys.join(" and ") + "…" : "Remove " + key + "…", "pdk-uninstall-btn", "data-pdk='" + esc(key) + "'", { danger: true }));
     const tags = ((p.default_variant || p.recommended) ? "<span class='tl-tag' title='The variant LanEx uses by default for this PDK'>default</span>" : "") +
       (p.supported === false ? "<span class='tl-tag is-quiet' title='The LibreLane flow does not support this variant'>not in flow</span>" : "");
     return (
@@ -1428,15 +1524,22 @@ export function renderPdkStore(info) {
       closeMenus();
       const family = pdkFamily(catalog, pdk);
       const siblings = [...installed].filter((x) => pdkFamily(catalog, x) === family);
-      if (!(await confirmDialog({ title: "Remove the " + family + " PDK", danger: true, confirmText: "Remove " + family,
-        body: "Removes every installed version of the " + family + " family from disk: " + (siblings.join(", ") || pdk) +
-          (_pdkRoot ? " (in " + _pdkRoot + ")" : "") + ". " +
-          "Kept: your projects and run results. Designs that use " + family + " can't run until you install it again." }))) return;
+      const names = siblings.length ? siblings : [pdk];
+      const mb = names.reduce((a, k) => a + ((pdkInfo.installed_sizes_mb || {})[k] || 0), 0);
+      const together = names.length > 1
+        ? "ciel keeps " + names.join(" and ") + " in one " + family + " download, so they can only be removed together. "
+        : "";
+      if (!(await confirmDialog({ title: names.length > 1 ? "Remove " + names.join(" and ") + "?" : "Remove " + pdk + "?",
+        danger: true, confirmText: names.length > 1 ? "Remove " + names.length + " variants" : "Remove " + pdk,
+        body: together + "Removes " + names.join(", ") + " from disk" + (_pdkRoot ? " (in " + _pdkRoot + ")" : "") +
+          (mb ? ", freeing about " + sizeStr(mb) : "") + ". " +
+          "Kept: your projects and run results. Designs that use " + (names.length > 1 ? "them" : pdk) +
+          " can't run until you install " + (names.length > 1 ? "them" : "it") + " again." }))) return;
       try {
         const result = await api.uninstallPdk(pdk);
         if (result.ok) {
-          toast.show(`PDK ${pdk} uninstalled`, "info");
-          renderLogs.append({ payload: { message: "✓ PDK " + pdk + " uninstalled via " + (result.method || "?") } });
+          toast.show("Removed " + names.join(" and "), "info");
+          renderLogs.append({ payload: { message: "✓ PDK " + names.join(", ") + " removed via " + (result.method || "?") } });
           // Optimistic: drop all variants of the removed family so the cards flip now.
           if (state.tools?.pdk) {
             const removedFamily = result.family || family;
@@ -1455,7 +1558,7 @@ export function renderPdkStore(info) {
           // Keep the Setup tab honest too — its picker re-fetches /api/pdks.
           import("./setup.js").then((m) => m.populatePdkPicker && m.populatePdkPicker()).catch(() => {});
         } else {
-          toast.show(`PDK ${pdk} uninstall failed`, "error");
+          toast.show("Could not remove " + pdk + ": " + (result.reason || "unknown") + logHint(result), "error");
           renderLogs.append({ payload: { message: "✗ PDK " + pdk + " uninstall failed: " + (result.reason || "unknown"), level: "ERROR" } });
         }
       } catch (ex) {
@@ -1499,10 +1602,12 @@ async function openLibraries(key, p, isInstalled) {
 }
 
 async function installPdk(pdk, libraries) {
+  if (_requesting.has("pdk:" + pdk)) return;   // a second click while the first is asking
   state.installJobs["pdk:" + pdk] = true;
   renderTools();
   try {
-    const result = await api.installCiel(pdk, libraries);
+    const result = await requestJob("pdk:" + pdk, () => api.installCiel(pdk, libraries));
+    if (result.duplicate) return;
     if (result.ok) {
       if (result.in_progress) {
         toast.show(`PDK ${pdk} is already downloading.`, "info");
@@ -1658,7 +1763,9 @@ function wireUninstallButtons() {
           if (tool) { tool.installed = false; tool.path = ""; tool.version = ""; }
           if (state.tools) paint(state.tools);
         } else {
-          toast.show(`${key} uninstall failed`, "error");
+          // Say why: "still installed at <path>" (another copy) or "part of
+          // LanEx" is something the person can act on; "failed" is not.
+          toast.show(`${label} was not removed: ` + (result.reason || "unknown") + logHint(result), "error");
           renderLogs.append({ payload: { message: "✗ " + key + " uninstall failed: " + (result.reason || "unknown"), level: "ERROR" } });
         }
       } catch (ex) {
@@ -1695,16 +1802,21 @@ function handleInstallOutcome(key, result) {
     });
   } else if (result.needs_sudo) {
     // sudo can't prompt from the GUI — show the exact command to run.
-    toast.show(`${key} requires elevated privileges; run the command below in a terminal.`, "warn");
+    toast.show(`${key} requires elevated privileges; run the command below in a terminal.` + logHint(result), "warn");
     renderLogs.append({ payload: { message: result.guidance || ("Run with sudo: " + key), level: "WARN" } });
+  } else if (result.manual) {
+    // LanEx won't install it itself (a download it can't check, terms the
+    // person accepts): the steps and the vendor's page, one click away.
+    manualStepsDialog(key, result);
+    renderLogs.append({ payload: { message: "ℹ " + (result.guidance || result.reason || ""), level: "WARN" } });
   } else {
     // Surface the actionable guidance (e.g. "use conda/Nix/container"), not
     // just "failed".
     const why = result.guidance || result.reason || "no install method on this system";
-    toast.show(`Can't auto-install ${key}: ${why}`, "error");
+    toast.show(`Can't auto-install ${key}: ${why}` + logHint(result), "error");
     const tried = (result.tried || []).join("; ");
     renderLogs.append({
-      payload: { message: "✗ " + key + " install failed: " + why + (tried ? " [" + tried + "]" : ""), level: "ERROR" },
+      payload: { message: "✗ " + key + " install failed: " + why + (tried ? " [" + tried + "]" : "") + logHint(result), level: "ERROR" },
     });
   }
 }
@@ -1759,56 +1871,39 @@ async function chainImagePull() {
 
 async function installByKey(key) {
   try {
-    const result = await api.installTool(key);
+    const result = await requestJob(key, () => api.installTool(key));
+    if (result.duplicate) return;   // this click's job is already being asked for
     if (result.status === "started") {
       toast.show(`${key} install started. Progress is in the Logs panel; this page updates when it finishes.`, "info");
       return;
     }
     delete state.installJobs[key];
     handleInstallOutcome(key, result);
+    renderTools();
   } catch (ex) {
     delete state.installJobs[key];
     const body = ex.body;
     if (body && body.kind === "manual") {
       showInstallModal(key, body.recipe || "(no recipe in this build)");
+      renderTools();
       return;
     }
     toast.show(key + " install error: " + ex.message, "error");
     renderLogs.append({
       payload: { message: "✗ " + key + " install error: " + ex.message, level: "ERROR" },
     });
+    // Never leave the button on "Installing…" after a request that failed.
+    renderTools();
   }
 }
 
+// "How to install" for a tool with no one-click recipe here (a dialog on the
+// overlay stack, like every other one).
 function showInstallModal(key, recipe) {
-  // Build a small modal "How to install" instead of the intrusive alert().
-  let modal = document.getElementById("install-modal");
-  if (!modal) {
-    modal = document.createElement("div");
-    modal.id = "install-modal";
-    modal.style.cssText =
-      "position:fixed;inset:0;background:rgba(0,0,0,0.55);display:grid;place-items:center;z-index:60;backdrop-filter:blur(4px);";
-    modal.addEventListener("click", (e) => {
-      if (e.target === modal) modal.style.display = "none";
-    });
-    document.body.appendChild(modal);
-  }
-  modal.innerHTML =
-    '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);' +
-    'padding:var(--s-5);max-width:520px;width:90%;box-shadow:var(--sh-3);">' +
-    '<div style="display:flex;align-items:center;justify-content:space-between;">' +
-    "<h2>Install " + key + "</h2>" +
-    '<button class="btn btn-ghost" id="install-modal-close">Close</button>' +
-    "</div>" +
-    "<p>" +
-    "This tool isn't pip-installable; please use the recipe below for your platform." +
-    "</p>" +
-    '<pre class="code">' +
-    fmt.escape(recipe) +
-    "</pre>" +
-    "</div>";
-  modal.style.display = "grid";
-  document.getElementById("install-modal-close")?.addEventListener("click", () => {
-    modal.style.display = "none";
+  return customDialog({
+    title: esc("Install " + key),
+    bodyHtml: "<p>LanEx can't install this tool on this system with one click. These are the steps for your platform:</p>" +
+      "<pre class='code'>" + esc(recipe) + "</pre>",
+    buttons: [{ label: "Close", value: "close", cls: "btn-ghost" }],
   });
 }

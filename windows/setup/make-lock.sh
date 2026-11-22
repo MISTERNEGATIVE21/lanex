@@ -38,5 +38,7 @@ EOF
     echo "# requirements.lock. For pip installs on Linux:  pip install -c constraints.txt lanex"
     grep -E '^[A-Za-z0-9_.-]+==' "$WORK/requirements.lock" | sed -E 's/ *\\$//'
 } > "$HERE/constraints.txt"
+# The wheel's copy: Tools-page pip installs use it (installer.pip_constraints_file).
+cp "$HERE/constraints.txt" "$HERE/../../lanex/data/constraints.txt"
 rm -rf "$WORK"
 grep -c '^[A-Za-z0-9_.-]*==' "$HERE/constraints.txt"
