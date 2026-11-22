@@ -24,8 +24,9 @@ No shell-outs; everything uses stdlib.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 # Default "Verilog-ish" extensions plus memory files.
 DEFAULT_SOURCE_EXTS = {
@@ -93,16 +94,59 @@ def list_dir(path: str) -> Dict[str, Any]:
     }
 
 
+class BoundedWalk:
+    """``os.walk`` for a request thread: stops for good once *max_files*
+    files have been yielded, *max_dirs* folders visited or *budget_s* seconds
+    spent, and never enters hidden folders, links to folders or *skip_dirs*.
+
+    Opening the home folder (or a Windows user folder) as a project used to walk
+    the whole tree: the old result cap only ended the inner loop, so every
+    remaining folder was still listed. ``truncated`` says the walk stopped
+    early (the caller tells the user the list is partial)."""
+
+    def __init__(self, root: Path, *, skip_dirs: Iterable[str] = (), max_files: int = 4096,
+                 max_dirs: int = 20000, budget_s: float = 3.0) -> None:
+        self.root = root
+        self.skip_dirs = set(skip_dirs)
+        self.max_files = max_files
+        self.max_dirs = max_dirs
+        self.budget_s = budget_s
+        self.truncated = False
+        self.files_seen = 0
+
+    def __iter__(self):
+        deadline = time.monotonic() + self.budget_s
+        dirs_seen = 0
+        for root, dirs, files in os.walk(str(self.root)):
+            # The first folder is always listed; any further one only while
+            # the folder count and the time budget last.
+            if dirs_seen and (dirs_seen >= self.max_dirs or time.monotonic() > deadline):
+                self.truncated = True
+                return
+            dirs_seen += 1
+            # Prune in place, sorted so a cut-off walk is at least repeatable.
+            dirs[:] = sorted(d for d in dirs if d not in self.skip_dirs and not d.startswith("."))
+            for f in sorted(files):
+                if self.files_seen >= self.max_files:
+                    self.truncated = True
+                    return
+                self.files_seen += 1
+                yield root, f
+
+
 def walk_sources(
     design_dir: str,
     *,
     extra_exts: Optional[set] = None,
     max_results: int = 4096,
+    budget_s: float = 3.0,
 ) -> Dict[str, Any]:
     """Walk ``design_dir`` recursively and return every file whose extension
     is in ``DEFAULT_SOURCE_EXTS | extra_exts``.
 
-    Skips ``.git``, ``runs``, ``tmp``, ``__pycache__``.
+    Skips hidden folders, ``runs``, ``tmp``, ``__pycache__`` and build output,
+    and stops at *max_results* matches or after *budget_s* seconds
+    (``truncated`` is then True).
     """
     p = _safe_resolve(design_dir, must_exist=True)
     if p is None or not p.is_dir():
@@ -110,28 +154,31 @@ def walk_sources(
     exts = {e.lower() for e in (DEFAULT_SOURCE_EXTS | (extra_exts or set()))}
     skip_dirs = {".git", "runs", "tmp", "__pycache__", "build", "node_modules", "sim_build", "obj_dir"}
     hits: List[Dict[str, Any]] = []
-    for root, dirs, files in os.walk(str(p)):
-        # Prune skip-dirs in-place to avoid descending into them.
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
-        for f in files:
-            if len(hits) > max_results:
-                break
-            ext = Path(f).suffix.lower()
-            if ext in exts:
-                fp = Path(root) / f
-                try:
-                    size = fp.stat().st_size
-                except OSError:
-                    size = 0
-                hits.append(
-                    {
-                        "name": f,
-                        "relpath": str(fp.relative_to(p)),
-                        "abspath": str(fp),
-                        "ext": ext,
-                        "size": size,
-                    }
-                )
+    # Every file costs a visit, matching or not: the walk is bounded by the
+    # files it looks at (and by time), the result by max_results.
+    walk = BoundedWalk(p, skip_dirs=skip_dirs, max_files=max(max_results * 16, 20000),
+                       budget_s=budget_s)
+    for root, f in walk:
+        if len(hits) >= max_results:
+            walk.truncated = True
+            break
+        ext = Path(f).suffix.lower()
+        if ext not in exts:
+            continue
+        fp = Path(root) / f
+        try:
+            size = fp.stat().st_size
+        except OSError:
+            size = 0
+        hits.append(
+            {
+                "name": f,
+                "relpath": str(fp.relative_to(p)),
+                "abspath": str(fp),
+                "ext": ext,
+                "size": size,
+            }
+        )
     # Also include any *.mem/hex files separately so users can map them
     # to memory cells.
     memory_exts = {".mem", ".hex", ".bin"}
@@ -143,6 +190,7 @@ def walk_sources(
         "sources": sources,
         "memories": memories,
         "total": len(sources) + len(memories),
+        "truncated": walk.truncated,
     }
 
 

@@ -219,21 +219,24 @@ async function saveCustom(host) {
   err.hidden = true;
   const name = host.querySelector("#cc-name").value.trim();
   const swap = host.querySelector("#cc-swap").value.split(",").map((s) => s.trim()).filter(Boolean);
-  const views = {};
+  const picked = [];
   for (const inp of host.querySelectorAll(".cc-file")) {
     const f = inp.files && inp.files[0];
-    if (!f) continue;
-    views[inp.dataset.kind] = { filename: f.name, content_b64: await new Promise((res, rej) => {
-      const r = new FileReader(); r.onerror = () => rej(new Error("read failed"));
-      r.onload = () => { const s = String(r.result || ""); res(s.slice(s.indexOf(",") + 1)); }; r.readAsDataURL(f);
-    }) };
+    if (f) picked.push([inp.dataset.kind, f]);
   }
   const fail = (m) => { err.hidden = false; err.textContent = m; };
   if (!name) return fail("Give the cell a name.");
-  if (!views.lef) return fail("A LEF view is required.");
+  if (!picked.some(([k]) => k === "lef")) return fail("A LEF view is required.");
   const b = host.querySelector("#cc-save");
-  b.disabled = true; b.textContent = "Saving…";
+  b.disabled = true; b.textContent = "Uploading…";
   try {
+    // Each file goes up as itself (api.upload), then the save names it.
+    const views = {};
+    for (const [k, f] of picked) {
+      const up = await api.upload(f, state.designDir);
+      views[k] = { filename: f.name, upload_id: up.upload_id };
+    }
+    b.textContent = "Saving…";
     await api.customCellSave({ design_dir: state.designDir, name, swap_out: swap, views, enabled: true });
     toast.show("Saved " + name + ". The next run uses it" + (swap.length ? " instead of " + swap.join(", ") : "") + ".", "success");
     await C.reload();

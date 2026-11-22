@@ -78,6 +78,16 @@ FLOW_TIMEOUT = int(os.environ.get("LANEX_CI_LEG_TIMEOUT", "3600"))
 _HDRS = {"X-Requested-With": "XMLHttpRequest", "Content-Type": "application/json"}
 
 
+def _key_header() -> Dict[str, str]:
+    """The LanEx key the server under test made (server/auth.py): every
+    /api/* request but /api/health must carry it."""
+    try:
+        tok = (WORK / "lanex-home" / "auth-token").read_text(encoding="utf-8").strip()
+    except OSError:
+        return {}
+    return {"X-LanEx-Key": tok} if tok else {}
+
+
 def log(msg: str) -> None:
     print(f"[e2e] {msg}", flush=True)
 
@@ -93,7 +103,7 @@ def http(method: str, path: str, body: Optional[Dict[str, Any]] = None,
     text) so cases assert on content, and the status code for the gate."""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(BASE() + path, data=data, method=method,
-                                 headers=_HDRS if method == "POST" else {})
+                                 headers={**_key_header(), **(_HDRS if method == "POST" else {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
@@ -112,7 +122,8 @@ def http(method: str, path: str, body: Optional[Dict[str, Any]] = None,
 
 def http_raw(path: str, timeout: float = 300) -> Tuple[int, bytes]:
     try:
-        with urllib.request.urlopen(BASE() + path, timeout=timeout) as resp:
+        req = urllib.request.Request(BASE() + path, headers=_key_header())
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as ex:
         return ex.code, ex.read()
@@ -269,6 +280,7 @@ def case_e1_canary() -> str:
     t = threading.Thread(
         target=sse_capture.capture,
         args=(f"{BASE()}/api/events", str(CTX.sse_log), FLOW_TIMEOUT + 120),
+        kwargs={"headers": _key_header()},
         daemon=True)
     t.start()
     time.sleep(2)

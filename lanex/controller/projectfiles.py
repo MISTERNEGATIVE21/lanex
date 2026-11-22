@@ -97,27 +97,31 @@ def list_files(design_dir: str | Path, max_files: int = 2000) -> Dict[str, Any]:
     in_vf = set(sources["files"])
     targets = _var_targets(d, info["data"])
     files: List[Dict[str, Any]] = []
-    for root, dirs, names in os.walk(d):
-        dirs[:] = sorted(x for x in dirs if x not in _SKIP_DIRS and not x.startswith("."))
-        for n in sorted(names):
-            if n.startswith("."):
-                continue   # LanEx's own overlays and editor temp files
-            p = Path(root) / n
-            ext = p.suffix.lower()
-            if ext not in EDITABLE_EXTS and ext not in (".bin", ".verilog"):
-                continue
-            rel = p.relative_to(d).as_posix()
-            try:
-                size = p.stat().st_size
-            except OSError:
-                size = 0
-            ap = str(p.resolve())
-            files.append({"rel": rel, "abs": ap, "ext": ext, "size": size,
-                          "role": _role(rel, ext), "in_verilog_files": ap in in_vf,
-                          "used_by": targets.get(ap, [])})
-            if len(files) >= max_files:
-                break
-    return {"files": files,
+    # Bounded: a project opened on the home folder must not walk the disk on
+    # this request thread (G10). It stops at max_files matches, after a
+    # number of files looked at, or after a few seconds.
+    from .fsbrowser import BoundedWalk
+    walk = BoundedWalk(d, skip_dirs=_SKIP_DIRS, max_files=max(max_files * 16, 20000))
+    for root, n in walk:
+        if n.startswith("."):
+            continue   # LanEx's own overlays and editor temp files
+        p = Path(root) / n
+        ext = p.suffix.lower()
+        if ext not in EDITABLE_EXTS and ext not in (".bin", ".verilog"):
+            continue
+        rel = p.relative_to(d).as_posix()
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0
+        ap = str(p.resolve())
+        files.append({"rel": rel, "abs": ap, "ext": ext, "size": size,
+                      "role": _role(rel, ext), "in_verilog_files": ap in in_vf,
+                      "used_by": targets.get(ap, [])})
+        if len(files) >= max_files:
+            walk.truncated = True
+            break
+    return {"files": files, "truncated": walk.truncated,
             "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
             "sources": sources}
 

@@ -417,7 +417,7 @@ async function showOverrideTrail(varName, value) {
   }
 
   const choice = await customDialog({
-    title: "Where does " + fmt.escape(varName) + " go?",
+    title: "Where does " + varName + " go?",
     bodyHtml:
       "<p>This setting is passed as a command-line override. Your design's " +
       "config file is <b>never modified</b>:</p>" +

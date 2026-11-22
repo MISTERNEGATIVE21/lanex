@@ -319,7 +319,7 @@ export async function openResolvedSettings(tag) {
   }
   const note = r.note ? "<p class='fs-note'>" + fmt.escape(r.note) + "</p>" : "";
   await customDialog({
-    title: "Final settings used by run '" + fmt.escape(tag) + "' (" + r.rows.length + " variables)",
+    title: "Final settings used by run '" + tag + "' (" + r.rows.length + " variables)",
     wide: true,
     bodyHtml:
       "<p>Values are loaded directly from <b>resolved.json</b>, LibreLane's complete execution record. " +

@@ -25,6 +25,8 @@ function _host() {
   return h;
 }
 
+// `title` is plain text everywhere (set with textContent, never parsed as
+// HTML), so a file, run or cell name in a title can never inject markup.
 function _open({ title, bodyHtml, buttons, onMount }) {
   return new Promise((resolve) => {
     const host = _host();
@@ -33,10 +35,11 @@ function _open({ title, bodyHtml, buttons, onMount }) {
     const tid = "dlg-title-" + (++_seq);
     back.innerHTML =
       "<div class='dlg' role='document'>" +
-      "<div class='dlg-head' id='" + tid + "'>" + (title || "") + "</div>" +
+      "<div class='dlg-head' id='" + tid + "'></div>" +
       "<div class='dlg-body'>" + (bodyHtml || "") + "</div>" +
       "<div class='dlg-actions'></div>" +
       "</div>";
+    back.querySelector(".dlg-head").textContent = title == null ? "" : String(title);
     const actions = back.querySelector(".dlg-actions");
     let result, done = false;
     // Every way out (a button, Esc, the scrim) ends here, once.
@@ -123,7 +126,7 @@ export async function customDialog({ title = "", bodyHtml = "", buttons = null, 
 
 export async function confirmDialog({ title = "Are you sure?", body = "", confirmText = "Confirm", cancelText = "Cancel", danger = false } = {}) {
   const v = await _open({
-    title: _esc(title),
+    title,
     bodyHtml: body ? "<p>" + _esc(body) + "</p>" : "",
     buttons: [
       { label: cancelText, value: false, cls: "btn-ghost" },
@@ -136,7 +139,7 @@ export async function confirmDialog({ title = "Are you sure?", body = "", confir
 export async function choiceDialog({ title = "", body = "", choices = [] } = {}) {
   // choices: [{label, value, danger?}]. Returns the chosen value or undefined.
   return _open({
-    title: _esc(title),
+    title,
     bodyHtml: body ? "<p>" + _esc(body) + "</p>" : "",
     buttons: choices.map((c) => ({ label: c.label, value: c.value, cls: c.danger ? "btn-warn" : "btn-ghost" }))
       .concat([{ label: "Cancel", value: undefined, cls: "btn-ghost" }]),
@@ -147,7 +150,7 @@ export async function alertDialog({ title = "Notice", body = "", html = false } 
   // `html: true` renders `body` as pre-built markup — the CALLER is then
   // responsible for escaping any untrusted text inside it (see about.js).
   await _open({
-    title: _esc(title),
+    title,
     bodyHtml: html ? String(body || "") : (body ? "<p>" + _esc(body) + "</p>" : ""),
     buttons: [{ label: "OK", value: true, cls: "btn-primary" }],
   });
@@ -162,7 +165,7 @@ export async function checklistDialog({ title = "", body = "", items = [], confi
     (it.checked === false ? "" : " checked") + "/> <span>" + _esc(it.label) +
     (it.hint ? " <span class='muted'>— " + _esc(it.hint) + "</span>" : "") + "</span></label>").join("");
   const v = await _open({
-    title: _esc(title),
+    title,
     bodyHtml: (body ? "<p>" + _esc(body) + "</p>" : "") +
       "<div class='dlg-checklist'>" +
       "<div class='dlg-check-tools'><button type='button' class='btn btn-ghost dlg-check-all'>All</button>" +
@@ -188,7 +191,7 @@ export async function checklistDialog({ title = "", body = "", items = [], confi
 export async function promptDialog({ title = "", label = "", defaultValue = "" } = {}) {
   let inputEl = null;
   const v = await _open({
-    title: _esc(title),
+    title,
     bodyHtml: (label ? "<label class='dlg-label'>" + _esc(label) + "</label>" : "") +
       "<input class='dlg-input' type='text' value='" + _esc(defaultValue) + "'/>",
     buttons: [
@@ -211,7 +214,7 @@ export async function promptDialog({ title = "", label = "", defaultValue = "" }
 export async function confirmTyped({ title = "Confirm", body = "", phrase = "", confirmText = "Delete" } = {}) {
   let inputEl = null, confirmBtn = null;
   const v = await _open({
-    title: _esc(title),
+    title,
     bodyHtml: (body ? "<p>" + _esc(body) + "</p>" : "") +
       "<label class='dlg-label'>Type <code>" + _esc(phrase) + "</code> to confirm:</label>" +
       "<input class='dlg-input' type='text' autocomplete='off'/>",

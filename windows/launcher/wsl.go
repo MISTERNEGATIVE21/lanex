@@ -223,7 +223,9 @@ func terminateDistro() {
 // from inside WSL over the interop bridge (appwindow.py:272-303).
 func openAppWindow(port int) error {
 	args := []string{
-		fmt.Sprintf("--app=http://127.0.0.1:%d/", port),
+		// With the LanEx key from server.json (probe.go appURL): the server
+		// answers every /api/* request only for a page that has it.
+		"--app=" + appURL(port),
 		// The very profile LanEx uses for its own window (appwindow.py:246-279),
 		// so both routes produce ONE taskbar identity and neither drags LanEx
 		// into the user's browsing session.

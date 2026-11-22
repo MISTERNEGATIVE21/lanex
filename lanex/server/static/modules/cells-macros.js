@@ -277,7 +277,7 @@ async function editPower(name, info) {
   const cur = m.power || defaultPower(info);
   const pins = (info && info.power) || { vdd: [], gnd: [] };
   const v = await customDialog({
-    title: "Power hookup: " + esc(name),
+    title: "Power hookup: " + name,
     bodyHtml: "<p class='muted'>Which of the macro's pins connect to which of your design's power nets. LibreLane's power-grid step uses this to strap the macro to the grid; without it LVS reports the macro unpowered.</p>" +
       "<div class='mc-pw-form'>" +
       "<label>Macro power pin <input id='pw-vp' class='mono' value='" + esc(cur.vdd_pin) + "' list='pw-vl'></label>" +
@@ -622,23 +622,23 @@ function paneFiles(pane, _pdk, close) {
     const name = pane.querySelector("#mc-up-name").value.trim();
     b.disabled = true; b.textContent = "Uploading…";
     try {
+      // Each file goes up on its own, as itself (no base64, no size ceiling
+      // short of 2 GiB), then the save names what arrived.
       const views = {};
-      for (const [k, f] of Object.entries(files)) views[k] = { filename: f.name, content_b64: await b64(f) };
+      const entries = Object.entries(files);
+      for (let i = 0; i < entries.length; i++) {
+        const [k, f] = entries[i];
+        b.textContent = "Uploading " + (i + 1) + " of " + entries.length + "…";
+        const up = await api.upload(f, state.designDir);
+        views[k] = { filename: f.name, upload_id: up.upload_id };
+      }
+      b.textContent = "Saving…";
       await api.customMacroSave({ design_dir: state.designDir, name, instances: [], views, enabled: true });
       afterAdd(name, close);
     } catch (ex) {
       pane.querySelector("#mc-up-msg").textContent = ex.message || String(ex);
       b.disabled = false; b.textContent = "Add macro";
     }
-  });
-}
-
-function b64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onerror = () => reject(new Error("could not read " + file.name));
-    r.onload = () => { const s = String(r.result || ""); resolve(s.slice(s.indexOf(",") + 1)); };
-    r.readAsDataURL(file);
   });
 }
 

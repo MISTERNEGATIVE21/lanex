@@ -169,3 +169,37 @@ func TestFindRunningServerUsesTheRecord(t *testing.T) {
 		t.Errorf("findRunningServer() = (%d, true) for a stale record, want not-found", got)
 	}
 }
+
+// The app window must open with the LanEx key the server wrote into its record
+// (G21): without it every /api/* request is refused. A record without a key
+// (an older appliance), one for another port, or a malformed key opens the bare
+// address, exactly as before.
+func TestAppURLCarriesTheKey(t *testing.T) {
+	activeConfig = applianceConfig{InstallID: "11111111-2222-3333-4444-555555555555",
+		SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Manifest:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	identity := `"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`
+	key := "Abc_def-0123456789abcdefghijklmnopqrstuvwxyz"
+	cases := []struct {
+		name string
+		body string
+		port int
+		want string
+	}{
+		{"keyed record", `{"port":8766,"key":"` + key + `",` + identity + `}`, 8766,
+			"http://127.0.0.1:8766/?lanex_key=" + key},
+		{"older appliance, no key", `{"port":8766,` + identity + `}`, 8766, "http://127.0.0.1:8766/"},
+		{"record for another port", `{"port":8767,"key":"` + key + `",` + identity + `}`, 8766,
+			"http://127.0.0.1:8766/"},
+		{"malformed key", `{"port":8766,"key":"a&b c",` + identity + `}`, 8766, "http://127.0.0.1:8766/"},
+		{"no record", "", 8766, "http://127.0.0.1:8766/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withRecord(t, tc.body)
+			if got := appURL(tc.port); got != tc.want {
+				t.Errorf("appURL(%d) = %q, want %q", tc.port, got, tc.want)
+			}
+		})
+	}
+}

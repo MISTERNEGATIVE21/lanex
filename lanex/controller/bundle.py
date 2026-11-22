@@ -60,6 +60,7 @@ import hashlib
 import io
 import json
 import platform
+import re
 import shutil
 import sys
 import tempfile
@@ -584,6 +585,21 @@ def build_bundle(run_dir: str | Path, *, include: Optional[Iterable[str]] = None
     return buf.getvalue()
 
 
+# Import limits: well above what write_bundle can produce (1 GiB of heavy
+# parts plus the text budget), far below what fills a disk by surprise.
+IMPORT_MAX_MEMBERS = 20000
+IMPORT_MAX_BYTES = 4 * 1024 * 1024 * 1024
+
+
+def safe_run_tag(raw: Any) -> str:
+    """A bundle's recorded run tag as one safe folder name: separators and
+    anything else outside ``A-Z a-z 0-9 . _ -`` become ``_``, at most 100
+    characters, and dots, dashes and underscores at either end go (no ``..``,
+    no hidden folder); ``bundle`` when nothing is left."""
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", str(raw or ""))[:100].strip("._-")
+    return s or "bundle"
+
+
 def import_bundle(src: "str | Path | BinaryIO", design_dir: str | Path) -> Dict[str, Any]:
     """Import a LanEx export bundle (.zip) as a *viewable partial run* under
     ``<design>/runs/`` (E1, mode 2). *src* is a filesystem path or a binary file
@@ -605,6 +621,7 @@ def import_bundle(src: "str | Path | BinaryIO", design_dir: str | Path) -> Dict[
 
     runs_root = Path(design_dir).resolve() / "runs"
     runs_root.mkdir(parents=True, exist_ok=True)
+    runs_res = runs_root.resolve()
 
     try:
         zf_ctx = zipfile.ZipFile(zf_src)
@@ -612,47 +629,89 @@ def import_bundle(src: "str | Path | BinaryIO", design_dir: str | Path) -> Dict[
         raise ValueError(f"not a valid .zip bundle: {ex}") from ex
 
     with zf_ctx as zf:
-        names = zf.namelist()
+        infos = zf.infolist()
+        names = [i.filename for i in infos]
         if not names:
             raise ValueError("empty or invalid bundle")
+        # A bundle is a run's files, not an archive bomb: refuse one that
+        # would unpack to more members or bytes than any LanEx export makes.
+        if len(infos) > IMPORT_MAX_MEMBERS:
+            raise ValueError(f"the bundle has {len(infos)} files; LanEx imports at most "
+                             f"{IMPORT_MAX_MEMBERS}")
+        declared = sum(max(0, i.file_size) for i in infos)
+        if declared > IMPORT_MAX_BYTES:
+            raise ValueError(f"the bundle unpacks to {declared / 2**30:.1f} GiB; LanEx imports "
+                             f"at most {IMPORT_MAX_BYTES // 2**30} GiB")
         base = "bundle"
         try:
             mani = json.loads(zf.read("MANIFEST.json"))
             if isinstance(mani, dict) and mani.get("run_tag"):
-                base = str(mani["run_tag"])
+                base = safe_run_tag(mani["run_tag"])
         except (KeyError, ValueError):
             pass
         tag = f"{base}-imported"
         dest = runs_root / tag
         n = 2
-        while dest.exists():
+        while dest.exists() or dest.is_symlink():
             tag = f"{base}-imported-{n}"
             dest = runs_root / tag
             n += 1
+        # Confinement: the run folder must be a direct child of runs/, whatever
+        # the bundle's MANIFEST says its tag was.
+        if dest.resolve().parent != runs_res:
+            raise ValueError("refusing to write outside the design's runs/ directory")
+        dest.mkdir()
         dest_res = dest.resolve()
 
-        def _target(arc: str) -> Optional[Path]:
+        def _target(info: zipfile.ZipInfo) -> Optional[Path]:
+            arc = info.filename
+            if info.is_dir():
+                return None
+            # A symlink member (Unix mode bits in the high word) would unpack
+            # as a file holding its target's name; it is never anything a
+            # LanEx export writes, so it is skipped.
+            if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+                return None
             # ``config/<name>`` lands at the run root (where history reads the
             # config + metrics); every other member keeps its relative path.
             rel = arc[len("config/"):] if arc.startswith("config/") else arc
-            if not rel or rel.endswith("/"):
+            if not rel or rel.endswith("/") or "\x00" in rel:
                 return None
             t = (dest / rel).resolve()
             try:
                 t.relative_to(dest_res)  # zip-slip guard
             except ValueError:
                 return None
+            if t == dest_res:
+                return None
             return t
 
         wrote_any = False
-        for arc in names:
-            t = _target(arc)
-            if t is None:
-                continue
-            t.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(arc) as fsrc, open(t, "wb") as fdst:
-                shutil.copyfileobj(fsrc, fdst)
-            wrote_any = True
+        written = 0
+        try:
+            for info in infos:
+                t = _target(info)
+                if t is None:
+                    continue
+                t.parent.mkdir(parents=True, exist_ok=True)
+                # The header's size can lie: count what really comes out.
+                with zf.open(info) as fsrc, open(t, "wb") as fdst:
+                    while True:
+                        chunk = fsrc.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > IMPORT_MAX_BYTES:
+                            raise ValueError("the bundle unpacks to more than "
+                                             f"{IMPORT_MAX_BYTES // 2**30} GiB")
+                        fdst.write(chunk)
+                wrote_any = True
+        except (zipfile.BadZipFile, zipfile.LargeZipFile) as ex:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise ValueError(f"the bundle is damaged: {ex}") from ex
+        except BaseException:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise
 
     if not wrote_any:
         shutil.rmtree(dest, ignore_errors=True)

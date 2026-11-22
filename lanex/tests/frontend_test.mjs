@@ -2219,6 +2219,69 @@ check("boot: index.html preloads exactly app.js's static imports, and no blockin
   for (const page of ["flow.js", "runs.js", "tools.js", "analytics.js"]) assert.ok(!seen.has("modules/" + page), page + " loads on demand");
 });
 
+// ---- server boundary (audit 2026-11-15: G16, G20, 3.4, 4.13) ----------------
+// A stub fetch records what api.js sends and answers with a canned reply.
+async function withFetch(reply, fn) {
+  const sent = [];
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    sent.push({ url, init });
+    return {
+      ok: reply.status >= 200 && reply.status < 300, status: reply.status, statusText: reply.statusText || "",
+      text: async () => reply.body,
+    };
+  };
+  try { return await fn(sent); } finally { globalThis.fetch = prev; }
+}
+
+await checkAsync("api: a plain-text error reaches the user in the server's own words", async () => {
+  await withFetch({ status: 502, body: "Bad gateway: the LanEx server is restarting" }, async () => {
+    await assert.rejects(api.health(), (e) => e.message === "Bad gateway: the LanEx server is restarting" && e.status === 502);
+  });
+  await withFetch({ status: 500, body: "" , statusText: "Internal Server Error" }, async () => {
+    await assert.rejects(api.health(), (e) => /HTTP 500/.test(e.message) && !/non-json/.test(e.message));
+  });
+  await withFetch({ status: 401, body: JSON.stringify({ ok: false, error: "not signed in", code: "key" }) }, async () => {
+    await assert.rejects(api.health(), (e) => e.message === "not signed in" && e.body.code === "key");
+  });
+  await withFetch({ status: 200, body: JSON.stringify({ ok: true, data: { alive: true } }) }, async () => {
+    assert.deepEqual(await api.health(), { alive: true });
+  });
+});
+
+await checkAsync("api: opening a layout or a cell viewer is a POST (never a cross-site GET)", async () => {
+  await withFetch({ status: 200, body: JSON.stringify({ ok: true, data: {} }) }, async (sent) => {
+    await api.layoutOpen("run-1", "final");
+    await api.cellView("sky130A", "sky130_fd_sc_hd", "inv_1");
+    assert.equal(sent[0].init.method, "POST");
+    assert.match(sent[0].url, /^\/api\/layout\/open\?tag=run-1&source=final$/);
+    assert.equal(sent[1].init.method, "POST");
+    assert.equal(sent[0].init.headers["X-Requested-With"], "XMLHttpRequest");
+  });
+});
+
+await checkAsync("api.upload: the file goes up as itself, never base64 in JSON", async () => {
+  const file = { name: "sram 1rw.gds", size: 25 * 1024 * 1024 };
+  await withFetch({ status: 200, body: JSON.stringify({ ok: true, data: { upload_id: "a".repeat(32) } }) }, async (sent) => {
+    const up = await api.upload(file, "/home/u/chip");
+    assert.equal(up.upload_id, "a".repeat(32));
+    assert.equal(sent[0].init.body, file, "the File object itself is the body");
+    assert.equal(sent[0].init.headers["Content-Type"], "application/octet-stream");
+    assert.match(sent[0].url, /^\/api\/upload\?filename=sram%201rw\.gds&design_dir=%2Fhome%2Fu%2Fchip$/);
+  });
+  await assert.rejects(api.upload({ name: "huge.gds", size: 3 * 1024 ** 3 }), (e) => e.status === 413);
+  for (const f of ["cells-macros.js", "cells-rules.js"]) {
+    assert.doesNotMatch(readFileSync(resolve(MOD, f), "utf8"), /content_b64|readAsDataURL/, f + " still base64-encodes uploads");
+  }
+});
+
+check("dialog: the title is text (textContent), never parsed as HTML", () => {
+  const src = readFileSync(resolve(MOD, "dialog.js"), "utf8");
+  assert.match(src, /querySelector\("\.dlg-head"\)\.textContent = /);
+  assert.doesNotMatch(src, /id='" \+ tid \+ "'>" \+ \(title/, "title must not be concatenated into the markup");
+  assert.doesNotMatch(src, /title: _esc\(title\)/, "a text title must not be pre-escaped (it would show &amp;)");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

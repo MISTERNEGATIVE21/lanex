@@ -1554,7 +1554,7 @@ async function importPathDialog(kind) {
   let inputEl = null;
   const esc = fmt.escape;
   const v = await customDialog({
-    title: esc(isDir ? "Adopt a run directory" : "Import a bundle (.zip)"),
+    title: isDir ? "Adopt a run directory" : "Import a bundle (.zip)",
     bodyHtml:
       "<label class='dlg-label' for='import-path'>" + esc(isDir
         ? "The run folder (a runs/<tag> folder). Browse to it, or type or paste its full path."

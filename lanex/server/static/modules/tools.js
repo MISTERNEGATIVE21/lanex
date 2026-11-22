@@ -1472,7 +1472,7 @@ export function renderPdkStore(info) {
 async function openLibraries(key, p, isInstalled) {
   let picked = null;
   const v = await customDialog({
-    title: esc((p.label || key) + " libraries"),
+    title: (p.label || key) + " libraries",
     wide: true,
     bodyHtml:
       "<p>PDK archives are large. Tick only the cell libraries your design needs; the starter set is enough for the examples.</p>" +

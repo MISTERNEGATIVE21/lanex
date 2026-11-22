@@ -25,8 +25,18 @@ views. This module supports that two ways, both safe to ship upstream:
    tools, ciel, and the container engines) and streams its output over SSE. It
    is NOT an arbitrary shell: the program (argv[0]) must be allow-listed, the
    command is never run through a shell (no ``shell=True``), and shell
-   operators / ``sudo`` are rejected. This keeps the localhost web server from
-   becoming a remote-code path while still giving real manual control.
+   operators / ``sudo`` are rejected.
+
+   The allow-list keeps the Console to the flow's own tools and stops typos and
+   shell habits from doing something surprising. It is not a security
+   boundary: librelane, openroad, yosys, magic, klayout, iverilog/vvp and
+   verilator all run scripts, so whoever can call ``/api/manual/run`` can run
+   code as the LanEx user. What keeps everyone else out is the server's own
+   boundary (``server/app.py``): it binds to loopback, answers only a loopback
+   ``Host``, takes a POST only from its own page (``X-Requested-With`` and the
+   same-origin check), and every ``/api/*`` request must carry the LanEx key
+   (``server/auth.py``). ``--allow-remote`` hands this power to anyone on the
+   network who has the key.
 
 Pure stdlib; psutil (already a LibreLane dependency) is used only to terminate a
 process tree on cancel. Cross-platform via ``shlex`` / ``subprocess``.

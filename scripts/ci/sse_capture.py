@@ -7,14 +7,21 @@ timeout. Importable: ``capture(url, outfile, timeout)`` for in-process use.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 import urllib.request
 
 
-def capture(url: str, out: str, timeout: float) -> None:
+def capture(url: str, out: str, timeout: float, headers: dict | None = None) -> None:
     t0 = time.time()
-    req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
+    # headers: the LanEx key (X-LanEx-Key) the server requires on /api/*;
+    # LANEX_KEY in the environment works for the command-line use.
+    hdrs = {"Accept": "text/event-stream"}
+    if os.environ.get("LANEX_KEY"):
+        hdrs["X-LanEx-Key"] = os.environ["LANEX_KEY"]
+    hdrs.update(headers or {})
+    req = urllib.request.Request(url, headers=hdrs)
     with open(out, "a", encoding="utf-8") as fh, urllib.request.urlopen(req, timeout=30) as resp:
         fh.write(f"# capture start {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
         while time.time() - t0 < timeout:
