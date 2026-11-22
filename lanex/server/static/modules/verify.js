@@ -940,30 +940,57 @@ async function showLog(stepId) {
   });
 }
 
+// Re-run one step as a new run resumed from this one (the server's
+// reverify.plan_rerun): this run's flow, PDK and settings, its saved results,
+// and any changes as {setting: value}, one row each (a list value stays whole).
 async function rerun(stepId) {
-  const { promptDialog } = await import("./dialog.js");
-  const extra = await promptDialog({
-    title: "Re-run " + stepId + " on " + _tag,
-    label: "Runs only this step again, on this run's saved results, and updates its numbers. The checker after it doesn't run again, so this page re-judges the new value. " +
-      "Optional setting overrides, as KEY=VALUE separated by commas:",
-    defaultValue: "",
+  const tag = _tag;
+  let plan;
+  try {
+    plan = (await api.verifyRerun({ step_id: stepId, run_tag: tag, dry_run: true, run_mode: state.runMode })).plan;
+  } catch (ex) { toast.show("Can't re-run " + stepId + ": " + (ex.message || ex), "error"); return; }
+  const { customDialog } = await import("./dialog.js");
+  const names = (state.variables || []).map((v) => v.name);
+  const row = () => "<div class='vf-rr-row' style='display:flex;gap:8px;margin-top:6px'>" +
+    "<input class='dlg-input' list='vf-rr-vars' placeholder='Setting' aria-label='Setting' spellcheck='false' style='flex:1'/>" +
+    "<input class='dlg-input' placeholder='Value' aria-label='Value' spellcheck='false' style='flex:1'/></div>";
+  const pinned = (plan.pinned || []).map((d) => d.var + " " + d.was + " (the config says " + d.now + " now)");
+  const kept = Object.keys(plan.overrides || {}).filter((k) => !(plan.pinned || []).some((d) => d.var === k));
+  const body = plan.blocked
+    ? "<p class='pill pill-fail'>" + esc(plan.blocked) + "</p>"
+    : "<p>Runs " + esc(stepId) + " again in a new run, <b>" + esc(plan.tag) + "</b>, on " + esc(tag) + "'s saved results, with the settings " +
+      esc(tag) + " ran with (" + esc(plan.parent.flow) + ", " + esc(plan.parent.pdk || "") + "). " + esc(tag) + " itself stays as it is. " +
+      "The checker after the step doesn't run again: Verify judges the new numbers.</p>" +
+      (kept.length ? "<p class='muted'>Kept from " + esc(tag) + ": " + esc(kept.join(", ")) + ".</p>" : "") +
+      (pinned.length ? "<p class='muted'>Kept at " + esc(tag) + "'s values: " + esc(pinned.join("; ")) + ".</p>" : "") +
+      (plan.notes || []).map((n) => "<p class='muted'>" + esc(n) + "</p>").join("") +
+      "<label class='dlg-label'>Change a setting for this re-run (optional)</label>" +
+      "<div class='vf-rr-rows'>" + row() + "</div>" +
+      "<button type='button' class='btn btn-ghost btn-xs' data-rr-add style='margin-top:6px'>Another setting</button>" +
+      "<datalist id='vf-rr-vars'>" + names.map((n) => "<option value='" + esc(n) + "'>").join("") + "</datalist>";
+  let root = null;
+  const go = await customDialog({
+    title: esc("Re-run " + stepId + " of " + tag), bodyHtml: body,
+    buttons: plan.blocked ? [{ label: "Close", value: null, cls: "btn-ghost" }]
+      : [{ label: "Cancel", value: null, cls: "btn-ghost" }, { label: "Re-run in a new run", value: "go", cls: "btn-primary" }],
+    onMount: (back) => {
+      root = back;
+      back.querySelector("[data-rr-add]")?.addEventListener("click", () =>
+        back.querySelector(".vf-rr-rows").insertAdjacentHTML("beforeend", row()));
+    },
   });
-  if (extra === null) return;
+  if (go !== "go" || !root) return;
   const overrides = {};
-  for (const pair of extra.split(",")) {
-    const [k, val] = pair.split("=");
-    if (k && k.trim() && val !== undefined) overrides[k.trim()] = val.trim();
+  for (const r of root.querySelectorAll(".vf-rr-row")) {
+    const [k, v] = [...r.querySelectorAll("input")].map((i) => i.value.trim());
+    if (k) overrides[k] = v;
   }
   try {
-    const res = await api.verifyRerun({ step_id: stepId, overrides, run_tag: _tag, run_mode: state.runMode });
-    if (res.ok) {
-      toast.show("Re-running " + stepId + ". This page updates when it finishes.", "success", 8000,
-        { label: "Watch", run: () => import("./nav.js").then((m) => m.go("pipeline")) });
-    } else {
-      toast.show("Re-run refused: " + (res.reason || res.error || "unknown"), "error");
-    }
+    const res = await api.verifyRerun({ step_id: stepId, overrides, run_tag: tag, run_mode: state.runMode });
+    toast.show("Re-running " + stepId + " as run " + res.tag + ".", "success", 8000,
+      { label: "Watch", run: () => import("./nav.js").then((m) => m.go("pipeline")) });
   } catch (ex) {
-    toast.show("Re-run failed: " + (ex.message || ex), "error");
+    toast.show("Re-run refused: " + (ex.message || ex), "error");
   }
 }
 

@@ -3346,22 +3346,31 @@ def _pdk_for_run(design_dir: str, run_tag: Optional[str]) -> Tuple[Optional[str]
 
 
 def h_verify_rerun(handler: Any) -> None:
-    """Re-run a single signoff step against an existing run (Phase 2.A)."""
+    """Re-run a single signoff step of a finished run, as a NEW run resumed
+    from it (``reverify.plan_rerun``): the old run's flow, PDK, settings and
+    last saved state, plus the changes asked for as ``{setting: value}``. The
+    finished run is never written to. ``dry_run`` answers the plan only."""
     from ..controller import reverify
     from ..server.app import get_runner
-    body = getattr(handler, "_body", {})
-    step_id = (body.get("step_id") or "").strip()
-    overrides = dict(body.get("overrides") or {})
+    body = getattr(handler, "_body", {}) or {}
+    step_id = str(body.get("step_id") or "").strip()
+    sets = body.get("overrides") or {}
     run_tag = body.get("run_tag") or body.get("tag")
-    run_mode = "container" if body.get("run_mode") == "container" else "local"
     if not step_id:
         _respond(handler, "missing step_id", 400)
+        return
+    if not isinstance(sets, dict):
+        _respond(handler, "overrides must be an object of setting: value pairs", 400)
         return
     design_dir = _get_active_design_dir()
     if not design_dir:
         _respond(handler, "no active design dir", 400)
         return
-    v = reverify.validate(step_id, overrides)
+    gone = _design_refusal(None, design_dir)
+    if gone:
+        _respond(handler, gone, 409)
+        return
+    v = reverify.validate(step_id, sets)
     if not v.get("ok"):
         _respond(handler, v.get("error"), 400)
         return
@@ -3369,54 +3378,38 @@ def h_verify_rerun(handler: Any) -> None:
     if run_dir is None:
         _respond(handler, "no run to re-verify", 404)
         return
-    config_file = _config_file_for(design_dir)
-    if config_file is None:
-        _respond(handler, "no config file in design dir", 400)
-        return
-    r = get_runner()
-    if r.running:
-        _respond(handler, "already running", 400)
-        return
-    pdk, scl = _pdk_for_run(design_dir, run_dir.name)
-    pdk_root = os.environ.get("PDK_ROOT") or None
-    if pdk:
-        try:
-            pf = pdk_mod.check_pdk_ready(pdk, scl, run_mode)
-            pdk_root = pf.get("pdk_root") or pdk_root
-        except Exception:
-            pass
-    kwargs = reverify.reverify_kwargs(run_dir, step_id, overrides=overrides)
-    try:  # the re-run step gets threads sized to this PC too (its config/overrides win)
-        from ..controller import runresources
-        kwargs["config_overrides"] = {**runresources.plan(
-            design_dir=design_dir, config_files=[str(config_file)],
-            flow_factory=_flow_factory_or_none(body.get("flow") or "Classic"),
-            overrides=overrides, pdk=pdk)["overrides"], **kwargs["config_overrides"]}
-    except Exception:
-        _log.debug("thread sizing for the re-run failed", exc_info=True)
-    extra_config_files = []
     try:
-        from ..controller import custommacros
-        overlay = custommacros.write_overlay(design_dir)
-        if overlay:
-            extra_config_files.append(overlay)
-    except Exception:
-        _log.exception("custom-macro overlay failed (continuing without it)")
+        p = reverify.plan_rerun(design_dir, run_dir.name, step_id, sets)
+    except reverify.RerunError as ex:
+        _respond(handler, str(ex), 400)
+        return
+    if body.get("dry_run"):
+        _respond(handler, {"ok": True, "started": False, "plan": p})
+        return
+    if p.get("blocked"):
+        _respond(handler, p["blocked"], 409)
+        return
+    if get_runner().running:
+        _respond(handler, "A run is in progress. Re-run the step after it finishes.", 409)
+        return
+    overrides = dict(p["overrides"])
     try:
-        result = r.start(
-            flow_factory=_flow_factory(body.get("flow") or "Classic"),
-            config_files=[str(config_file)],
-            design_dir=design_dir,
-            pdk=pdk, scl=scl, pdk_root=pdk_root,
-            run_mode=run_mode, flow_name=body.get("flow") or "Classic",
-            extra_config_files=extra_config_files or None,
-            **kwargs,
-        )
-        result["run_tag"] = run_dir.name
-        _respond(handler, result)
-    except Exception as ex:
-        _log.exception("verify rerun failed")
-        _respond(handler, str(ex), 500)
+        from ..controller import customcells
+        overrides = _unmerge(overrides, customcells.build_overrides(design_dir) or {})
+    except Exception:
+        pass
+    run_body = {
+        "flow": p["parent"]["flow"], "run_mode": body.get("run_mode") or "container", "mode": "auto",
+        "tag": p["tag"], "overrides": dict(overrides, PDK=p["parent"]["pdk"], STD_CELL_LIBRARY=p["parent"]["scl"]),
+        "sources": p["sources"], "extras": p["extras"], "frm": step_id, "to": step_id,
+    }
+    data, st = _start_run(run_body, initial_state=str(Path(design_dir) / p["state"]), branched_from=p["branched_from"])
+    if st != 200 or not (isinstance(data, dict) and data.get("ok")):
+        msg = data if st != 200 else (data or {}).get("reason") or "the run didn't start"
+        _respond(handler, {"ok": False, "started": False, "error": str(msg), "plan": p}, st if st != 200 else 200)
+        return
+    _respond(handler, {"ok": True, "started": True, "tag": p["tag"], "run_tag": run_dir.name, "step_id": step_id,
+                       "plan": p, "command": data.get("command")})
 
 
 def _sweep_point_meta(design_dir: str, config_file: Path, flow_name: str, run_mode: str, tag: str,

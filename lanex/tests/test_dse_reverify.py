@@ -132,27 +132,71 @@ def test_reverify_validate_rejects_unknown_step():
         assert res["ok"] is False
 
 
-def test_reverify_argv_single_step(tmp_path):
-    run = tmp_path / "runs" / "RUN_X"
-    run.mkdir(parents=True)
-    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
-    argv = reverify.reverify_argv(
-        run, "OpenROAD.STAPostPNR",
-        overrides={"CLOCK_PERIOD": "8"},
-        config_file=tmp_path / "config.json", design_dir=tmp_path,
-        pdk="sky130A", scl="sky130_fd_sc_hd",
-    )
-    assert "--dockerized" in argv
-    assert "-F" in argv and "OpenROAD.STAPostPNR" in argv
-    assert "-T" in argv
-    assert "--run-tag" in argv and "RUN_X" in argv
-    assert "--overwrite" not in argv  # continue, don't wipe
-    # override threaded through.
-    assert any(a == "CLOCK_PERIOD=8" for a in argv)
+# --- Verify's "Re-run step": a new run resumed from the finished one ----------
+
+def _finished(tmp_path, *, overrides=None, cfg="DESIGN_NAME: spm\nCLOCK_PERIOD: 10\nFP_CORE_UTIL: 45\n", toolchain=None):
+    """A design with a finished Classic run "done" (every step saved its
+    state), made with *overrides* for that run only."""
+    import json
+    from lanex.controller import introspect
+    steps = [s["id"] for s in introspect.flow_steps("Classic")]
+    d = tmp_path / "proj"
+    (d / "runs" / "done").mkdir(parents=True)
+    (d / "config.yaml").write_text(cfg)
+    run = d / "runs" / "done"
+    log = []
+    for i, sid in enumerate(steps):
+        sd = run / f"{i + 1:02d}-{sid.lower().replace('.', '-')}"
+        sd.mkdir()
+        (sd / "state_in.json").write_text("{}")
+        (sd / "state_out.json").write_text(json.dumps({"metrics": {}}))
+        log.append(f"Running '{sid}' at 'runs/done/{sd.name}'…")
+    (run / "flow.log").write_text("\n".join(log) + "\n")
+    (run / "final").mkdir()
+    (run / "resolved.json").write_text(json.dumps({"DESIGN_NAME": "spm", "PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+                                                   "CLOCK_PERIOD": 10, "FP_CORE_UTIL": 45, "meta": {"flow": None}}))
+    gui = {"flow": "Classic", "pdk": "sky130A", "scl": "sky130_fd_sc_hd", "overrides": overrides or {}}
+    if toolchain:
+        gui["toolchain"] = toolchain
+    (run / "gui-run.json").write_text(json.dumps(gui))
+    return d, steps
 
 
-def test_reverify_kwargs():
-    kw = reverify.reverify_kwargs("/x/runs/TAG", "Magic.DRC", overrides={"RUN_MAGIC_DRC": "true"})
-    assert kw["tag"] == "TAG"
-    assert kw["frm"] == "Magic.DRC" and kw["to"] == "Magic.DRC"
-    assert kw["overwrite"] is False
+def test_rerun_is_a_new_run_on_the_old_runs_last_state(tmp_path):
+    pytest.importorskip("librelane")
+    d, steps = _finished(tmp_path, overrides={"PL_TARGET_DENSITY_PCT": "60"})
+    p = reverify.plan_rerun(d, "done", "Magic.DRC")
+    assert p["ok"] and p["tag"] != "done"
+    last = f"{len(steps):02d}-{steps[-1].lower().replace('.', '-')}"
+    assert p["state"] == "runs/done/" + last + "/state_out.json"
+    # The run's own settings ride along; the flow and PDK are the run's.
+    assert p["overrides"] == {"PL_TARGET_DENSITY_PCT": "60"}
+    assert p["parent"] == {"tag": "done", "flow": "Classic", "pdk": "sky130A", "scl": "sky130_fd_sc_hd"}
+    assert p["branched_from"]["step"] == "Magic.DRC" and p["branched_from"]["rerun"] is True
+
+
+def test_rerun_pins_what_the_config_changed_since_and_types_the_changes(tmp_path):
+    pytest.importorskip("librelane")
+    d, _steps = _finished(tmp_path)
+    (d / "config.yaml").write_text("DESIGN_NAME: spm\nCLOCK_PERIOD: 7\nFP_CORE_UTIL: 45\n")
+    # A list value stays one value (it used to be split on commas).
+    p = reverify.plan_rerun(d, "done", "OpenROAD.STAPostPNR", {"DIE_AREA": "0, 0, 100, 100", "CLOCK_PERIOD": "8"})
+    assert p["overrides"]["DIE_AREA"] == "0 0 100 100"
+    assert p["overrides"]["CLOCK_PERIOD"] == "8"
+    p2 = reverify.plan_rerun(d, "done", "OpenROAD.STAPostPNR")
+    assert p2["overrides"]["CLOCK_PERIOD"] == "10", "the run's own value, not the config's new 7"
+    assert [x["var"] for x in p2["pinned"]] == ["CLOCK_PERIOD"]
+    with pytest.raises(reverify.RerunError, match="takes a number"):
+        reverify.plan_rerun(d, "done", "OpenROAD.STAPostPNR", {"CLOCK_PERIOD": "fast"})
+    with pytest.raises(reverify.RerunError, match="isn't a step"):
+        reverify.plan_rerun(d, "done", "Not.AStep")
+
+
+def test_rerun_refuses_a_run_made_with_another_librelane(tmp_path, monkeypatch):
+    pytest.importorskip("librelane")
+    from lanex.controller import branch
+    d, _steps = _finished(tmp_path, toolchain={"librelane_version": "3.0.3", "run_mode": "local"})
+    monkeypatch.setattr(branch, "versions_now", lambda: {"librelane": "3.0.4", "image": None})
+    monkeypatch.setattr(branch, "_pdk_pin", lambda pdk: None)
+    p = reverify.plan_rerun(d, "done", "Magic.DRC")
+    assert not p["ok"] and "LibreLane 3.0.3 then, 3.0.4 now" in p["blocked"]
