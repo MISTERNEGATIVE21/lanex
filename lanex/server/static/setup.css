@@ -748,6 +748,9 @@ body:not(.theme-light) .pf-node.is-ok .pf-state { color: var(--met3); }
 .oneoff-chip:hover { border-color: var(--accent); }
 .reports-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 14px; }
 .preset-row .lbl { font-size: 14px; color: var(--text-muted); }
+/* "Which settings to show" sits at the end of the filter row, its own width
+   (selects are full width by default, which put it on a line of its own). */
+.preset-row #var-show { width: auto; flex: none; }
 
 /* ------------------------------------------------------------ New project */
 .wiz-tpl-blank {
