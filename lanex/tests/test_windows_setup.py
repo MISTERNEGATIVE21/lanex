@@ -246,6 +246,51 @@ def test_foreign_name_collision_gets_distinct_owned_name_and_exact_binding(tmp_p
     assert bound["registryId"] == "{OWNED}"
 
 
+def _bound_appliance(tmp_path: Path):
+    state, _, _, _ = _initialize(tmp_path)
+    base = tmp_path / "appliance"
+    empty = tmp_path / "empty-registry.json"
+    empty.write_text("[]", encoding="utf-8")
+    _run_setup("-Action", "ResolveAppliance", "-StatePath", state, "-PreferredDistroName", "lanex",
+               "-ExpectedBasePath", base, "-RegistrySnapshotPath", empty, "-TestOwnerSid", OWNER)
+    owned = tmp_path / "owned-registry.json"
+    owned.write_text(json.dumps([{"registryId": "{OWNED}", "name": "lanex", "basePath": str(base)}]),
+                     encoding="utf-8")
+    _run_setup("-Action", "BindAppliance", "-StatePath", state,
+               "-RegistrySnapshotPath", owned, "-TestOwnerSid", OWNER)
+    _run_setup("-Action", "SetComponent", "-StatePath", state, "-Component", "app",
+               "-ComponentStatus", "complete", "-InputFingerprint", "app-1", "-TestOwnerSid", OWNER)
+    return state, base
+
+
+def test_repair_recreates_an_environment_unregistered_behind_setups_back(tmp_path: Path) -> None:
+    # The launcher's "environment is missing" case: Repair must be able to put
+    # it back under the recorded name and folder when nothing else holds them.
+    state, base = _bound_appliance(tmp_path)
+    gone = tmp_path / "gone-registry.json"
+    gone.write_text(json.dumps([{"registryId": "{USER}", "name": "Ubuntu",
+                                 "basePath": str(tmp_path / "ubuntu")}]), encoding="utf-8")
+    appliance = _run_setup("-Action", "ResolveAppliance", "-StatePath", state,
+                           "-PreferredDistroName", "lanex", "-ExpectedBasePath", base,
+                           "-RegistrySnapshotPath", gone, "-TestOwnerSid", OWNER)
+    assert appliance["name"] == "lanex" and appliance["registryId"] == ""
+    saved = json.loads(state.read_text())
+    assert saved["phase"] == "appliance-missing" and saved["components"] == {}
+
+
+def test_recorded_name_taken_by_another_distro_is_refused_untouched(tmp_path: Path) -> None:
+    state, base = _bound_appliance(tmp_path)
+    before = state.read_text()
+    taken = tmp_path / "taken-registry.json"
+    taken.write_text(json.dumps([{"registryId": "{SOMEONE}", "name": "lanex",
+                                  "basePath": str(tmp_path / "theirs")}]), encoding="utf-8")
+    failed = _run_setup("-Action", "ResolveAppliance", "-StatePath", state,
+                        "-PreferredDistroName", "lanex", "-ExpectedBasePath", base,
+                        "-RegistrySnapshotPath", taken, "-TestOwnerSid", OWNER, ok=False)
+    assert "no longer matches Windows" in failed.stderr
+    assert state.read_text() == before
+
+
 def test_wrong_owner_and_newer_schema_are_rejected(tmp_path: Path) -> None:
     state, _, _, _ = _initialize(tmp_path)
     wrong = _run_setup("-Action", "ReadState", "-StatePath", state,

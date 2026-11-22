@@ -1436,6 +1436,25 @@ function Resolve-Appliance {
             (Normalize-Path ([string]$_.basePath)) -eq (Normalize-Path ([string]$state.appliance.basePath))
         })
         if ($owned.Count -eq 1) { return $state.appliance }
+        # The recorded distro is gone from Windows' list (unregistered behind
+        # Setup's back): Repair creates it again under the same name and
+        # folder, but only when nothing else now holds either. A registration
+        # that changed in any other way is still refused untouched. wsl
+        # --import itself refuses a folder that still has a disk in it.
+        $sameName = @($entries | Where-Object {
+            [string]::Equals([string]$_.name, [string]$state.appliance.name, [StringComparison]::OrdinalIgnoreCase) })
+        $samePath = @($entries | Where-Object {
+            (Normalize-Path ([string]$_.basePath)) -eq (Normalize-Path ([string]$state.appliance.basePath)) })
+        $sameId = @($entries | Where-Object { [string]$_.registryId -eq [string]$state.appliance.registryId })
+        if ($sameName.Count -eq 0 -and $samePath.Count -eq 0 -and $sameId.Count -eq 0) {
+            $state.appliance.registryId = ''
+            # Nothing of the old environment survives an unregister, so no
+            # component counts as installed any more.
+            $state.components = [pscustomobject][ordered]@{}
+            $state.phase = 'appliance-missing'
+            Write-AtomicJson $StatePath $state
+            return $state.appliance
+        }
         throw 'The recorded appliance registration identity no longer matches Windows.'
     }
     $atExpected = @($entries | Where-Object { (Normalize-Path ([string]$_.basePath)) -eq $canonExpected })
