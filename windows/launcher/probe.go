@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -130,6 +131,34 @@ var serverRecordPath = func() string {
 // to nothing, and a stale one (hard kill, no clean shutdown) is caught by the
 // health check the caller runs on the value.
 func serverJSONPort() (int, bool) {
+	rec, ok := readServerRecord()
+	return rec.port, ok
+}
+
+// serverRecord is what serverJSONPort validated: the port, and the LanEx key
+// the window must open with (server/auth.py). An older appliance writes no key;
+// the window then opens on the bare address, as before.
+type serverRecord struct {
+	port int
+	key  string
+}
+
+// keyPattern is the shape of a key cli.py writes (secrets.token_urlsafe). A
+// key that does not match is ignored rather than pasted into a command line.
+var keyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,128}$`)
+
+// appURL is the address the app window opens: the cockpit, with the key when
+// the record for *port* carries one. The server swaps the key for a cookie and
+// redirects to the bare address, so it does not stay in the window.
+func appURL(port int) string {
+	base := fmt.Sprintf("http://127.0.0.1:%d/", port)
+	if rec, ok := readServerRecord(); ok && rec.port == port && keyPattern.MatchString(rec.key) {
+		return base + "?lanex_key=" + rec.key
+	}
+	return base
+}
+
+func readServerRecord() (serverRecord, bool) {
 	type readRes struct {
 		data []byte
 		err  error
@@ -144,14 +173,15 @@ func serverJSONPort() (int, bool) {
 	select {
 	case res := <-ch:
 		if res.err != nil {
-			return 0, false
+			return serverRecord{}, false
 		}
 		raw = res.data
 	case <-time.After(2 * time.Second):
-		return 0, false
+		return serverRecord{}, false
 	}
 	var rec struct {
 		Port       int    `json:"port"`
+		Key        string `json:"key"`
 		InstanceID string `json:"instanceId"`
 		Source     struct {
 			SHA          string `json:"sha"`
@@ -159,15 +189,15 @@ func serverJSONPort() (int, bool) {
 		} `json:"source"`
 	}
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return 0, false
+		return serverRecord{}, false
 	}
 	if rec.Port <= 0 || rec.Port > 65535 ||
 		!strings.EqualFold(rec.InstanceID, activeConfig.InstallID) ||
 		!strings.EqualFold(rec.Source.SHA, activeConfig.SourceSHA) ||
 		!strings.EqualFold(rec.Source.ManifestHash, activeConfig.Manifest) {
-		return 0, false
+		return serverRecord{}, false
 	}
-	return rec.Port, true
+	return serverRecord{port: rec.Port, key: rec.Key}, true
 }
 
 // waitForHealth polls until the server answers, the deadline passes, or *done*
