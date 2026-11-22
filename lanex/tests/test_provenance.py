@@ -278,7 +278,7 @@ def test_frontend_trail_and_view_config_wiring() -> None:
     assert "ov-view-config" in cfg
     assert 'kind: "input", key: ""' in cfg
     assert "Open resolved.json at line" in cfg  # trail states the exact line
-    assert "nothing is inserted into your file" in cfg  # honest not-set case
+    assert "The one-off setting goes on the command line" in cfg  # honest not-set case
     fv = (static / "modules" / "fileview.js").read_text()
     # The regression this locks: scrollIntoView scrolls the DIALOG too, making
     # the toolbar unreachable on long files — the pane must scroll itself.
@@ -396,14 +396,16 @@ def test_route_input_map(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_frontend_config_tier_wiring() -> None:
-    """The form's 'your config' tier exists in the served static files and
-    keeps its honesty properties: bulk fetch, scoped labelling, no chip
-    without a map entry."""
+    """The form's 'your config' tier exists in the served static files: one
+    bulk fetch of the values the config gives the picked PDK (the server
+    resolves pdk::/scl:: sections with LibreLane's rule, configedit.
+    effective_entry), each scoped value labelled with its section, and no
+    chip for a variable the file doesn't set."""
     static = Path(__file__).resolve().parents[1] / "server" / "static"
     cfg = (static / "modules" / "config.js").read_text()
-    assert "annotateConfigLines" in cfg
-    assert '"input-map"' in cfg
+    assert "api.designInfo({ effective: true" in cfg
     assert "vconfig-scoped" in cfg
+    assert 'r.src.hidden = base.from !== "config"' in cfg
     prov_js = (static / "modules" / "provenance.js").read_text()
     assert "applies only when the run's PDK/SCL matches" in prov_js
     assert "configChipSpec" in prov_js

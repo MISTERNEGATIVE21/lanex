@@ -70,6 +70,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_introspect": "Step/metric/variable introspection matches librelane, so the UI offers real options only.",
     "test_scaffold": "Generated example/config scaffolding is valid and launches.",
     "test_configedit": "LanEx edits a design's config key by key: comments, pdk::/scl:: sections and line endings survive, and any edit that would change anything else is refused with the file untouched.",
+    "test_config_model": "A Setup edit of a value a pdk::/scl:: section sets lands where it takes effect (the SPM clock edit changes the next run), source globs survive and an empty list is refused, new projects get a valid top module and a free folder, and one-click fixes are saved to the config by default.",
     "test_projectfiles": "New project files (modules, testbenches, SDC, pin order) are valid for LibreLane (pin files pass its own parser, every port matched once) and point the config at themselves.",
     "test_project_shell": "Projects land in a space-free folder, Windows paths are accepted, and only LanEx's own project folders can be deleted.",
     "test_server": "HTTP routing, CSRF, and traversal confinement hold (no arbitrary file read).",

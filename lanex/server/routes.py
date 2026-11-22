@@ -3117,7 +3117,10 @@ def h_project_new(handler: Any) -> None:
     try:
         cp = float(clock_period) if clock_period not in (None, "") else None
     except (TypeError, ValueError):
-        cp = None
+        cp = float("nan")
+    if cp is not None and not (cp > 0 and cp != float("inf")):
+        _respond(handler, "The clock period is a positive number of nanoseconds, such as 10 (100 MHz).", 400)
+        return
     try:
         language = "systemverilog" if body.get("language") == "systemverilog" else "verilog"
         result = scaffold.create_project(dest, template, top=top or template, pdk=pdk, scl=scl, clock_period=cp,
@@ -3705,6 +3708,22 @@ def h_file_delete(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error"), 400)
         return
+    # The config follows: a deleted design file leaves an explicit
+    # VERILOG_FILES list (a glob stops matching it by itself).
+    from ..controller import configedit
+    from ..server.app import get_runner
+    try:
+        if get_runner().running:
+            raise configedit.ConfigEditError("A run is in progress, so the config wasn't changed. "
+                                             "Untick the file in Sources after it finishes.")
+        cfg = configedit.follow_delete(design_dir, str(Path(design_dir) / rel))
+        result["config"] = {"name": cfg.get("name"), "changed": cfg.get("changed") or [],
+                            "last": bool(cfg.get("last"))}
+    except configedit.ConfigEditError as ex:
+        result["config_error"] = str(ex)
+    except Exception as ex:  # the delete stands; say the config wasn't followed
+        _log.exception("config follow-delete failed")
+        result["config_error"] = str(ex)
     _respond(handler, result)
 
 
@@ -4444,6 +4463,16 @@ def h_design_info(handler: Any) -> None:
                 "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
             })
             return
+        if body.get("effective"):
+            # Every variable the file sets, as it applies to this PDK and
+            # library (the most specific pdk::/scl:: section wins), with
+            # where it comes from: All settings shows these as the values a
+            # run gets, never LibreLane's default in their place.
+            _respond(handler, {
+                "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
+                "effective": configedit.effective_values(data, pdk, scl),
+            })
+            return
         scan = autoconfig.scan_sources(d, only_files=files or None)
         modules = [m for m in scan.get("modules", []) if m not in set(scan.get("testbench_modules", []))]
         top = body.get("top") or data.get("DESIGN_NAME") or scan.get("top")
@@ -4479,16 +4508,34 @@ def h_config_set(handler: Any) -> None:
     body = getattr(handler, "_body", {}) or {}
     sets = body.get("set") or {}
     removes = body.get("remove") or []
+    # scope: the pdk::/scl:: section to change (["pdk::sky130*"], nested
+    # sections as a trail); all_pdks: the top level, taken out of every
+    # section that sets the same keys, so every PDK builds with it.
+    scope = body.get("scope") or None
+    all_pdks = bool(body.get("all_pdks"))
     if not isinstance(sets, dict) or not isinstance(removes, list):
         _respond(handler, "set must be an object and remove a list", 400)
         return
+    if scope is not None and (not isinstance(scope, list) or not all(isinstance(s, str) for s in scope)):
+        _respond(handler, "scope must be a list of section names", 400)
+        return
+    pdk, scl = body.get("pdk") or None, body.get("scl") or None
     try:
-        res = configedit.set_keys(d, sets, removes)
+        res = configedit.set_keys(d, sets, removes, scope=scope, unscope=all_pdks,
+                                  dry_run=bool(body.get("dry_run")))
     except configedit.ConfigEditError as ex:
         _respond(handler, str(ex), 400)
         return
+    # Where each key's value comes from now, for this PDK: the caller can
+    # say so ("saved, and the pdk::sky130* section still wins") without a
+    # second read.
+    try:
+        new = configedit._load(Path(res["path"]), res["text"])
+        res["effective"] = {k: configedit.effective_entry(new, k, pdk, scl) for k in list(sets) + list(removes)}
+    except Exception:
+        res["effective"] = {}
     res.pop("text", None)
-    res["scoped"] = _scoped_report(res["scoped"], body.get("pdk") or None, body.get("scl") or None)
+    res["scoped"] = _scoped_report(res["scoped"], pdk, scl)
     _respond(handler, res)
 
 
@@ -4504,7 +4551,9 @@ def h_config_sources(handler: Any) -> None:
         _respond(handler, "files must be a list of paths", 400)
         return
     try:
-        res = configedit.set_sources(d, files)
+        # dry_run: what the change would write (and which glob it would have
+        # to write out file by file), for the Sources card to ask first.
+        res = configedit.set_sources(d, files, dry_run=bool(body.get("dry_run")))
     except configedit.ConfigEditError as ex:
         _respond(handler, str(ex), 400)
         return

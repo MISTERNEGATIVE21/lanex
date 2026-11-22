@@ -420,10 +420,13 @@ def plan(design_dir: str | Path, tag: str, sets: Optional[Dict[str, Any]] = None
         vi = known.get(var)
         to = coerce(raw, dict(vi or {}, name=var))
         o = origin(var, info, cfg, vi, cfg_name)
-        # A run that had its own overrides (-c, a sweep point) saves its fix
-        # the same way by default; saving to the config stays one click away.
-        where = save if save in ("config", "run") else (
-            "run" if o["layer"] == "run" or had_run_overrides(info) else "config")
+        # The fix goes into the config file by default (with its diff and
+        # Undo), so the next plain Run keeps it. Only a value that the old run
+        # set for itself (-c, a sweep point) stays "this run only" by default;
+        # other one-off settings of that run no longer pull the fix along
+        # (they made every fix vanish on the next Run). Either way stays one
+        # click away.
+        where = save if save in ("config", "run") else ("run" if o["layer"] == "run" else "config")
         if where == "config" and not cfg_info.get("editable"):
             where = "run"
         entry = config_entry(cfg, var, info["pdk"], info["scl"]) if where == "config" else None

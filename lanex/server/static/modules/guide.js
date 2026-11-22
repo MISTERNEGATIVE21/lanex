@@ -583,7 +583,7 @@ export async function startTour() {
   const sys = stops.find((s) => s.id === "system");
   if (sys) {
     sys.body += document.querySelector('.side-tab[data-tab="manual"]')
-      ? " Manual runs LibreLane commands yourself and shows the exact command line."
+      ? " The Console runs LibreLane commands yourself and shows the exact command line."
       : " The Console (Ctrl+`) runs LibreLane commands yourself and shows the exact command line.";
   }
   const show = async () => {

@@ -23,11 +23,41 @@ export const state = {
   status: { running: false, paused: false, cancelled: false, tag: null },
   mode: "auto",
   runMode: "container",   // "container" (librelane --dockerized) | "local" (native tools)
-  varsValues: {},
   metrics: {},
   installJobs: {},
   runProgress: { done: 0, total: 0, current: "" },
 };
+
+// state.varsValues: the one-off settings (All settings) the next run sends as
+// -c overrides. Every change to it, from any module (a key set or deleted, or
+// the whole object replaced), fires one "g:overrides_changed" per tick, so the
+// chip next to Run and the All settings form can never miss one: no setting
+// may reach a run without being visible there (config.js).
+const _watched = new WeakSet();
+let _ovQueued = false;
+function _ovChanged() {
+  if (_ovQueued) return;
+  _ovQueued = true;
+  queueMicrotask(() => {
+    _ovQueued = false;
+    if (typeof document !== "undefined") document.dispatchEvent(new CustomEvent("g:overrides_changed"));
+  });
+}
+function _watch(obj) {
+  if (obj && _watched.has(obj)) return obj;
+  const p = new Proxy(obj && typeof obj === "object" ? obj : {}, {
+    set(t, k, v) { const was = t[k]; t[k] = v; if (was !== v) _ovChanged(); return true; },
+    deleteProperty(t, k) { if (k in t) { delete t[k]; _ovChanged(); } return true; },
+  });
+  _watched.add(p);
+  return p;
+}
+let _varsValues = _watch({});
+Object.defineProperty(state, "varsValues", {
+  enumerable: true,
+  get: () => _varsValues,
+  set: (v) => { _varsValues = _watch(v); _ovChanged(); },
+});
 
 export function setState(patch) {
   Object.assign(state, patch);

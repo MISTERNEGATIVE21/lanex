@@ -50,6 +50,7 @@ export async function openWizard({ template = "" } = {}) {
   // folder picker above it closes first.
   openLayer(ov, { kind: "dialog", labelledBy: "wiz-title", onClose: () => { ov.hidden = true; }, focus: false });
   _parent = "";
+  _taken = new Set();
   const body = ov.querySelector("#wiz-body");
   body.innerHTML = steps(1) + "<p class='muted'>Loading templates…</p>";
   try {
@@ -160,6 +161,58 @@ function mhz(ns) {
   return (f >= 100 ? f.toFixed(0) : f.toFixed(1).replace(/\.0$/, "")) + " MHz";
 }
 
+// Verilog and SystemVerilog words a module can't be called (scaffold.py keeps
+// the same list).
+const RESERVED = new Set(("always and assign begin buf case casex casez default else end endcase endfunction endmodule " +
+  "endtask for forever function if initial inout input integer localparam module nand negedge nor not or output " +
+  "parameter posedge real reg repeat signed task time tri while wire xor xnor logic bit byte int always_ff " +
+  "always_comb always_latch interface package class enum struct typedef string").split(" "));
+
+// A top name as a valid Verilog module name, exactly as the server makes it
+// (scaffold.verilog_identifier): "my chip" -> my_chip, "1top" -> top_1top.
+export function verilogIdentifier(name, fallback = "top") {
+  let s = String(name || "").trim().replace(/[^A-Za-z0-9_]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+  if (!s) return fallback;
+  if (/^\d/.test(s)) s = "top_" + s;
+  if (RESERVED.has(s.toLowerCase())) s += "_top";
+  return s;
+}
+
+// The first free folder name: `name`, else name-2, name-3… (`taken`: the
+// names already in the parent folder). Running the guide twice makes
+// blinky-2 instead of failing on a folder that isn't empty.
+export function freeName(name, taken) {
+  const t = new Set([...(taken || [])].map((x) => String(x).toLowerCase()));
+  if (!t.has(String(name).toLowerCase())) return name;
+  let n = 2;
+  while (t.has((name + "-" + n).toLowerCase())) n++;
+  return name + "-" + n;
+}
+
+// Why a new project's settings can't build, in plain words, or "".
+export function createProblem({ dest, clock, hasClock, pdk, pdks }) {
+  if (/\s/.test(dest || "")) {
+    return "The folder path has a space in it (" + dest + "). LibreLane splits paths on spaces, so every run from there " +
+      "would fail. Pick a folder without spaces with Change….";
+  }
+  if (hasClock && !(clock > 0)) return "The clock period is a positive number of nanoseconds, such as 10 (100 MHz).";
+  const p = (pdks || []).find((x) => x.name === pdk);
+  if (!pdk || !p) return "No PDK is installed yet. Install one in Tools first: a run needs it.";
+  if (p.ready === false) return pdk + " isn't installed: its folder has no standard-cell libraries. Install it in Tools, or pick another PDK.";
+  return "";
+}
+
+let _taken = new Set();   // folder names in the parent folder
+async function readTaken(dir) {
+  try {
+    const r = await api.fsList(dir);
+    _taken = new Set(((r && r.entries) || []).filter((e) => e.is_dir).map((e) => e.name));
+  } catch (_e) {
+    _taken = new Set();
+  }
+  return _taken;
+}
+
 function renderStep2(body, tpl) {
   const pdkOpts = (state.pdks || []).map((p) =>
     "<option value='" + fmt.escape(p.name) + "'>" + fmt.escape(p.name) + (p.ready === false ? " (not installed)" : "") + "</option>").join("");
@@ -222,14 +275,32 @@ function renderStep2(body, tpl) {
 
   const paintWhere = () => {
     const name = $("wiz-name").value.trim() || defaultName(tpl);
-    const where = shown(joinPath(projectsDir(), name));
+    const dest = joinPath(projectsDir(), name);
+    const where = shown(dest);
     $("wiz-where").textContent = $("wiz-where").title = where;
-    $("wiz-where-help").textContent = _parent ? "A new folder is created inside the folder you chose."
+    const help = $("wiz-where-help");
+    const spaced = /\s/.test(dest);
+    help.classList.toggle("wiz-warn", spaced || _taken.has(name));
+    help.textContent = spaced ? "This path has a space in it, and LibreLane can't run a design from such a folder. Pick another with Change…."
+      : _taken.has(name) ? "There's already a folder named " + name + " here. Pick another name, such as " + freeName(name, _taken) + "."
+      : _parent ? "A new folder is created inside the folder you chose."
       : where.startsWith("\\\\wsl") ? (_defaults && _defaults.linux_home_reason === "space"
         ? "Inside the LanEx environment, as your Windows user name has a space."
         : "Inside the LanEx environment, as LanEx couldn't find your Windows user folder.")
       : _defaults && _defaults.wsl ? "Your LanEx projects folder, next to your other Windows files." : "Your LanEx projects folder.";
   };
+  // The names already taken there: the suggested name is a free one, so a
+  // second run of the guide makes blinky-2 rather than failing.
+  let nameTyped = false;
+  const readParent = () => readTaken(projectsDir()).then(() => {
+    if (!body.isConnected || !$("wiz-name")) return;
+    if (!nameTyped) {
+      const el = $("wiz-name");
+      el.value = freeName(defaultName(tpl), _taken);
+      if (document.activeElement === el) el.select();
+    }
+    paintWhere();
+  });
   const paintClk = () => {
     if (!$("wiz-clk")) return;
     const f = mhz($("wiz-clk").value);
@@ -238,9 +309,17 @@ function renderStep2(body, tpl) {
   const paintTop = () => {
     const h = $("wiz-top-help");
     if (!h) return;
-    const n = ($("wiz-top").value.trim() || tpl.top) + ($("wiz-lang").value === "systemverilog" ? ".sv" : ".v");
+    const typed = $("wiz-top").value.trim();
+    const ident = verilogIdentifier(typed || tpl.top, tpl.top);
+    const n = ident + ($("wiz-lang").value === "systemverilog" ? ".sv" : ".v");
     const sv = $("wiz-lang").value === "systemverilog";
-    h.innerHTML = "Your top-level module. LanEx starts <code>src/" + fmt.escape(n) + "</code> with a small module of that name. " +
+    // A name Verilog can't use is made into one, and said, before anything
+    // is created.
+    const fixed = typed && ident !== typed;
+    h.classList.toggle("wiz-warn", !!fixed);
+    h.innerHTML = (fixed ? "A module name is letters, digits and _, not starting with a digit, so it will be <code>" +
+        fmt.escape(ident) + "</code>. " : "Your top-level module. ") +
+      "LanEx starts <code>src/" + fmt.escape(n) + "</code> with a small module of that name. " +
       (sv ? "SystemVerilog is for code that uses <code>logic</code>, <code>always_ff</code> and the like; the open flow supports its common subset."
         : "Verilog is the open flow's native language: LibreLane's examples and Tiny Tapeout designs use it.");
   };
@@ -252,12 +331,13 @@ function renderStep2(body, tpl) {
   paintWhere();
   paintClk();
   paintScl();
-  $("wiz-name").addEventListener("input", () => { $("wiz-err").textContent = ""; paintWhere(); });
+  readParent();
+  $("wiz-name").addEventListener("input", () => { nameTyped = true; $("wiz-err").textContent = ""; paintWhere(); });
   $("wiz-clk")?.addEventListener("input", () => { clkTyped = true; paintClk(); });
   $("wiz-change").addEventListener("click", async () => {
     const { pickFolder } = await import("./fs.js");
     const dir = await pickFolder({ title: "Where should the project folder go?", use: "Put it here", seed: projectsDir() });
-    if (dir) { _parent = dir; paintWhere(); }
+    if (dir) { _parent = dir; paintWhere(); readParent(); }
   });
   $("wiz-back").addEventListener("click", () => renderStep1(body));
   $("wiz-create").addEventListener("click", () => doCreate(body, tpl));
@@ -290,12 +370,38 @@ async function doCreate(body, tpl) {
     return;
   }
   const dest = joinPath(projectsDir(), name);
-  const top = ($("wiz-top") ? $("wiz-top").value.trim() : "") || tpl.top;
+  // The server makes the same valid Verilog name (scaffold.verilog_identifier).
+  const top = verilogIdentifier(($("wiz-top") ? $("wiz-top").value.trim() : "") || tpl.top, tpl.top);
   const pdk = $("wiz-pdk").value || "";
   const scl = $("wiz-scl").value || "";
-  const clk = $("wiz-clk") ? parseFloat($("wiz-clk").value) : NaN;
+  const clkRaw = $("wiz-clk") ? $("wiz-clk").value.trim() : "";
+  const clk = clkRaw === "" ? NaN : Number(clkRaw);
   const sv = $("wiz-lang") && $("wiz-lang").value === "systemverilog";
   const withTb = !!($("wiz-tb") && $("wiz-tb").checked);
+  // Settings that can't build are refused here, in plain words, before any
+  // folder is made.
+  const problem = createProblem({ dest, clock: clk, hasClock: !!$("wiz-clk"), pdk, pdks: state.pdks });
+  if (problem) {
+    err.textContent = problem;
+    if (/Tools/.test(problem)) {
+      const b = document.createElement("button");
+      b.className = "btn btn-sm btn-ghost";
+      b.textContent = "Open Tools";
+      b.addEventListener("click", () => { close(); import("./nav.js").then((m) => m.go("tools")); });
+      err.append(" ", b);
+    }
+    (/clock/.test(problem) ? $("wiz-clk") : /space/.test(problem) ? $("wiz-change") : $("wiz-pdk"))?.focus();
+    return;
+  }
+  if (_taken.has(name)) {
+    const free = freeName(name, _taken);
+    $("wiz-name").value = free;
+    $("wiz-name").dispatchEvent(new Event("input"));   // repaints the location line
+    err.textContent = "There's already a folder named " + name + " there, so the name is now " + free + ". Press Create again, or change it.";
+    $("wiz-name").focus();
+    $("wiz-name").select();
+    return;
+  }
   const btn = $("wiz-create");
   btn.disabled = true; btn.textContent = "Creating…";
   try {

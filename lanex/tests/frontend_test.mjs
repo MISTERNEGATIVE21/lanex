@@ -2196,6 +2196,143 @@ await checkAsync("setup: the server's refusals read in plain words", async () =>
   assert.equal(SU2.refusalText(ws), ws, "a plain refusal is kept as the server wrote it");
 });
 
+// ------------------------------------------------ one settings model (audit 3.2 G13, 4.2, 4.3)
+{
+  const CF = await import(toUrl(resolve(MOD, "config.js")));
+  const CS = await import(toUrl(resolve(MOD, "configscope.js")));
+  const ST = await import(toUrl(resolve(MOD, "state.js")));
+  const FSM = await import(toUrl(resolve(MOD, "fs.js")));
+  const JN = await import(toUrl(resolve(MOD, "jumpnav.js")));
+  const SU3 = await import(toUrl(resolve(MOD, "setup.js")));
+  check("all settings: values are checked by the variable's kind before a run gets them", () => {
+    const num = { name: "FP_CORE_UTIL", kind: "number", units: "%" };
+    assert.deepEqual(CF.parseValue(num, " 45 "), { value: "45" });
+    assert.match(CF.parseValue(num, "abc").error, /takes a number \(%\)/);
+    assert.deepEqual(CF.parseValue(num, ""), { empty: true });
+    assert.match(CF.parseValue({ name: "N", kind: "int" }, "2.5").error, /whole number/);
+    assert.deepEqual(CF.parseValue({ name: "DIE_AREA", kind: "numbers" }, "[0, 0, 200, 200]"), { value: "0 0 200 200" });
+    assert.match(CF.parseValue({ name: "DIE_AREA", kind: "numbers" }, "0 0 x 1").error, /numbers/);
+    assert.deepEqual(CF.parseValue({ name: "B", kind: "bool" }, "true"), { value: true });
+    assert.deepEqual(CF.parseValue({ name: "L", kind: "list" }, "A=1, B"), { value: "A=1 B" });
+    assert.match(CF.parseValue({ name: "C", kind: "choice", choices: ["none", "in"] }, "out").error, /one of none, in/);
+    assert.match(CF.parseValue({ name: "D", kind: "dict" }, "{x").error, /JSON object/);
+  });
+  check("all settings: the value the run gets anyway is not a one-off setting", () => {
+    const num = { name: "FP_CORE_UTIL", kind: "number" };
+    assert.equal(CF.sameValue(num, "45", "45"), true);
+    assert.equal(CF.sameValue(num, "45.0", "45"), true, "the config's 45 vs a typed 45.0");
+    assert.equal(CF.sameValue(num, "50", "45"), false, "LibreLane's default 50 over the config's 45 is a change");
+    assert.equal(CF.sameValue({ name: "D", kind: "numbers" }, "0 0 150 150", "0 0 150 150"), true);
+    assert.equal(CF.sameValue({ name: "L", kind: "list" }, "a b", "a, b"), true);
+    assert.equal(CF.sameValue(num, "45", ""), false, "no base value: any value is a change");
+    assert.equal(CF.shownValue([0, 0, 150, 150]), "0 0 150 150");
+    assert.equal(CF.shownValue(["dir::src/*.v", "dir::x.v"]), "dir::src/*.v, dir::x.v");
+  });
+  check("one-off settings: PDK picks are not counted; each project keeps its own (G13)", () => {
+    assert.deepEqual(CF.oneOffSettings({ PDK: "sky130A", STD_CELL_LIBRARY: "x", A: "1", B: "", C: false }), { A: "1", C: false });
+    assert.equal(CF.oneOffLabel(1), "1 one-off setting");
+    assert.equal(CF.oneOffLabel(2), "2 one-off settings");
+    CF.switchOverridesTo("/p/a");
+    ST.state.varsValues.CLOCK_PERIOD = "12";
+    CF.switchOverridesTo("/p/b");
+    assert.deepEqual({ ...ST.state.varsValues }, {}, "project b starts without a's one-off settings");
+    ST.state.varsValues.FP_CORE_UTIL = "40";
+    CF.switchOverridesTo("/p/a");
+    assert.deepEqual({ ...ST.state.varsValues }, { CLOCK_PERIOD: "12" }, "a's come back with a");
+    CF.switchOverridesTo("/p/b");
+    assert.deepEqual({ ...ST.state.varsValues }, { FP_CORE_UTIL: "40" });
+    CF.switchOverridesTo(null);
+    assert.deepEqual({ ...ST.state.varsValues }, {});
+  });
+  check("one-off settings: a replaced or edited set is still the watched one", () => {
+    ST.state.varsValues = { X: "1" };
+    ST.state.varsValues.Y = "2";
+    delete ST.state.varsValues.X;
+    assert.deepEqual(Object.entries(ST.state.varsValues), [["Y", "2"]]);
+    assert.equal(JSON.stringify(ST.state.varsValues), "{\"Y\":\"2\"}");
+    ST.setState({ varsValues: {} });
+    assert.deepEqual({ ...ST.state.varsValues }, {});
+  });
+  check("config scope: an edit goes to the section that wins for this PDK", () => {
+    const entries = [
+      { scope: "pdk::sky130*", pdk: "sky130*", scl: null, value: 10, applies: true },
+      { scope: "pdk::sky130* / scl::sky130_fd_sc_hs", pdk: "sky130*", scl: "sky130_fd_sc_hs", value: 8, applies: false },
+      { scope: "pdk::gf180mcu*", pdk: "gf180mcu*", scl: null, value: 24, applies: false },
+    ];
+    assert.equal(CS.applyingEntry(entries).scope, "pdk::sky130*");
+    assert.equal(CS.applyingEntry([{ ...entries[0] }, { ...entries[1], applies: true }]).value, 8, "the deeper section wins");
+    assert.equal(CS.applyingEntry([{ ...entries[0], applies: null }]), null, "unknown is not applying");
+    assert.equal(CS.sectionWho(entries[1]), "sky130* with sky130_fd_sc_hs");
+    ST.state.selectedPdk = "sky130A"; ST.state.selectedScl = "sky130_fd_sc_hd";
+    assert.deepEqual(CS.scopeExtra(entries[0], "scope"), { pdk: "sky130A", scl: "sky130_fd_sc_hd", scope: ["pdk::sky130*"] });
+    assert.deepEqual(CS.scopeExtra(entries[0], "all"), { pdk: "sky130A", scl: "sky130_fd_sc_hd", all_pdks: true });
+    assert.deepEqual(CS.scopeExtra(null, null), { pdk: "sky130A", scl: "sky130_fd_sc_hd" });
+  });
+  check("setup: a PDK pick is saved even for a config that names none (it snapped back to sky130A)", () => {
+    const none = { pdk: "", scl: "", name: "config.yaml", editable: true };
+    assert.deepEqual(SU3.targetSets(none, "gf180mcuD", "gf180mcu_fd_sc_mcu7t5v0"), { PDK: "gf180mcuD", STD_CELL_LIBRARY: "gf180mcu_fd_sc_mcu7t5v0" });
+    assert.deepEqual(SU3.targetSets(none, "sky130A", "sky130_fd_sc_hd"), {}, "LibreLane's own default needs no line");
+    assert.deepEqual(SU3.targetSets(none, "sky130A", "sky130_fd_sc_hs"), { STD_CELL_LIBRARY: "sky130_fd_sc_hs" });
+    assert.deepEqual(SU3.targetSets({ pdk: "sky130A", scl: "sky130_fd_sc_hd" }, "sky130B", "sky130_fd_sc_hd"), { PDK: "sky130B" });
+  });
+  check("sources: the count line agrees in number", () => {
+    assert.equal(FSM.designCountText(1, 1), "1 of 1 design file goes into the chip");
+    assert.equal(FSM.designCountText(2, 3), "2 of 3 design files go into the chip");
+    assert.equal(FSM.designCountText(1, 3), "1 of 3 design files goes into the chip");
+    assert.equal(FSM.designCountText(0, 2), "0 of 2 design files go into the chip");
+  });
+  check("setup scroll-spy: at the bottom the section filling the screen is current, not the bar under it", () => {
+    const boxes = [{ id: "setup-pdk", top: -400, bottom: -100 }, { id: "setup-preflight", top: 60, bottom: 780 },
+      { id: "cfg-card", top: 800, bottom: 860 }];
+    assert.equal(JN.bottomPick(boxes, 50, 900, "most-visible"), "setup-preflight");
+    assert.equal(JN.bottomPick(boxes, 50, 900), "cfg-card", "other pages keep the last-visible rule");
+    assert.equal(JN.bottomPick([], 0, 10), null);
+    const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+    assert.match(setup, /wireJump\(document\.getElementById\("sec-setup"\), \{ atBottom: "most-visible" \}\)/);
+  });
+  check("wizard: top names become Verilog names, like the server makes them (scaffold.py)", () => {
+    for (const [raw, want] of [["my chip", "my_chip"], ["1top", "top_1top"], ["counter", "counter"], ["  a--b ", "a_b"],
+      ["module", "module_top"], ["", "top"], ["über", "ber"]]) assert.equal(WZ.verilogIdentifier(raw), want, raw);
+  });
+  check("wizard: a second guide run picks a free folder name", () => {
+    assert.equal(WZ.freeName("blinky", new Set(["blinky"])), "blinky-2");
+    assert.equal(WZ.freeName("blinky", new Set(["blinky", "blinky-2", "Blinky-3"])), "blinky-4");
+    assert.equal(WZ.freeName("blinky", new Set(["other"])), "blinky");
+  });
+  check("wizard: a clock of 0, an uninstalled PDK and a spaced path are refused before anything is made", () => {
+    const pdks = [{ name: "sky130A", ready: true }, { name: "gf180mcuD", ready: false }];
+    const ok = { dest: "/home/u/p", clock: 10, hasClock: true, pdk: "sky130A", pdks };
+    assert.equal(WZ.createProblem(ok), "");
+    assert.match(WZ.createProblem({ ...ok, clock: 0 }), /positive number/);
+    assert.match(WZ.createProblem({ ...ok, clock: -2 }), /positive number/);
+    assert.match(WZ.createProblem({ ...ok, clock: NaN }), /positive number/);
+    assert.equal(WZ.createProblem({ ...ok, clock: NaN, hasClock: false }), "", "an example with its own clock");
+    assert.match(WZ.createProblem({ ...ok, pdk: "gf180mcuD" }), /isn't installed.*Tools/);
+    assert.match(WZ.createProblem({ ...ok, pdk: "" }), /Install one in Tools/);
+    assert.match(WZ.createProblem({ ...ok, dest: "/mnt/c/Users/Jo Smith/p" }), /space/);
+  });
+  check("words: no false claim that the config file is never written", () => {
+    const cfg = readFileSync(resolve(MOD, "config.js"), "utf8");
+    const help = readFileSync(resolve(MOD, "help.js"), "utf8");
+    const guide = readFileSync(resolve(MOD, "guide.js"), "utf8");
+    const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+    for (const [name, src] of [["config.js", cfg], ["help.js", help]]) {
+      assert.ok(!/never modified|leave <code>config\.json<\/code>|config\.json<\/code> alone/.test(src), name);
+    }
+    assert.ok(!/Manual \/ CLI|old DSE shortcut/.test(help));
+    assert.ok(!/" Manual runs LibreLane/.test(guide));
+    assert.ok(!/leave <code>config\.json<\/code> as it is/.test(html));
+    assert.match(html, /id="cfg-file-name"/, "All settings names the real config file");
+    assert.match(html, /id="var-show"/, "All settings has a Modified only filter");
+  });
+  check("all settings: listeners are wired once, presets only from this card", () => {
+    const cfg = readFileSync(resolve(MOD, "config.js"), "utf8");
+    assert.ok(!/document\.querySelectorAll\("\.chip-clickable"\)\.forEach\(\(btn\) =>\s*\{\s*btn\.addEventListener/.test(cfg));
+    assert.match(cfg, /if \(_wired\) return;/);
+    assert.match(cfg, /#cfg-card \[data-preset\]/);
+  });
+}
+
 check("boot: index.html preloads exactly app.js's static imports, and no blocking ECharts", () => {
   const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
   assert.doesNotMatch(html, /<script[^>]+echarts/, "ECharts loads on demand (loading.js)");

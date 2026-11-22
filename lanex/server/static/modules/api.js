@@ -296,8 +296,8 @@ export const api = {
     _fetch("/api/project/new-file", { method: "POST", body: JSON.stringify(payload) }),
   configSet: (set, remove, extra) =>
     _fetch("/api/config/set", { method: "POST", body: JSON.stringify(Object.assign({ set: set || {}, remove: remove || [] }, extra || {})) }),
-  configSources: (files) =>
-    _fetch("/api/config/sources", { method: "POST", body: JSON.stringify({ files }) }),
+  configSources: (files, extra) =>
+    _fetch("/api/config/sources", { method: "POST", body: JSON.stringify(Object.assign({ files }, extra || {})) }),
   projectForget: (designDir) =>
     _fetch("/api/project/forget", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
   projectDelete: (designDir, confirmName) =>

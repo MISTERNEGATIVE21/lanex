@@ -14,9 +14,26 @@ export function jumpBarHtml(items, { label = "Jump to section" } = {}) {
     "</nav>";
 }
 
-export function wireJump(container) {
+export function wireJump(container, opts = {}) {
   const nav = (container || document).querySelector(".section-jump");
-  if (nav) wireJumpNav(nav);
+  if (nav) wireJumpNav(nav, opts);
+}
+
+// At the bottom of a page, which of the visible sections is current. "last"
+// (the default): the last one on screen, so a short final section can light
+// up. "most-visible": the one taking the most of the screen, for a page whose
+// last section is a folded bar under a tall one (Setup: "Ready to run?" over
+// the All settings bar). `boxes`: [{id, top, bottom}] in screen pixels.
+export function bottomPick(boxes, viewTop, viewBottom, mode = "last") {
+  const seen = (boxes || []).filter((b) => b.bottom > viewTop && b.top < viewBottom);
+  if (!seen.length) return null;
+  if (mode !== "most-visible") return seen[seen.length - 1].id;
+  let best = seen[0], most = -1;
+  for (const b of seen) {
+    const h = Math.min(b.bottom, viewBottom) - Math.max(b.top, viewTop);
+    if (h > most) { most = h; best = b; }
+  }
+  return best.id;
 }
 
 // The nearest scrolling ancestor (the work area for page headers, the same for
@@ -34,7 +51,7 @@ function zoomOf(root) {
 
 // Click-to-jump + scroll-spy for one nav. Chips are read live, so navs whose
 // buttons are re-rendered (the Constraints categories) keep working. Idempotent.
-export function wireJumpNav(nav, { clicks = true } = {}) {
+export function wireJumpNav(nav, { clicks = true, atBottom = "last" } = {}) {
   if (!nav || nav._jumpWired) return;
   nav._jumpWired = true;
   const root = scrollRootOf(nav);
@@ -95,10 +112,15 @@ export function wireJumpNav(nav, { clicks = true } = {}) {
     // sections still loading, or all of it fitting on a wide screen) is "at the
     // bottom" at scrollTop 0, which used to light up the LAST chip on load.
     if (root && root.scrollTop > 0 && root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
+      const boxes = [];
       for (const c of list) {
         const t = document.getElementById(c.dataset.jump);
-        if (t && t.offsetParent !== null && t.getBoundingClientRect().top < rootBox.bottom) current = c.dataset.jump;
+        if (!t || t.offsetParent === null) continue;
+        const r = t.getBoundingClientRect();
+        boxes.push({ id: c.dataset.jump, top: r.top, bottom: r.bottom });
       }
+      // The sticky nav covers the top of the scroll area.
+      current = bottomPick(boxes, Math.max(rootBox.top, nav.getBoundingClientRect().bottom), rootBox.bottom, atBottom) || current;
     }
     setCurrent(current);
   };

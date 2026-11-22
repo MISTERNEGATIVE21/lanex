@@ -477,7 +477,7 @@
       <details class="card" id="cfg-card">
         <summary>
           <strong>All settings</strong>
-          <span class="hint">Every LibreLane variable, by flow stage. Values set here apply to runs started from LanEx and leave <code>config.json</code> as it is; Common settings above saves into it.</span>
+          <span class="hint">Every LibreLane variable, by flow stage, with the value a run gets now. A change here is a one-off setting: it goes with runs started from LanEx (a chip next to Run says so) and is not saved in <code id="cfg-file-name">the config</code>. Common settings above saves into it.</span>
         </summary>
         <div class="card-body">
           <!-- Category tabs: sticky under the page header while you scroll the settings. -->
@@ -489,7 +489,7 @@
           </div>
           <div class="preset-row">
             <span class="lbl">Start from</span>
-            <button class="chip chip-clickable" data-preset="default">Default</button>
+            <button class="chip chip-clickable" data-preset="default" title="Drop every one-off setting: each field goes back to what the config sets">Clear</button>
             <button class="chip chip-clickable" data-preset="lowpower" title="Smaller area: SYNTH_STRATEGY AREA 2 and a denser floorplan. Less area usually means shorter wires and a little less dynamic power. LibreLane has no power-driven synthesis mode.">Area-lean</button>
             <button class="chip chip-clickable" data-preset="perfpush">Performance</button>
             <button class="chip chip-clickable" data-preset="antenna">Antenna-hardened</button>
@@ -497,6 +497,11 @@
             <span id="config-user-presets" class="preset-user"></span>
             <button class="btn btn-ghost btn-sm" id="config-save-preset" title="Save your current changes as a preset you can reuse"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> Save preset</button>
             <input type="search" id="var-search" placeholder="Filter settings by name or description" class="grow"/>
+            <select id="var-show" aria-label="Which settings to show" title="Show every setting, only the ones the config sets, or only the one-off settings of the next run">
+              <option value="all">All settings</option>
+              <option value="file">Set in the config</option>
+              <option value="oneoff">Modified only (one-off)</option>
+            </select>
           </div>
           <!-- What will actually be sent: a preset is a STARTING POINT; any field
                you then edit is layered on top. This shows the exact merged set

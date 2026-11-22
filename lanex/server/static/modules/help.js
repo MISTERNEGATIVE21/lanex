@@ -9,13 +9,13 @@ const CATALOG = {
     title: "Setup",
     goal: "Everything a run needs, in the order every RTL-to-GDS flow uses: the project, its sources, the process, a few settings, a readiness check and the Run button.",
     how: [
-      "<b>Project</b>: one design folder. With none open, start a new one (blank or an example) or open a folder that already has your Verilog or a LibreLane/OpenLane config. The top module, clock port and clock period are saved straight into <code>config.json</code>.",
+      "<b>Project</b>: one design folder. With none open, start a new one (blank or an example) or open a folder that already has your Verilog or a LibreLane/OpenLane config. The top module, clock port and clock period are saved straight into the project's config file (<code>config.json</code> or <code>config.yaml</code>). When a <code>pdk::</code> section of it sets one for your PDK, LanEx asks whether a change is for that PDK only or for every PDK.",
       "<b>Sources</b> sorts the files the way FPGA tools do: design files (ticked ones are built into the chip), testbenches (simulation only) and constraint files (SDC timing, pin order). <b>New file</b> and <b>Edit</b> open the RTL IDE.",
       "Before the long run, write and simulate in the <b>RTL IDE</b>: Check syntax, then Simulate a testbench and read the waveform. Minutes saved per mistake.",
       "<b>PDK</b>: sky130A with <code>sky130_fd_sc_hd</code> is the usual first choice and is set by default.",
-      "<b>Settings</b> holds the handful of LibreLane variables most projects change, each with when to change it. They're saved in <code>config.json</code>, so a terminal run of the same folder builds the same chip.",
+      "<b>Common settings</b> holds the handful of LibreLane variables most projects change, each with when to change it. They're saved in the project's config file, so a terminal run of the same folder builds the same chip.",
       "When <b>Ready to run?</b> is green, press <b>Run flow</b> (or Run in the top bar, from any tab) and follow it on the Flow page.",
-      "<b>All settings</b> lists every LibreLane variable by stage. Values there go with LanEx's runs as overrides and leave <code>config.json</code> alone, which suits one-off experiments.",
+      "<b>All settings</b> lists every LibreLane variable by stage, each with the value a run gets now (from the config file, or LibreLane's default). A change there is a one-off setting: it goes with LanEx's runs as a command-line override and is not saved in the config file. A chip next to Run counts them; click it to see or clear them. Each project keeps its own.",
     ],
     samples: [
       { key: "CLOCK_PERIOD", sample: "10 (ns, which is 100 MHz)" },
@@ -177,7 +177,7 @@ const CATALOG = {
   dse: {
     title: "Sweeps (in Runs)",
     goal: "Design-space exploration is now sweeps inside Runs: New sweep on the Runs page.",
-    how: ["Open Runs and click New sweep, or press the old DSE shortcut: both open the same sheet."],
+    how: ["Open Runs and click New sweep, or search for \"Sweep\" in the command palette (Ctrl K): both open the same sheet."],
   },
   cells: {
     title: "Cells & macros tab",
@@ -195,11 +195,11 @@ const CATALOG = {
     ],
   },
   manual: {
-    title: "Manual / CLI tab",
-    goal: "Inspect equivalent command-line invocations or execute approved EDA tool commands directly.",
+    title: "Console",
+    goal: "See the command line behind every run, and run LibreLane and its tools yourself. The Console drawer opens under any page from the status line or with Ctrl+`.",
     how: [
-      "Reveal CLI generates the exact command line for the current design, configuration, and overrides, allowing reproduction in an external terminal.",
-      "The console executes allow-listed tools (librelane, openroad, yosys, magic, klayout, netgen, iverilog, verilator, ciel, docker, podman, dot) and streams outputs live.",
+      "Command shows the exact command line the next run will use (the design, its config and any one-off settings) and the one the run in view used, so you can repeat either in a terminal.",
+      "Run a command executes allow-listed tools (librelane, openroad, yosys, magic, klayout, netgen, iverilog, verilator, ciel, docker, podman, dot) and streams their output live.",
       "This console is not an interactive shell. Piped commands, redirects, semicolons, backticks, and sudo are blocked; Python execution is restricted to '-m librelane'.",
     ],
     samples: [
