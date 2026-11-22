@@ -54,6 +54,33 @@ _VIEW_VARS: Dict[str, Dict[str, Any]] = {
 }
 
 _NAME_RX = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_NAME_MAX = 128
+
+
+def valid_name(name: Any) -> bool:
+    """A cell name that is safe as one folder under ``custom_cells/``: letters,
+    digits, ``_.-``, not only dots (``.`` and ``..`` name the folder itself or
+    the project), no separator, a sane length."""
+    if not isinstance(name, str) or not name or len(name) > _NAME_MAX:
+        return False
+    return bool(_NAME_RX.match(name)) and not re.fullmatch(r"\.+", name)
+
+
+def _cell_dir(d: Path, name: str) -> Optional[Path]:
+    """``<design>/custom_cells/<name>``, or None when that folder would not be
+    a direct child of the project's own ``custom_cells`` (a bad name, or a
+    ``custom_cells`` that is a link to somewhere else)."""
+    if not valid_name(name):
+        return None
+    root = d / _CELLS_SUBDIR
+    try:
+        root_res = root.resolve()
+        root_res.relative_to(d)
+    except (OSError, ValueError):
+        return None
+    if root_res.parent != d:
+        return None
+    return root / name
 
 
 def _sidecar_path(design_dir: str | Path) -> Path:
@@ -102,38 +129,52 @@ def save_cell(
 ) -> Dict[str, Any]:
     """Save (or replace) a custom cell for *design_dir*.
 
-    *views* maps a kind (``lef``/``lib``/``gds``/…) to ``{filename, content_b64}``
-    — the uploaded file's name and base64 bytes. Files are written under
+    *views* maps a kind (``lef``/``lib``/``gds``/…) to ``{filename, upload_id}``
+    (a file sent to ``/api/upload`` first, see :mod:`.uploads`) or, for small
+    files, ``{filename, content_b64}``. Files are written under
     ``custom_cells/<name>/`` and recorded as design-dir-relative ``dir::`` paths
     so they resolve in both local and container runs. *swap_out* is the list of
     standard-cell names to exclude (``EXTRA_EXCLUDED_CELLS``). Returns
     ``{ok, cell}`` or ``{ok: False, error}``. Never raises."""
+    from . import uploads
+
     d = Path(design_dir).resolve()
     if not d.is_dir():
         return {"ok": False, "error": "design directory not found"}
     name = (name or "").strip()
-    if not name or not _NAME_RX.match(name):
-        return {"ok": False, "error": "cell name must be non-empty and use only letters/digits/_.-"}
+    if not valid_name(name):
+        return {"ok": False, "error": "cell name must use only letters, digits and _ . - "
+                                      "(and not be only dots)"}
 
-    cell_dir = (d / _CELLS_SUBDIR / name).resolve()
-    if not _confined(d, cell_dir):
+    cell_dir = _cell_dir(d, name)
+    if cell_dir is None or cell_dir.is_symlink() or not _confined(d, cell_dir):
         return {"ok": False, "error": "refusing to write outside the design dir"}
-    cell_dir.mkdir(parents=True, exist_ok=True)
 
-    saved_views: Dict[str, str] = {}
+    # Check every view BEFORE writing anything, so a bad file cannot leave a
+    # half-saved cell on disk.
+    planned: List[Any] = []
     for kind, payload in (views or {}).items():
         spec = _VIEW_VARS.get(kind)
         if spec is None:
             return {"ok": False, "error": f"unknown cell view '{kind}'"}
         fname = (payload or {}).get("filename") or f"{name}.{kind}"
-        fname = Path(fname).name  # strip any directory component
+        fname = Path(str(fname).replace("\\", "/")).name  # strip any directory component
         # These paths ride whitespace-joined list overrides (EXTRA_LEFS=a b) —
         # a space in the filename would split into phantom paths mid-flow.
         fname = re.sub(r"\s+", "_", fname)
+        if not fname or re.fullmatch(r"\.+", fname):
+            return {"ok": False, "error": "invalid file name"}
         ext_ok = any(fname.lower().endswith(e) for e in spec["exts"])
         if not ext_ok:
             return {"ok": False,
                     "error": f"{kind} file should end with {' or '.join(spec['exts'])}"}
+        upload_id = (payload or {}).get("upload_id")
+        if upload_id:
+            staged = uploads.staged(d, upload_id)
+            if staged is None:
+                return {"ok": False, "error": f"the uploaded {kind} file is gone; add it again"}
+            planned.append((kind, fname, staged))
+            continue
         b64 = (payload or {}).get("content_b64") or ""
         try:
             raw = base64.b64decode(b64, validate=False)
@@ -141,19 +182,30 @@ def save_cell(
             return {"ok": False, "error": f"could not decode {kind} file"}
         if len(raw) > _MAX_FILE_BYTES:
             return {"ok": False, "error": f"{kind} file exceeds {_MAX_FILE_BYTES // (1024*1024)} MiB"}
-        target = (cell_dir / fname).resolve()
-        if not _confined(d, target):
+        planned.append((kind, fname, raw))
+
+    if not any(k == "lef" for k, _f, _s in planned):
+        return {"ok": False, "error": "a LEF view is required (the cell's abstract/footprint)"}
+
+    try:
+        cell_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as ex:
+        return {"ok": False, "error": str(ex)}
+    saved_views: Dict[str, str] = {}
+    for kind, fname, src in planned:
+        target = cell_dir / fname
+        if target.is_symlink() or target.resolve().parent != cell_dir.resolve():
             return {"ok": False, "error": "invalid file name"}
         try:
-            target.write_bytes(raw)
+            if isinstance(src, Path):
+                uploads.move_into(src, target)
+            else:
+                target.write_bytes(src)
         except Exception as ex:
             return {"ok": False, "error": str(ex)}
         # Forward slashes: ``dir::`` paths resolve in both run modes and on
         # Windows-authored designs (mirrors custommacros).
         saved_views[kind] = "dir::" + str(target.relative_to(d)).replace("\\", "/")
-
-    if not saved_views.get("lef"):
-        return {"ok": False, "error": "a LEF view is required (the cell's abstract/footprint)"}
 
     # Swap-out names ride the whitespace-joined EXTRA_EXCLUDED_CELLS override —
     # a name with whitespace would corrupt every other entry in the list.
@@ -197,18 +249,44 @@ def set_enabled(design_dir: str | Path, name: str, enabled: bool) -> Dict[str, A
 
 
 def remove_cell(design_dir: str | Path, name: str) -> Dict[str, Any]:
-    """Remove a custom cell and its files."""
-    import shutil
+    """Remove a custom cell and the folder LanEx stored its files in.
+
+    Only ever deletes ``<design>/custom_cells/<name>`` itself: a name such as
+    ``..`` or an empty one (which used to resolve to the project folder or to
+    every cell) is refused, and a ``<name>`` that is a link loses the link,
+    never what it points to. A record with an unsafe name (written before
+    names were checked) is dropped from the list without touching any file."""
     d = Path(design_dir).resolve()
-    cells = [c for c in _load(d) if c.get("name") != name]
-    _save(d, cells)
-    cell_dir = (d / _CELLS_SUBDIR / name).resolve()
-    if _confined(d, cell_dir) and cell_dir.is_dir():
-        try:
-            shutil.rmtree(cell_dir)
-        except Exception:
-            pass
-    return {"ok": True}
+    if not d.is_dir():
+        return {"ok": False, "error": "design directory not found"}
+    cells = _load(d)
+    keep = [c for c in cells if c.get("name") != name]
+    known = len(keep) != len(cells)
+    if not valid_name(name):
+        if not known:
+            return {"ok": False, "error": "no custom cell by that name"}
+        _save(d, keep)
+        return {"ok": True, "files_removed": False}
+    cell_dir = _cell_dir(d, name)
+    if cell_dir is None:
+        return {"ok": False, "error": "refusing to delete outside the project's custom_cells folder"}
+    _save(d, keep)
+    return {"ok": True, "files_removed": _remove_child_dir(cell_dir)}
+
+
+def _remove_child_dir(target: Path) -> bool:
+    """Delete one folder LanEx made (or the link standing in for it)."""
+    import shutil
+    try:
+        if target.is_symlink():
+            target.unlink()
+            return True
+        if target.is_dir():
+            shutil.rmtree(target)
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def _config_lists(design_dir: str | Path, keys: List[str]) -> Dict[str, List[str]]:

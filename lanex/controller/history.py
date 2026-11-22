@@ -2170,19 +2170,44 @@ def adopt_run(src_run_dir: str | Path, design_dir: str | Path) -> Dict[str, Any]
     # Confinement: the resolved destination must stay directly under runs/.
     if dest.resolve().parent != runs_root.resolve():
         raise ValueError("refusing to write outside the design's runs/ directory")
-    shutil.copytree(src, dest)
+    # Links are copied as links only when they point inside the run itself
+    # (relative, so they still resolve inside the copy). Anything else (a link
+    # to /, to the home folder, to another run, a dangling one) is left out:
+    # following it would copy whatever it points at, or loop forever.
+    skipped_links: List[str] = []
+
+    def _ignore(folder: str, names: List[str]) -> List[str]:
+        out = []
+        for n in names:
+            p = Path(folder) / n
+            if not p.is_symlink():
+                continue
+            try:
+                target = os.readlink(p)
+                inside = (not os.path.isabs(target)
+                          and p.resolve(strict=True).is_relative_to(src))
+            except (OSError, RuntimeError):
+                inside = False
+            if not inside:
+                out.append(n)
+                try:
+                    skipped_links.append(p.relative_to(src).as_posix())
+                except ValueError:
+                    skipped_links.append(n)
+        return out
+
+    shutil.copytree(src, dest, symlinks=True, ignore=_ignore)
     try:
-        (dest / _IMPORT_MARKER).write_text(
-            json.dumps(
-                {"source": str(src), "imported_at": datetime.now().isoformat()},
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        marker: Dict[str, Any] = {"source": str(src), "imported_at": datetime.now().isoformat()}
+        if skipped_links:
+            marker["skipped_links"] = skipped_links[:200]
+        (dest / _IMPORT_MARKER).write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
     except Exception:
         pass
-    return {"tag": tag, "run_dir": str(dest)}
+    res: Dict[str, Any] = {"tag": tag, "run_dir": str(dest)}
+    if skipped_links:
+        res["skipped_links"] = len(skipped_links)
+    return res
 
 
 def read_note(run_dir: str | Path) -> str:

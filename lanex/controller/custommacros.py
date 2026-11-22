@@ -135,6 +135,27 @@ def _confined(design_dir: Path, target: Path) -> bool:
         return False
 
 
+def valid_name(name: Any) -> bool:
+    """A macro module name: a Verilog identifier, so never ``..``, empty or a
+    path."""
+    return isinstance(name, str) and 0 < len(name) <= 128 and bool(_IDENT_RX.match(name))
+
+
+def _macro_dir(d: Path, name: str) -> Optional[Path]:
+    """``<design>/macros/<name>``, or None when that would not be a direct
+    child of the project's own ``macros`` folder."""
+    if not valid_name(name):
+        return None
+    root = d / _MACROS_SUBDIR
+    try:
+        root_res = root.resolve()
+    except OSError:
+        return None
+    if root_res.parent != d:
+        return None
+    return root / name
+
+
 def list_macros(design_dir: str | Path) -> Dict[str, Any]:
     """Return the design's saved custom macros (read-only)."""
     return {"ok": True, "macros": _load(design_dir), "settings": _settings(design_dir),
@@ -223,34 +244,45 @@ def save_macro(
     gnd_net}`` for ``PDN_MACRO_CONNECTIONS``. Files are written under
     ``macros/<name>/`` and recorded as design-relative ``dir::`` paths. Never
     raises; returns ``{ok, macro}`` or ``{ok: False, error}``."""
+    from . import uploads
+
     d = Path(design_dir).resolve()
     if not d.is_dir():
         return {"ok": False, "error": "design directory not found"}
     name = (name or "").strip()
-    if not name or not _IDENT_RX.match(name):
+    if not valid_name(name):
         return {"ok": False, "error": "macro module name must be a valid Verilog identifier (letters/digits/_/$, no leading digit)"}
 
     clean_inst, err = _clean_instances(instances)
     if err:
         return {"ok": False, "error": err}
 
-    macro_dir = (d / _MACROS_SUBDIR / name).resolve()
-    if not _confined(d, macro_dir):
+    macro_dir = _macro_dir(d, name)
+    if macro_dir is None or macro_dir.is_symlink() or not _confined(d, macro_dir):
         return {"ok": False, "error": "refusing to write outside the design dir"}
 
     # Validate/decode every uploaded view BEFORE writing anything, so a bad file
     # can't leave a half-saved macro on disk.
-    decoded: Dict[str, Tuple[str, bytes]] = {}
+    decoded: Dict[str, Tuple[str, Any]] = {}
     for kind, payload in (views or {}).items():
         spec = _VIEW_SPECS.get(kind)
         if spec is None:
             return {"ok": False, "error": f"unknown macro view '{kind}'"}
-        fname = Path((payload or {}).get("filename") or f"{name}.{kind}").name
+        fname = Path(str((payload or {}).get("filename") or f"{name}.{kind}").replace("\\", "/")).name
         # Space-free on disk: several LibreLane steps hand view paths to Tcl
         # scripts that split lists on whitespace — don't seed that failure.
         fname = re.sub(r"\s+", "_", fname)
+        if not fname or re.fullmatch(r"\.+", fname):
+            return {"ok": False, "error": "invalid file name"}
         if not any(fname.lower().endswith(e) for e in spec["exts"]):
             return {"ok": False, "error": f"{kind} file should end with {' or '.join(spec['exts'])}"}
+        upload_id = (payload or {}).get("upload_id")
+        if upload_id:
+            staged = uploads.staged(d, upload_id)
+            if staged is None:
+                return {"ok": False, "error": f"the uploaded {kind} file is gone; add it again"}
+            decoded[kind] = (fname, staged)
+            continue
         try:
             raw = base64.b64decode((payload or {}).get("content_b64") or "", validate=False)
         except Exception:
@@ -293,11 +325,14 @@ def save_macro(
 
     macro_dir.mkdir(parents=True, exist_ok=True)
     for kind, (fname, raw) in decoded.items():
-        target = (macro_dir / fname).resolve()
-        if not _confined(d, target):
+        target = macro_dir / fname
+        if target.is_symlink() or target.resolve().parent != macro_dir.resolve():
             return {"ok": False, "error": "invalid file name"}
         try:
-            target.write_bytes(raw)
+            if isinstance(raw, Path):
+                uploads.move_into(raw, target)
+            else:
+                target.write_bytes(raw)
         except Exception as ex:
             return {"ok": False, "error": str(ex)}
         saved_views[kind] = "dir::" + str(target.relative_to(d)).replace("\\", "/")
@@ -305,6 +340,8 @@ def save_macro(
     import shutil
 
     def put(fp: Path, kind: str, corner: str = "") -> str:
+        if corner and (not re.fullmatch(r"[A-Za-z0-9_.*\-]+", corner) or re.fullmatch(r"\.+", corner)):
+            raise ValueError(f"invalid corner name {corner!r}")
         sub = macro_dir / kind / corner if corner else macro_dir
         sub.mkdir(parents=True, exist_ok=True)
         target = (sub / re.sub(r"\s+", "_", fp.name)).resolve()
@@ -365,18 +402,39 @@ def set_enabled(design_dir: str | Path, name: str, enabled: bool) -> Dict[str, A
 
 
 def remove_macro(design_dir: str | Path, name: str) -> Dict[str, Any]:
-    """Remove a custom macro and its files."""
+    """Remove a custom macro and the folder LanEx stored its files in.
+
+    Only ever deletes ``<design>/macros/<name>`` itself: ``..``, an empty name
+    or a path is refused (``macros/..`` is the project folder), and a link in
+    its place loses the link, never its target. A record with an unsafe name is
+    dropped from the list without touching any file."""
     import shutil
     d = Path(design_dir).resolve()
-    macros = [m for m in _load(d) if m.get("name") != name]
+    if not d.is_dir():
+        return {"ok": False, "error": "design directory not found"}
+    all_macros = _load(d)
+    macros = [m for m in all_macros if m.get("name") != name]
+    known = len(macros) != len(all_macros)
+    if not valid_name(name):
+        if not known:
+            return {"ok": False, "error": "no macro by that name"}
+        _save(d, macros)
+        return {"ok": True, "files_removed": False}
+    macro_dir = _macro_dir(d, name)
+    if macro_dir is None:
+        return {"ok": False, "error": "refusing to delete outside the project's macros folder"}
     _save(d, macros)
-    macro_dir = (d / _MACROS_SUBDIR / name).resolve()
-    if _confined(d, macro_dir) and macro_dir.is_dir():
-        try:
+    removed = False
+    try:
+        if macro_dir.is_symlink():
+            macro_dir.unlink()
+            removed = True
+        elif macro_dir.is_dir():
             shutil.rmtree(macro_dir)
-        except Exception:
-            pass
-    return {"ok": True}
+            removed = True
+    except OSError:
+        pass
+    return {"ok": True, "files_removed": removed}
 
 
 # --------------------------------------------------------------------------- #
