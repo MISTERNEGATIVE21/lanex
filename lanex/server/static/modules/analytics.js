@@ -22,6 +22,7 @@ import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
 import * as M from "./analytics-model.js";
+import * as F from "./metricfmt.js";
 import * as V from "./verify-model.js";
 import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
@@ -62,7 +63,7 @@ const g = (k) => _v[k];
 // A value in its natural unit. Exact raw value in the title.
 function vh(key, v, { cls = "" } = {}) {
   if (v === undefined) v = _v[key];
-  const s = M.show(key, v);
+  const s = F.show(key, v);
   return "<span class='an-v " + cls + "' title='" + esc(s.title) + "'>" + esc(s.text) + "</span>" +
     (s.unit ? "<span class='an-u'>" + esc(s.unit) + "</span>" : "");
 }
@@ -92,18 +93,18 @@ function deltaHtml(key, { short = false } = {}) {
   const d = M.delta(a, b, dir);
   if (!d) return "";
   const { base } = M.parseKey(key);
-  const u = M.unitOf(base);
-  const bs = M.show(key, b);
+  const u = F.unitOf(base);
+  const bs = F.show(key, b);
   const tip = "vs " + _baseTag + ": " + bs.text + (bs.unit ? " " + bs.unit : "") +
     (dir ? "\n" + (dir > 0 ? "Higher" : "Lower") + " is better (LibreLane's metric registry)" : "\nLibreLane doesn't say which direction is better, so this isn't coloured");
   if (d.verdict === "same") return short ? "" : "<span class='an-delta same' data-an-tip='" + esc(tip) + "' tabindex='0'>no change vs " + esc(_baseTag) + "</span>";
   let txt;
-  if (u === "ns") txt = M.signed(d.diff, 3) + " ns";
-  else if (u === "ratio") txt = M.signed(d.diff * 100, 1) + " pts";
-  else if (u === "W") { const r = M.si(Math.abs(d.diff), "W"); txt = (d.diff > 0 ? "+" : "−") + r.text + " " + r.unit; }
-  else if (u === "V") txt = M.signed(d.diff * 1000, 3) + " mV";
+  if (u === "ns") txt = F.signed(d.diff, 3) + " ns";
+  else if (u === "ratio") txt = F.signed(d.diff * 100, 1) + " pts";
+  else if (u === "W") { const r = F.si(Math.abs(d.diff), "W"); txt = (d.diff > 0 ? "+" : "−") + r.text + " " + r.unit; }
+  else if (u === "V") txt = F.signed(d.diff * 1000, 3) + " mV";
   else {
-    const n = Number.isInteger(d.diff) ? M.num(Math.abs(d.diff)) : M.num(Math.abs(Number(d.diff.toPrecision(6))));
+    const n = Number.isInteger(d.diff) ? F.num(Math.abs(d.diff)) : F.num(Math.abs(Number(d.diff.toPrecision(6))));
     txt = (d.diff > 0 ? "+" : "−") + n;
     if (d.pct !== null && Math.abs(d.pct) >= 0.05 && !short) txt += " (" + (d.pct > 0 ? "+" : "−") + Math.abs(d.pct).toFixed(Math.abs(d.pct) >= 10 ? 0 : 1) + "%)";
   }
@@ -373,7 +374,7 @@ function renderOverview() {
     : "<div class='an-checks'>" + groups.map((gp) =>
     "<div class='an-check-group'><div class='an-check-gname'>" + esc(gp.name) + "</div><div class='an-check-items'>" +
     gp.items.map((c) => {
-      const val = c.status === "absent" ? "not run" : M.num(c.value);
+      const val = c.status === "absent" ? "not run" : F.num(c.value);
       const meaning = c.status === "absent" ? "This run has no value for it (the check didn't run, or the run stopped first)."
         : c.status === "pass" ? "Zero: passed."
         : c.status === "fail" ? "Non-zero, and LibreLane treats it as an error."
@@ -420,7 +421,7 @@ function trendSpark(key, { h = 30 } = {}) {
   const sel = runs.findIndex((r) => r.tag === _tag);
   const bad = runs.map((r, i) => (r.success ? -1 : i)).filter((i) => i >= 0);
   const tips = runs.map((r, i) => {
-    const s = M.show(key, t.series[key][i]);
+    const s = F.show(key, t.series[key][i]);
     return r.tag + (r.success ? "" : " (failed)") + "\n" + (vals[i] === null ? "no value" : s.text + (s.unit ? " " + s.unit : ""));
   });
   return C.chartHost((cw) => C.sparkline(vals, { sel, bad, w: cw, h, tips }), "an-spark-host");
@@ -444,7 +445,7 @@ function kpiTiming() {
   const k = "timing__setup__ws";
   const cp = _ctx.stages.clock_period;
   const clock = Number.isFinite(Number(cp)) && Number(cp) > 0
-    ? esc(M.num(Number(cp))) + "<span class='an-u'>ns</span> <span class='muted'>(" + esc(M.num(Number((1000 / Number(cp)).toPrecision(4)))) + " MHz)</span>"
+    ? esc(F.num(Number(cp))) + "<span class='an-u'>ns</span> <span class='muted'>(" + esc(F.num(Number((1000 / Number(cp)).toPrecision(4)))) + " MHz)</span>"
     : "";
   if (!has(k)) return kpi({ title: "Timing", tip: "", empty: "No timing yet: the run stopped before static timing analysis." });
   const ws = g(k);
@@ -453,8 +454,8 @@ function kpiTiming() {
     (has("timing__hold__ws") ? kpiRow("Hold slack", vh("timing__hold__ws", undefined, { cls: M.isNum(g("timing__hold__ws")) && g("timing__hold__ws") < 0 ? "is-neg" : "" }) + " " + deltaHtml("timing__hold__ws", { short: true }) + provBtn("timing__hold__ws"),
       "Worst hold slack across corners. Below zero means a signal changes too soon after the clock edge.") : "") +
     (clock ? kpiRow("Clock period", clock + varBtn("CLOCK_PERIOD"), "CLOCK_PERIOD from this run's resolved config.") : "") +
-    (has("timing__setup_vio__count") ? kpiRow("Setup / hold violations", esc(M.num(g("timing__setup_vio__count"))) + provBtn("timing__setup_vio__count") + " / " +
-      esc(M.num(g("timing__hold_vio__count"))) + provBtn("timing__hold_vio__count"), "Violating paths across all corners.") : "");
+    (has("timing__setup_vio__count") ? kpiRow("Setup / hold violations", esc(F.num(g("timing__setup_vio__count"))) + provBtn("timing__setup_vio__count") + " / " +
+      esc(F.num(g("timing__hold_vio__count"))) + provBtn("timing__hold_vio__count"), "Violating paths across all corners.") : "");
   return kpi({
     title: "Timing (setup slack)", heroKey: k, tone,
     tip: "Worst setup slack across every corner: the spare time on the slowest path. Positive means the design meets the clock.",
@@ -468,7 +469,7 @@ function kpiArea() {
   if (!has("design__die__area") && !has("design__instance__area")) return kpi({ title: "Area", tip: "", empty: "No area yet: the run stopped before the floorplan." });
   const util = g("design__instance__utilization");
   const meter = M.isNum(util)
-    ? "<span class='an-meter' role='img' aria-label='Utilization " + esc(M.show("design__instance__utilization", util).text) + "%'><i style='width:" + Math.min(100, util * 100).toFixed(1) + "%'></i></span>"
+    ? "<span class='an-meter' role='img' aria-label='Utilization " + esc(F.show("design__instance__utilization", util).text) + "%'><i style='width:" + Math.min(100, util * 100).toFixed(1) + "%'></i></span>"
     : "";
   const rows =
     (die ? kpiRow("Die size", esc(trimNum(die[2] - die[0])) + " × " + esc(trimNum(die[3] - die[1])) + "<span class='an-u'>µm</span>" + provBtn("design__die__bbox"), "Width × height of the whole chip (design__die__bbox).") : "") +
@@ -493,7 +494,7 @@ function kpiPower() {
   const parts = [["power__internal__total", "Internal", "s1"], ["power__switching__total", "Switching", "s2"], ["power__leakage__total", "Leakage", "s3"]]
     .filter(([key]) => M.isNum(g(key)));
   const stack = parts.length ? C.stackBar(parts.map(([key, label, cls]) => {
-    const s = M.show(key, g(key));
+    const s = F.show(key, g(key));
     return { label, value: g(key), cls, text: s.text + " " + s.unit, src: provBtn(key) };
   })) : "";
   return kpi({
@@ -508,12 +509,12 @@ function kpiRouting() {
   const k = "route__wirelength";
   if (!has(k)) {
     const est = has("route__wirelength__estimated");
-    return kpi({ title: "Routing", tip: "", empty: est ? "Not routed yet. Placement estimated " + M.show("route__wirelength__estimated", g("route__wirelength__estimated")).text + " µm of wire." : "Not routed yet." });
+    return kpi({ title: "Routing", tip: "", empty: est ? "Not routed yet. Placement estimated " + F.show("route__wirelength__estimated", g("route__wirelength__estimated")).text + " µm of wire." : "Not routed yet." });
   }
   const drc = g("route__drc_errors");
   const rows =
     (has("route__vias") ? kpiRow("Vias", vh("route__vias") + " " + deltaHtml("route__vias", { short: true }) + provBtn("route__vias"), "Connections between metal layers.") : "") +
-    (has("route__drc_errors") ? kpiRow("Router DRC errors", "<span class='an-v " + (drc ? "is-neg" : "") + "'>" + esc(M.num(drc)) + "</span>" + provBtn("route__drc_errors"), "Rule errors left after detailed routing. Should be 0.") : "") +
+    (has("route__drc_errors") ? kpiRow("Router DRC errors", "<span class='an-v " + (drc ? "is-neg" : "") + "'>" + esc(F.num(drc)) + "</span>" + provBtn("route__drc_errors"), "Rule errors left after detailed routing. Should be 0.") : "") +
     (has("route__wirelength__max") ? kpiRow("Longest net", vh("route__wirelength__max") + provBtn("route__wirelength__max"), "The single longest routed net.") : "");
   return kpi({
     title: "Wirelength", heroKey: k,
@@ -569,7 +570,7 @@ function renderTiming() {
     const fin = list.filter((x) => M.isNum(x.value));
     const worst = fin.length ? fin.reduce((a, b) => (b.value < a.value ? b : a)) : null;
     return "<div class='an-corner-col'><div class='an-sub'>" + esc(title) + "</div>" + C.divergingBars(list.map((x) => {
-      const s = M.show(base, x.value);
+      const s = F.show(base, x.value);
       return {
         label: M.cornerShort(x.corner), sub: x.corner, value: M.isNum(x.value) ? x.value : NaN,
         text: esc(s.text) + provBtn(base + "__corner:" + x.corner), worst: worst && x.corner === worst.corner,
@@ -587,7 +588,7 @@ function renderTiming() {
     const total = g(k);
     if (!total) return "<li><span class='an-ok'>" + esc(label) + ": 0</span>" + provBtn(k) + (ncorners ? " in all " + ncorners + " corners" : "") + "</li>";
     const bad = M.byCorner(_v, k).filter((x) => x.value > 0);
-    return "<li><span class='an-bad'>" + esc(label) + ": " + esc(M.num(total)) + "</span>" + provBtn(k) + " — " +
+    return "<li><span class='an-bad'>" + esc(label) + ": " + esc(F.num(total)) + "</span>" + provBtn(k) + " — " +
       bad.map((x) => esc(x.corner + " (" + x.value + ")") + provBtn(k + "__corner:" + x.corner)).join(", ") + "</li>";
   });
   const skew = ["clock__skew__worst_setup", "clock__skew__worst_hold"].filter(has);
@@ -595,7 +596,7 @@ function renderTiming() {
     ...elecLines,
     skew.length ? "<li><span tabindex='0' class='has-tip' data-an-tip='The worst difference in clock arrival time between two related flip-flops.'>Worst clock skew</span>: setup " + vh("clock__skew__worst_setup") + provBtn("clock__skew__worst_setup") +
       ", hold " + vh("clock__skew__worst_hold") + provBtn("clock__skew__worst_hold") + "</li>" : "",
-    has("timing__unannotated_net__count") ? "<li><span tabindex='0' class='has-tip' data-an-tip='Nets the timer had no extracted parasitics for. Non-zero makes the timing less exact.'>Nets without parasitics</span>: " + esc(M.num(g("timing__unannotated_net__count"))) + provBtn("timing__unannotated_net__count") + "</li>" : "",
+    has("timing__unannotated_net__count") ? "<li><span tabindex='0' class='has-tip' data-an-tip='Nets the timer had no extracted parasitics for. Non-zero makes the timing less exact.'>Nets without parasitics</span>: " + esc(F.num(g("timing__unannotated_net__count"))) + provBtn("timing__unannotated_net__count") + "</li>" : "",
   ].filter(Boolean).join("");
 
   const flow = timingThroughFlow();
@@ -619,7 +620,7 @@ function timingThroughFlow() {
     const values = sta.map((s) => num0(s.metrics[key]));
     return "<div class='an-flowchart'><div class='an-sub'><i class='an-key line " + cls + "'></i> " + esc(name) + " <span class='muted'>(ns)</span></div>" +
       C.chartHost((w) => C.lineChart({ xs, series: [{ name, cls, values }], unit: "ns", height: 190, zero: true, W: w,
-        fmtY: (v, full) => (full ? M.signed(v, 3) : M.num(v)), label: name + " at each static timing checkpoint" })) + "</div>";
+        fmtY: (v, full) => (full ? F.signed(v, 3) : F.num(v)), label: name + " at each static timing checkpoint" })) + "</div>";
   };
   return "<div class='an-card an-card-wide'><div class='an-card-h'>Through the flow <span class='muted'>slack at each timing check the flow ran, synthesis to signoff</span></div>" +
     "<div class='an-flowcharts'>" + chart("timing__setup__ws", "Setup slack", "s1") + chart("timing__hold__ws", "Hold slack", "s2") + "</div>" +
@@ -664,8 +665,8 @@ function renderArea() {
       return {
         label: c.cls.replace(/_/g, " "), value: c.area, tone: phys ? "muted" : "s1",
         sub: phys ? "physical only" : "",
-        text: esc(M.num(c.area)) + "<span class='an-u'>µm²</span>" + (pct !== null ? " <span class='muted'>" + C.pctText(pct) + "</span>" : "") + provBtn(c.key),
-        tip: c.cls + "\n" + M.num(c.area) + " µm²" + (M.isNum(c.count) ? " in " + M.num(c.count) + " cells" : "") + (pct !== null ? "\n" + C.pctText(pct) + " of all instance area" : "") + "\n" + c.key,
+        text: esc(F.num(c.area)) + "<span class='an-u'>µm²</span>" + (pct !== null ? " <span class='muted'>" + C.pctText(pct) + "</span>" : "") + provBtn(c.key),
+        tip: c.cls + "\n" + F.num(c.area) + " µm²" + (M.isNum(c.count) ? " in " + F.num(c.count) + " cells" : "") + (pct !== null ? "\n" + C.pctText(pct) + " of all instance area" : "") + "\n" + c.key,
       };
     })) + "<p class='an-foot'>Grey rows are physical-only cells (fill, taps): they complete the rows and wells and carry no logic.</p></div>" : "";
 
@@ -728,7 +729,7 @@ function renderPower() {
   const parts = [["power__internal__total", "Internal", "s1"], ["power__switching__total", "Switching", "s2"], ["power__leakage__total", "Leakage", "s3"]].filter(([k]) => M.isNum(g(k)));
   const breakdown = "<div class='an-card'><div class='an-card-h'>Breakdown " + provBtn("power__total") + "</div>" +
     "<div class='an-power-total'>" + vh("power__total") + " " + deltaHtml("power__total") + "</div>" +
-    C.stackBar(parts.map(([k, label, cls]) => { const s = M.show(k, g(k)); return { label, value: g(k), cls, text: s.text + " " + s.unit }; })) +
+    C.stackBar(parts.map(([k, label, cls]) => { const s = F.show(k, g(k)); return { label, value: g(k), cls, text: s.text + " " + s.unit }; })) +
     "<p class='an-foot'>OpenSTA's estimate with default switching activity, not a measured or simulated figure.</p></div>";
 
   // IR drop per supply net.
@@ -766,7 +767,7 @@ function renderRouting() {
     fact("Routed nets", "route__net") +
     fact("Power nets", "route__net__special", { tip: "Special nets routed by the power grid, not the signal router." }) +
     fact("Vias", "route__vias") +
-    fact("Single-cut / multi-cut", "route__vias__singlecut", { value: has("route__vias__singlecut") ? esc(M.num(g("route__vias__singlecut"))) + " / " + esc(M.num(g("route__vias__multicut"))) : undefined, delta: false }) +
+    fact("Single-cut / multi-cut", "route__vias__singlecut", { value: has("route__vias__singlecut") ? esc(F.num(g("route__vias__singlecut"))) + " / " + esc(F.num(g("route__vias__multicut"))) : undefined, delta: false }) +
     fact("I/O half-perimeter WL", "design__io__hpwl") +
     "</dl></div>";
   // A run cut off before the antenna check after detailed routing: what it
@@ -776,7 +777,7 @@ function renderRouting() {
   const estTip = antEst ? " This run ended before the check after detailed routing: this is the estimate at global routing, before antenna repair, not a result." : "";
   const ant = "<div class='an-card'><div class='an-card-h'>Antenna and placement" + (antEst ? " <span class='muted'>antenna: estimate only</span>" : "") + "</div><dl class='an-facts'>" +
     fact("Antenna violations" + (antEst ? " (estimate)" : ""), "route__antenna_violation__count", { delta: !antEst, tip: "Long wires that can damage transistor gates while the chip is being made." + estTip }) +
-    fact("Violating nets / pins" + (antEst ? " (estimate)" : ""), "antenna__violating__nets", { tip: estTip.trim(), value: has("antenna__violating__nets") ? esc(M.num(g("antenna__violating__nets"))) + " / " + esc(M.num(g("antenna__violating__pins"))) : undefined, delta: false }) +
+    fact("Violating nets / pins" + (antEst ? " (estimate)" : ""), "antenna__violating__nets", { tip: estTip.trim(), value: has("antenna__violating__nets") ? esc(F.num(g("antenna__violating__nets"))) + " / " + esc(F.num(g("antenna__violating__pins"))) : undefined, delta: false }) +
     fact("Antenna diodes inserted", "antenna_diodes_count", { tip: "Diodes the flow added to protect gates from antenna effects." }) +
     fact("Max displacement", "design__instance__displacement__max", { tip: "How far detailed placement had to move a cell to make it legal." }) +
     fact("Mean displacement", "design__instance__displacement__mean") +
@@ -789,7 +790,7 @@ function renderRouting() {
   if (iters.length) {
     const cols = iters.map(({ i, k }) => {
       const wk = "route__wirelength__iter:" + i;
-      return { label: String(i), value: g(k), text: M.num(g(k)), src: provBtn(k), tip: "Iteration " + i + "\n" + M.num(g(k)) + " DRC errors" + (has(wk) ? "\n" + M.num(g(wk)) + " µm of wire" : "") };
+      return { label: String(i), value: g(k), text: F.num(g(k)), src: provBtn(k), tip: "Iteration " + i + "\n" + F.num(g(k)) + " DRC errors" + (has(wk) ? "\n" + F.num(g(wk)) + " µm of wire" : "") };
     });
     const last = cols[cols.length - 1];
     conv = "<div class='an-card'><div class='an-card-h'>Detailed-router convergence <span class='muted'>DRC errors after each pass</span></div>" +
@@ -840,7 +841,7 @@ function renderFlow() {
     const cells = stages.map((st) => {
       const h = lastIn(st, keys);
       if (!h) return "<td class='an-same' aria-label='unchanged'>·</td>";
-      const s = M.show(h.k, h.v);
+      const s = F.show(h.k, h.v);
       const neg = (/slack/.test(label) && M.isNum(h.v) && h.v < 0) || (/DRC/.test(label) && h.v > 0);
       return "<td" + (neg ? " class='is-bad'" : "") + " tabindex='0' data-an-tip='" + esc(label + " · " + st + "\n" + s.text + " " + s.unit + "\nset by step " + h.s.n + " " + M.stepName(h.s) + "\n" + h.k) + "'>" +
         "<span class='an-v'>" + esc(s.text) + "</span>" + (s.unit ? "<span class='an-u'>" + esc(s.unit) + "</span>" : "") + provBtn(h.k, h.s.run || "", h.s.dir) + "</td>";
@@ -866,8 +867,8 @@ function renderFlow() {
     rt = "<div class='an-card'><div class='an-card-h'>Runtime <span class='muted'>" + esc(fmtDur(total)) + " across " + timed.length + " steps</span></div>" +
       C.barList(byStage.map((x) => ({ label: x.st, value: x.t, text: esc(fmtDur(x.t)) + " <span class='muted'>" + C.pctText(total ? (x.t / total) * 100 : 0) + "</span>", tip: x.st + "\n" + fmtDur(x.t) + " in " + x.n + " steps" }))) +
       "<div class='an-sub'>Slowest steps</div>" +
-      C.barList(slow.map((s) => ({ label: M.stepName(s), sub: "step " + s.n, value: s.runtime_s, text: esc(fmtDur(s.runtime_s)), tip: s.dir + "\n" + fmtDur(s.runtime_s) + (M.isNum(s.peak_rss_mib) ? "\npeak memory " + M.num(s.peak_rss_mib) + " MiB" : "") }))) +
-      (peak ? "<p class='an-foot'>Peak memory: <b>" + esc(M.num(peak.peak_rss_mib)) + " MiB</b> in " + esc(M.stepName(peak)) + " (step " + peak.n + "). Step time is each step's own runtime.txt.</p>" : "") +
+      C.barList(slow.map((s) => ({ label: M.stepName(s), sub: "step " + s.n, value: s.runtime_s, text: esc(fmtDur(s.runtime_s)), tip: s.dir + "\n" + fmtDur(s.runtime_s) + (M.isNum(s.peak_rss_mib) ? "\npeak memory " + F.num(s.peak_rss_mib) + " MiB" : "") }))) +
+      (peak ? "<p class='an-foot'>Peak memory: <b>" + esc(F.num(peak.peak_rss_mib)) + " MiB</b> in " + esc(M.stepName(peak)) + " (step " + peak.n + "). Step time is each step's own runtime.txt.</p>" : "") +
       "</div>";
   }
 
@@ -875,7 +876,7 @@ function renderFlow() {
   const codes = Object.keys(_v).filter((k) => /^flow__warnings__count:/.test(k)).map((k) => ({ code: k.split(":")[1], n: g(k), k })).filter((x) => M.isNum(x.n)).sort((a, b) => b.n - a.n);
   const lintW = g("design__lint_warning__count");
   const warn = (codes.length || M.isNum(lintW)) ? "<div class='an-card'><div class='an-card-h'>Warnings <span class='muted'>by tool message code</span></div>" +
-    (codes.length ? C.barList(codes.map((c) => ({ label: c.code, mono: true, value: c.n, tone: "s3", text: esc(M.num(c.n)) + provBtn(c.k), tip: c.code + ": " + c.n + " times\n" + c.k }))) : "<p class='muted'>No tool warnings were counted.</p>") +
+    (codes.length ? C.barList(codes.map((c) => ({ label: c.code, mono: true, value: c.n, tone: "s3", text: esc(F.num(c.n)) + provBtn(c.k), tip: c.code + ": " + c.n + " times\n" + c.k }))) : "<p class='muted'>No tool warnings were counted.</p>") +
     "<dl class='an-facts'>" + fact("Lint warnings (Verilator)", "design__lint_warning__count") + fact("Timing constructs in RTL", "design__lint_timing_construct__count") + fact("Flow errors", "flow__errors__count") + "</dl>" +
     "<p class='an-foot'>Codes like DRT-0349 are OpenROAD message IDs; search the step logs (Runs) for the full text.</p></div>" : "";
 
@@ -908,10 +909,10 @@ function renderHistory() {
   const tiles = HISTORY.filter(([k]) => t.series && t.series[k]).map(([k, label]) => {
     const vals = t.series[k].map(num0);
     const cur = sel >= 0 ? t.series[k][sel] : null;
-    const s = M.show(k, cur);
+    const s = F.show(k, cur);
     const fin = vals.filter((v) => v !== null);
     const lo = Math.min(...fin), hi = Math.max(...fin);
-    const rs = (v) => { const x = M.show(k, v); return x.text + (x.unit ? " " + x.unit : ""); };
+    const rs = (v) => { const x = F.show(k, v); return x.text + (x.unit ? " " + x.unit : ""); };
     const range = !fin.length ? "no values yet"
       : lo === hi ? "the same in all " + fin.length + " runs with a value"
       : "range " + rs(lo) + " to " + rs(hi);
@@ -1040,7 +1041,7 @@ function exportCsv() {
   if (!keys.length) { toast.show("No metrics to export.", "warn"); return; }
   const head = ["metric", "label", "value", "unit"].concat(_b ? ["baseline (" + _baseTag + ")"] : []);
   const rows = [head].concat(keys.map((k) => {
-    const u = M.unitOf(M.parseKey(k).base);
+    const u = F.unitOf(M.parseKey(k).base);
     return [k, M.labelOf(k) || "", _v[k], u === "ratio" ? "ratio" : u].concat(_b ? [_b[k] === undefined ? "" : _b[k]] : []);
   }));
   downloadCsv((_tag || "run") + "-metrics.csv", toCsv(rows));
