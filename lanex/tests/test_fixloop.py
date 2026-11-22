@@ -130,6 +130,54 @@ def test_a_fix_resumes_from_its_reader_on_the_old_runs_state(tmp_path):
     assert p["ok"] and not p["drift"]["settings"] and not p["drift"]["files"]
 
 
+def _stamp(run: Path, **tc) -> None:
+    g = json.loads((run / "gui-run.json").read_text())
+    g["toolchain"] = tc
+    g["run_mode"] = tc.get("run_mode")
+    (run / "gui-run.json").write_text(json.dumps(g))
+
+
+def test_resume_refuses_to_mix_librelane_versions_and_a_whole_run_is_fine(tmp_path, monkeypatch):
+    d = _design(tmp_path)
+    _stamp(_run(d, "try1", 28, stopped=28), librelane_version="3.0.3", run_mode="local")
+    monkeypatch.setattr(branch, "versions_now", lambda: {"librelane": "3.0.4", "image": None})
+    monkeypatch.setattr(branch, "_pdk_pin", lambda pdk: None)
+    p = branch.plan(d, "try1", {"FP_CORE_UTIL": "35"})
+    assert not p["ok"]
+    assert p["drift"]["versions"] == [{"what": "librelane", "label": "LibreLane", "was": "3.0.3", "now": "3.0.4"}]
+    assert "LibreLane 3.0.3 then, 3.0.4 now" in p["blocked"] and "run the whole flow" in p["blocked"]
+    assert not any(s["ok"] for s in p["stages"])
+    full = branch.plan(d, "try1", {"FP_CORE_UTIL": "35"}, start="full")
+    assert full["ok"] and full["resume"] is None
+
+
+def test_resume_refuses_a_changed_image_or_pdk(tmp_path, monkeypatch):
+    d = _design(tmp_path)
+    run = _run(d, "c1", 28, stopped=28,
+               resolved={"PDK_ROOT": "/home/u/.ciel/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71"})
+    _stamp(run, librelane_version="3.0.4", run_mode="container",
+           image="ghcr.io/librelane/librelane:3.0.4@sha256:eab07a50fa9ae481f631d904bd9fbaa99752c587fdbddb7c8cf2ac04208eecd9")
+    monkeypatch.setattr(branch, "versions_now", lambda: {
+        "librelane": "3.0.4", "image": "ghcr.io/librelane/librelane:3.0.4@sha256:0123456789abcdef0123456789abcdef"})
+    monkeypatch.setattr(branch, "_pdk_pin", lambda pdk: "0fe599b2afb6708d281543108caf8310912f54af")
+    p = branch.plan(d, "c1", {"FP_CORE_UTIL": "35"})
+    assert [v["what"] for v in p["drift"]["versions"]] == ["image", "pdk"]
+    assert "the sky130A PDK 8afc8346a57f then, 0fe599b2afb6 now" in p["blocked"]
+    # The same image and PDK: nothing to say.
+    monkeypatch.setattr(branch, "versions_now", lambda: {
+        "librelane": "3.0.4", "image": "ghcr.io/librelane/librelane@sha256:eab07a50fa9ae481f631d904bd9fbaa99752c587fdbddb7c8cf2ac04208eecd9"})
+    monkeypatch.setattr(branch, "_pdk_pin", lambda pdk: "8afc8346a57fe1ab7934ba5a6056ea8b43078e71")
+    assert branch.plan(d, "c1", {"FP_CORE_UTIL": "35"})["ok"]
+
+
+def test_a_run_from_before_lanex_stamped_versions_still_resumes(tmp_path, monkeypatch):
+    d = _design(tmp_path)
+    _run(d, "old", 28, stopped=28)
+    monkeypatch.setattr(branch, "versions_now", lambda: {"librelane": "3.0.4", "image": None})
+    monkeypatch.setattr(branch, "_pdk_pin", lambda pdk: None)
+    assert branch.plan(d, "old", {"FP_CORE_UTIL": "35"})["ok"]
+
+
 def test_a_value_set_for_the_old_run_only_stays_that_way(tmp_path):
     d = _design(tmp_path)
     _run(d, "die", 28, stopped=28, overrides={"FP_SIZING": "absolute", "DIE_AREA": "0 0 60 60"},
