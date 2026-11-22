@@ -297,6 +297,51 @@ def _known_var_names() -> frozenset:
     return frozenset(v["name"] for v in introspect.list_variables())
 
 
+@lru_cache(maxsize=1)
+def _var_info() -> Dict[str, Dict[str, Any]]:
+    """introspect's description of every variable (kind, choices, default,
+    units, description), by name. Empty without LibreLane."""
+    try:
+        return {v["name"]: v for v in introspect.list_variables()}
+    except Exception:
+        return {}
+
+
+@lru_cache(maxsize=1)
+def _variable_objects() -> Dict[str, Any]:
+    """LibreLane's own ``Variable`` objects by name, gathered the way
+    introspect gathers them, so a swept value is checked exactly the way
+    LibreLane will read it from ``-c VAR=value``. Empty without LibreLane."""
+    out: Dict[str, Any] = {}
+    if not getattr(introspect, "_LIBRELANE_AVAILABLE", False):
+        return out
+    try:
+        from librelane.config.config import (flow_common_variables, pad_variables,
+                                              pdk_variables, scl_variables)
+        for var in flow_common_variables + pad_variables + pdk_variables + scl_variables:
+            out.setdefault(var.name, var)
+    except Exception:
+        pass
+    try:
+        steps = introspect._step_registry().values()
+    except Exception:
+        steps = []
+    for cls in steps:
+        try:
+            for var in cls.get_all_config_variables():
+                out.setdefault(var.name, var)
+        except Exception:
+            continue
+    try:
+        flows = introspect._flow_registry().values()
+    except Exception:
+        flows = []
+    for cls in flows:
+        for var in getattr(cls, "config_vars", None) or []:
+            out.setdefault(var.name, var)
+    return out
+
+
 _VAR_RX = re.compile(r"[A-Z][A-Z0-9_]{0,79}")
 
 
@@ -305,6 +350,116 @@ def _format_value(v: Any) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     return str(v)
+
+
+# Kinds whose values can be checked before any run (introspect._kind_of).
+# Paths, lists, dicts and free text are left to LibreLane: a path is only
+# known to be right once the run resolves it.
+_CHECKED_KINDS = ("int", "number", "bool", "choice", "numbers")
+
+# Values LibreLane takes but that can only fail: checked before the first
+# point so a typo does not cost a full run.
+_LIMITS = {
+    "FP_CORE_UTIL": (0.0, 100.0, "a percentage above 0 and at most 100"),
+    "PL_TARGET_DENSITY_PCT": (0.0, 100.0, "a percentage above 0 and at most 100"),
+    "CLOCK_PERIOD": (0.0, None, "a clock period in ns above 0"),
+}
+
+
+def _looks_like(kind: str, s: str, choices: Sequence[str]) -> bool:
+    """A plain check of *s* against *kind* when LibreLane's own Variable is
+    not at hand (tests without LibreLane, a variable introspect lists only
+    by its description)."""
+    def isnum(x: str) -> bool:
+        try:
+            f = float(x)
+        except ValueError:
+            return False
+        return f == f and abs(f) != float("inf")
+    if kind == "int":
+        return re.fullmatch(r"[+-]?\d+", s) is not None
+    if kind == "number":
+        return isnum(s)
+    if kind == "bool":
+        return s.lower() in ("true", "false", "1", "0")
+    if kind == "choice":
+        return not choices or s in choices
+    if kind == "numbers":
+        parts = [p for p in re.split(r"[,;\s]+", s) if p]
+        return bool(parts) and all(isnum(p) for p in parts)
+    return True
+
+
+def _type_words(var: str, s: str, kind: str, choices: Sequence[str]) -> str:
+    shown = s if len(s) <= 40 else s[:37] + "..."
+    if kind == "int":
+        return f"{var} takes a whole number, and '{shown}' isn't one."
+    if kind == "number":
+        return f"{var} takes a number, and '{shown}' isn't one."
+    if kind == "bool":
+        return f"{var} takes true or false, not '{shown}'."
+    if kind == "choice":
+        opts = ", ".join(list(choices)[:8]) + (", ..." if len(choices) > 8 else "")
+        return f"{var} takes one of {opts}, not '{shown}'."
+    if kind == "numbers":
+        return f"{var} takes numbers separated by spaces (like 0 0 200 200), not '{shown}'."
+    return f"{var} can't take '{shown}'."
+
+
+def check_value(var: str, value: Any) -> Optional[str]:
+    """Why LibreLane would refuse *value* for *var*, in plain words, or None.
+
+    Numbers, whole numbers, true/false, choices and number lists are checked
+    with LibreLane's own ``Variable.compile`` (the reading ``-c VAR=value``
+    gets), so ``FP_CORE_UTIL=abc`` is refused here instead of failing a run;
+    a few settings also have a range that can only fail (``_LIMITS``)."""
+    s = _format_value(value).strip()
+    if not s:
+        return f"{var}: one of its values is empty."
+    info = _var_info().get(var) or {}
+    kind = info.get("kind")
+    choices = info.get("choices") or []
+    if kind in _CHECKED_KINDS:
+        obj = _variable_objects().get(var)
+        ok = True
+        if obj is not None:
+            try:
+                from librelane.common.generic_dict import GenericDict
+                obj.compile(GenericDict({var: s}), warning_list_ref=[], permissive_typing=True)
+            except Exception:
+                ok = False
+        else:
+            ok = _looks_like(kind, s, choices)
+        if not ok:
+            return _type_words(var, s, kind, choices)
+    lim = _LIMITS.get(var)
+    if lim:
+        lo, hi, words = lim
+        try:
+            x = float(s)
+        except ValueError:
+            return _type_words(var, s, "number", [])
+        if not (x > lo) or (hi is not None and x > hi):
+            return f"{var} = {s} can't work: it takes {words}."
+    return None
+
+
+def value_problems(axes: Sequence[Dict[str, Any]], limit: int = 8) -> List[Dict[str, str]]:
+    """Every swept value LibreLane would refuse: ``[{var, value, message}]``."""
+    out: List[Dict[str, str]] = []
+    for ax in axes or []:
+        var = ax.get("var") if isinstance(ax, dict) else None
+        if not isinstance(var, str) or not var:
+            continue
+        for v in ax.get("values") or []:
+            if isinstance(v, (dict, list)) or v is None:
+                continue
+            msg = check_value(var, v)
+            if msg:
+                out.append({"var": var, "value": _format_value(v), "message": msg})
+                if len(out) >= limit:
+                    return out
+    return out
 
 
 def expand_sweep(spec: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -359,6 +514,11 @@ def expand_sweep(spec: Dict[str, Any]) -> List[Dict[str, str]]:
     # otherwise be materialised (and hang the server) before being refused.
     if count > MAX_COMBOS:
         raise ValueError(f"sweep expands to {count} runs (max {MAX_COMBOS}); narrow it down")
+    # Every value is checked the way LibreLane will read it, before any point
+    # runs: a typo must not cost a full run (or every point of the sweep).
+    bad = value_problems(axes, limit=3)
+    if bad:
+        raise ValueError(" ".join(b["message"] for b in bad))
     if mode == "list":
         combos = [[ax["values"][i] for ax in axes] for i in range(count)]
     else:
@@ -393,13 +553,15 @@ def _slug(v: Any) -> str:
     return out.strip("_") or "x"
 
 
-def sweep_run_tags(design_dir: str | Path, overrides_list: Sequence[Dict[str, Any]]) -> List[str]:
+def sweep_run_tags(design_dir: str | Path, overrides_list: Sequence[Dict[str, Any]],
+                   taken: Sequence[str] = ()) -> List[str]:
     """One run name per sweep point, named by the values it tries
     (``sweep-util-65``; two variables: ``sweep-util-50-clk-10``). A name that
-    already has a run folder, or repeats within the sweep, gets ``-2``, ``-3``…
-    so an earlier sweep's runs are never overwritten."""
+    already has a run folder, repeats within the sweep, or is in *taken* (the
+    points a continued sweep already has) gets ``-2``, ``-3``… so an earlier
+    run is never overwritten."""
     runs_root = Path(design_dir) / "runs"
-    used: set = set()
+    used: set = set(taken or ())
     tags: List[str] = []
     for ov in overrides_list:
         parts = []
@@ -453,7 +615,205 @@ def point_outcome(run_dir: str | Path) -> Dict[str, Any]:
             verdict = None
     return {"ok": kind == "clean", "kind": kind, "stage": rx.get("stage"),
             "step": step.get("id") or step.get("dir"), "reason": reason,
-            "verdict": verdict, "good": kind == "clean" and verdict == "passed"}
+            "verdict": verdict, "good": kind == "clean" and verdict == "passed",
+            "steps_done": rx.get("steps_done")}
+
+
+def failed_before_any_step(res: Dict[str, Any]) -> bool:
+    """A point that ended before LibreLane finished a single step: the run
+    never started, or its config did not load. The same reason twice in a row
+    means every other point would end the same way."""
+    if res.get("ok") or res.get("kind") == "stopped":
+        return False
+    if res.get("kind") == "error":
+        return True
+    return res.get("steps_done") == 0 and res.get("kind") in ("halted", "incomplete", None)
+
+
+# ---------------------------------------------------------------- planning
+# What the sheet needs before a sweep starts: each setting's value in this
+# design (and where it comes from), every value checked, the one-off Setup
+# settings that ride along, and the die-sizing guard.
+
+_DIE_VARS = ("FP_SIZING", "DIE_AREA", "CORE_AREA")
+
+
+def _blank(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def effective_values(design_dir: str | Path, keys: Sequence[str],
+                     base_overrides: Optional[Dict[str, Any]] = None,
+                     pdk: Optional[str] = None, scl: Optional[str] = None) -> Dict[str, Any]:
+    """Each key's value for a run of this design, and where it comes from.
+
+    The order LibreLane applies: a ``-c`` override (the one-off settings a
+    sweep carries) wins over the config, a ``pdk::``/``scl::`` section that
+    matches the run's PDK wins over the config's top level, and the
+    variable's default is used when nothing sets it (a PDK variable then
+    comes from the PDK, which is not read here: ``value`` is None).
+
+    Returns ``{"values": {key: {value, source, config, config_source,
+    scoped, default, description, units, kind, choices}}, "pdk", "scl",
+    "config"}`` with ``source`` one of override / config / pdk / default."""
+    from . import configedit
+    info = configedit.read_config(design_dir)
+    data = info.get("data") or {}
+    name = info.get("name") or "the config"
+    ov = {k: v for k, v in (base_overrides or {}).items() if not _blank(v)}
+    try:
+        named = configedit.config_pdk(design_dir)
+    except Exception:
+        named = {}
+    pdk = pdk or ov.get("PDK") or named.get("pdk") or None
+    scl = scl or ov.get("STD_CELL_LIBRARY") or (named.get("scl") if pdk == named.get("pdk") else None) or None
+    meta_all = _var_info()
+    out: Dict[str, Any] = {}
+    for k in keys:
+        if not isinstance(k, str) or not _VAR_RX.fullmatch(k):
+            continue
+        meta = meta_all.get(k) or {}
+        scoped = configedit.scoped_values(data, k)
+        applying = [s for s in scoped if configedit.applies(s, pdk, scl)]
+        config_value, config_source = None, None
+        if applying:
+            # Sections nest (pdk:: then scl:: inside it): the deepest that
+            # matches is applied last, so it wins.
+            config_value, config_source = applying[-1]["value"], f"{name}, {applying[-1]['scope']}"
+        elif k in data:
+            config_value, config_source = data.get(k), name
+        if k in ov:
+            value, source = ov[k], "override"
+        elif config_source:
+            value, source = config_value, "config"
+        elif meta.get("pdk"):
+            value, source = None, "pdk"
+        else:
+            value, source = meta.get("default"), "default"
+        out[k] = {
+            "value": value, "source": source,
+            "config": config_value, "config_source": config_source,
+            "scoped": [{"scope": s["scope"], "value": s["value"],
+                        "applies": configedit.applies(s, pdk, scl)} for s in scoped],
+            "default": meta.get("default"), "description": meta.get("description") or "",
+            "units": meta.get("units"), "kind": meta.get("kind"),
+            "choices": meta.get("choices") or [], "known": bool(meta),
+        }
+    return {"values": out, "pdk": pdk, "scl": scl, "config": name}
+
+
+def _as_text(v: Any) -> str:
+    if isinstance(v, (list, tuple)):
+        return " ".join(str(x) for x in v)
+    return "" if v is None else _format_value(v)
+
+
+def plan_sweep(design_dir: str | Path, *, axes: Sequence[Dict[str, Any]], mode: str = "grid",
+               base_overrides: Optional[Dict[str, Any]] = None,
+               keys: Sequence[str] = ()) -> Dict[str, Any]:
+    """Everything the sweep sheet shows before Start, and the checks Start
+    repeats: ``{ok, count, points, problems, value_problems, warnings,
+    riders, context, pdk, scl, config}``. ``problems`` block the start;
+    ``warnings`` do not."""
+    base = {k: v for k, v in (base_overrides or {}).items() if not _blank(v)}
+    swept = [a.get("var") for a in axes or [] if isinstance(a, dict) and isinstance(a.get("var"), str)]
+    want = list(dict.fromkeys([v for v in swept if v] + [k for k in keys if isinstance(k, str)] + list(_DIE_VARS)))
+    ctx = effective_values(design_dir, want, base)
+    vals = ctx["values"]
+    problems: List[str] = []
+    warnings: List[str] = []
+    points: List[Dict[str, str]] = []
+    vp = value_problems(axes)
+    if axes:
+        try:
+            points = expand_sweep({"axes": list(axes), "mode": mode})
+        except ValueError as ex:
+            problems.append(str(ex))
+    # A fixed die: FP_CORE_UTIL only sizes the die when FP_SIZING is relative.
+    sizing = vals.get("FP_SIZING", {})
+    fixed = str(_as_text(sizing.get("value")) or "relative").strip().lower() == "absolute"
+    if fixed and "FP_CORE_UTIL" in swept and "FP_SIZING" not in swept:
+        where = "a one-off setting" if sizing.get("source") == "override" else (sizing.get("config_source") or "the config")
+        die = _as_text(vals.get("DIE_AREA", {}).get("value"))
+        problems.append(
+            f"FP_SIZING is absolute in {where}: the die is fixed" + (f" at DIE_AREA {die}" if die else "") +
+            ", so FP_CORE_UTIL does nothing and every point would build the same chip. "
+            "Sweep DIE_AREA instead, or add FP_SIZING with the value relative.")
+    if "DIE_AREA" in swept and "CORE_AREA" not in swept and not _blank(vals.get("CORE_AREA", {}).get("value")):
+        problems.append(
+            f"CORE_AREA is fixed at {_as_text(vals['CORE_AREA']['value'])}: a smaller DIE_AREA would cut into it. "
+            "Sweep CORE_AREA with it, or take CORE_AREA out of the config.")
+    if "DIE_AREA" in swept and not fixed and "FP_SIZING" not in swept:
+        problems.append("DIE_AREA is only used when FP_SIZING is absolute, and it is relative here. "
+                        "Add FP_SIZING with the value absolute, or sweep FP_CORE_UTIL instead.")
+    # The one-off settings from Setup ride along on every point.
+    riders = {k: v for k, v in base.items() if k not in ("PDK", "STD_CELL_LIBRARY") and k not in swept}
+    for v in swept:
+        if v in base:
+            warnings.append(f"{v} is also a one-off setting on Setup ({_as_text(base[v])}): the sweep's values replace it.")
+    return {"ok": True, "count": len(points), "points": points, "problems": problems,
+            "value_problems": vp, "warnings": warnings, "riders": riders,
+            "context": vals, "pdk": ctx["pdk"], "scl": ctx["scl"], "config": ctx["config"]}
+
+
+def continuation(manifest: Dict[str, Any], *, rerun: Optional[Sequence[str]] = None,
+                 values: Optional[Sequence[Any]] = None) -> Dict[str, Any]:
+    """The points that continue a finished sweep: its failed points again
+    (``rerun``: their tags), or more values of its one setting (``values``).
+    Returns ``{points, reruns: [old tags, in point order], axes}`` with the
+    manifest's axes grown by the new values. Raises ``ValueError``."""
+    axes = [dict(a) for a in manifest.get("axes") or [] if isinstance(a, dict)]
+    tags = list(manifest.get("tags") or [])
+    pts = list(manifest.get("points") or [])
+    results = manifest.get("results") or {}
+    if rerun:
+        out, old = [], []
+        for t in rerun:
+            v = (results.get(t) or {}).get("values")
+            if not v and t in tags and tags.index(t) < len(pts):
+                v = pts[tags.index(t)]
+            if not v:
+                raise ValueError(f"{t} is not a point of this sweep.")
+            out.append({k: _format_value(x) for k, x in v.items()})
+            old.append(t)
+        if not out:
+            raise ValueError("No failed points to run again.")
+        return {"points": out, "reruns": old, "axes": axes}
+    if values is not None:
+        if len(axes) != 1:
+            raise ValueError("Values can be added to a sweep of one setting only.")
+        var = axes[0].get("var")
+        have = {_format_value(x) for x in axes[0].get("values") or []}
+        new = []
+        for x in values:
+            s = _format_value(x).strip()
+            if s and s not in have and s not in new:
+                new.append(s)
+        if not new:
+            raise ValueError(f"Those values of {var} are already in the sweep.")
+        expand_sweep({"axes": [{"var": var, "values": new}], "mode": "grid"})   # checks names and values
+        if len(tags) + len(new) > MAX_COMBOS:
+            raise ValueError(f"A sweep holds at most {MAX_COMBOS} runs.")
+        axes[0]["values"] = list(axes[0].get("values") or []) + new
+        return {"points": [{var: s} for s in new], "reruns": [], "axes": axes}
+    raise ValueError("Say which points to run: failed ones again, or new values.")
+
+
+def record_end(design_dir: str | Path, sweep_id: str, end: Dict[str, Any]) -> None:
+    """Note how and why a sweep's queue ended (``ended``): every point ran,
+    you stopped it, it stopped at the first clean run, or it stopped because
+    the points were failing before any step ran. Best-effort; never raises."""
+    try:
+        from . import platform_env
+        with _sweeps_lock:
+            for s in load_sweeps(design_dir):
+                if s.get("id") == sweep_id:
+                    s["ended"] = {**{k: v for k, v in end.items() if k in ("reason", "detail")},
+                                  "at": platform_env.local_now().isoformat(timespec="seconds")}
+                    record_sweep(design_dir, s)
+                    return
+    except Exception:
+        pass
 
 
 class DseJob:
@@ -480,8 +840,12 @@ class DseJob:
         self.total = 0
         self.started_at: Optional[float] = None
         self._on_point = None
+        self._on_done = None
         self.stop_when_good = False
         self.stopped_early = False
+        # Why the queue ended: done / stopped / first-clean / failed-fast.
+        self.end_reason: Optional[str] = None
+        self.end_detail: Optional[str] = None
 
     @property
     def active(self) -> bool:
@@ -500,16 +864,19 @@ class DseJob:
                 "total": self.total,
                 "started_at": self.started_at,
                 "stopped_early": self.stopped_early,
+                "end_reason": self.end_reason,
+                "end_detail": self.end_detail,
             }
 
     def start(self, *, start_one, overrides_list: Sequence[Dict[str, str]],
               tags: Sequence[str], sweep_id: Optional[str] = None,
-              on_point=None, stop_when_good: bool = False) -> Dict[str, Any]:
+              on_point=None, stop_when_good: bool = False, on_done=None) -> Dict[str, Any]:
         """Begin the queue. ``start_one(tag, overrides)`` runs one point through
         the runner and blocks until it ends; it returns the point's outcome
         (``{ok, kind, stage, step, reason}``, see :func:`point_outcome`) or a
         bare bool. ``on_point(tag, result)`` is called after each point (the
-        route persists results into the sweep manifest with it). Returns
+        route persists results into the sweep manifest with it), and
+        ``on_done({reason, detail})`` once the queue ends. Returns
         ``{ok, count, run_tags}``."""
         with self._lock:
             if self.active:
@@ -523,8 +890,11 @@ class DseJob:
             self.total = len(tags)
             self.started_at = time.time()
             self._on_point = on_point
+            self._on_done = on_done
             self.stop_when_good = bool(stop_when_good)
             self.stopped_early = False
+            self.end_reason = None
+            self.end_detail = None
             self.running_tag = None
             self._thread = threading.Thread(
                 target=self._run, args=(start_one, list(overrides_list), list(tags)),
@@ -542,6 +912,8 @@ class DseJob:
         return self._cancel.is_set()
 
     def _run(self, start_one, overrides_list, tags) -> None:
+        failed_fast = None
+        prev_early = None      # the reason of the last point that ended before any step
         for i, tag in enumerate(tags):
             if self._cancel.is_set():
                 break
@@ -588,9 +960,33 @@ class DseJob:
                     self.stopped_early = True
                     self.queued = []
                 break
+            # Two points in a row that ended the same way before any step
+            # ran (the config did not load, the run would not start): the
+            # rest would too, so they are not run.
+            early = str(res.get("reason") or res.get("kind") or "") if failed_before_any_step(res) else None
+            if early and early == prev_early and i + 1 < len(tags) and not self._cancel.is_set():
+                failed_fast = early
+                with self._lock:
+                    self.queued = []
+                break
+            prev_early = early
+        cancelled = self._cancel.is_set()
+        reason = ("stopped" if cancelled else "first-clean" if self.stopped_early
+                  else "failed-fast" if failed_fast else "done")
+        with self._lock:
+            self.end_reason = reason
+            self.end_detail = failed_fast
+        # Recorded before the event, so a page that re-reads the sweeps on
+        # dse_done already finds why it ended.
+        if self._on_done:
+            try:
+                self._on_done({"reason": reason, "detail": failed_fast})
+            except Exception:  # pragma: no cover - persistence is best effort
+                pass
         events.publish("dse_done", {"done": list(self.done), "failed": list(self.failed),
-                                    "cancelled": self._cancel.is_set(), "sweep_id": self.sweep_id,
-                                    "stopped_early": self.stopped_early})
+                                    "cancelled": cancelled, "sweep_id": self.sweep_id,
+                                    "stopped_early": self.stopped_early, "reason": reason,
+                                    "detail": failed_fast})
         with self._lock:
             self.running_tag = None
             self.queued = []

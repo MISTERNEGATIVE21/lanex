@@ -1739,6 +1739,10 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     meta = _metric_meta()
     best: Dict[str, str] = {}
     metric_meta: Dict[str, Dict[str, Any]] = {}
+    # Only a run that passed can be the best at anything: a failed or stopped
+    # run's partial metrics (the area before routing, the runtime of a run cut
+    # short) would otherwise win.
+    passed = {r["col"] for r in runs if r.get("success")}
     for metric, per_col in metric_union.items():
         m = meta.get(metric)
         known = m is not None
@@ -1751,7 +1755,7 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
         if not known:
             continue
         numeric = {c: float(v) for c, v in per_col.items()
-                   if isinstance(v, (int, float)) and not isinstance(v, bool)
+                   if c in passed and isinstance(v, (int, float)) and not isinstance(v, bool)
                    and float(v) == float(v) and abs(float(v)) != float("inf")}
         if numeric:
             best[metric] = (max if hib else min)(numeric, key=numeric.get)
