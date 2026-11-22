@@ -3524,8 +3524,14 @@ def h_verify_rerun(handler: Any) -> None:
     if run_dir is None:
         _respond(handler, "no run to re-verify", 404)
         return
+    # The name the dialog showed (the dry run's plan): the new run gets it, so
+    # the run the person was told about is the one that appears.
+    new_tag = str(body.get("new_tag") or "").strip() or None
+    if new_tag and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", new_tag):
+        _respond(handler, "new_tag must be a plain run name (letters, digits, . _ -)", 400)
+        return
     try:
-        p = reverify.plan_rerun(design_dir, run_dir.name, step_id, sets)
+        p = reverify.plan_rerun(design_dir, run_dir.name, step_id, sets, new_tag=new_tag)
     except reverify.RerunError as ex:
         _respond(handler, str(ex), 400)
         return

@@ -986,7 +986,10 @@ async function rerun(stepId) {
     if (k) overrides[k] = v;
   }
   try {
-    const res = await api.verifyRerun({ step_id: stepId, overrides, run_tag: tag, run_mode: state.runMode });
+    // The run gets the name the dialog showed; if a run took that name
+    // meanwhile, the server picks a fresh one.
+    const ask = (name) => api.verifyRerun({ step_id: stepId, overrides, run_tag: tag, run_mode: state.runMode, ...(name ? { new_tag: name } : {}) });
+    const res = await ask(plan.tag).catch((ex) => { if (/exists already/.test(ex.message || "")) return ask(null); throw ex; });
     toast.show("Re-running " + stepId + " as run " + res.tag + ".", "success", 8000,
       { label: "Watch", run: () => import("./nav.js").then((m) => m.go("pipeline")) });
   } catch (ex) {
