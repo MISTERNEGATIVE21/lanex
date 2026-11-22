@@ -855,6 +855,15 @@ check("sweeps: Use this configuration writes typed values and warns only when a 
   assert.deepEqual(SW.stillWins({ CLOCK_PERIOD: 6 }, {}, same), []);
 });
 
+const { designToReopen } = await import(toUrl(resolve(MOD, "api.js")));
+check("reconnect: a restarted server gets this window's project back, never another window's", () => {
+  assert.equal(designToReopen(null, "/p/spm", null), "/p/spm", "the server lost its project in the restart");
+  assert.equal(designToReopen("/p/other", "/p/spm", null), null, "another window opened a project there: leave it");
+  assert.equal(designToReopen(null, "/p/spm", "/p/spm"), null, "the folder is gone");
+  assert.equal(designToReopen(null, "", null), null);
+  assert.match(readFileSync(resolve(MOD, "api.js"), "utf8"), /_wasDisconnected = false; _reopenDesign\(\);/);
+});
+
 check("dialogs: titles are plain text, never escaped by the caller (dialog.js sets textContent)", () => {
   const src = (f) => readFileSync(resolve(MOD, f), "utf8");
   for (const f of ["sweeps.js", "tools.js", "verify.js", "addfiles.js", "ide/main.js", "cells-macros.js"]) {
