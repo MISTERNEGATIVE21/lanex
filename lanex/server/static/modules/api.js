@@ -309,6 +309,9 @@ export const api = {
   verifyRerun: (payload) =>
     _fetch("/api/verify/rerun", { method: "POST", body: JSON.stringify(payload) }),
   dseStart: (payload) => _fetch("/api/dse/start", { method: "POST", body: JSON.stringify(payload) }),
+  // What a sweep would do, without starting it: values checked, each setting's
+  // value in this design, the one-off settings that ride along.
+  dsePlan: (payload) => _fetch("/api/dse/plan", { method: "POST", body: JSON.stringify(payload || {}) }),
   dseCancel: () => _fetch("/api/dse/cancel", { method: "POST", body: "{}" }),
   dseStatus: () => _fetch("/api/dse/status"),
   dseSweeps: () => _fetch("/api/dse/sweeps"),

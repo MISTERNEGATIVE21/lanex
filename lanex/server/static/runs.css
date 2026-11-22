@@ -216,6 +216,7 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .rn-foot { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 9px 14px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-muted); }
 .rn-foot[hidden] { display: none; }
 .rn-foot code { font-size: 12.5px; color: var(--text); background: none; padding: 0; }
+.rn-foot .rn-foot-csv { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
 .rn-foot .rn-key { display: inline-flex; align-items: center; gap: 6px; }
 .rn-foot .rn-key i { width: 8px; height: 8px; border-radius: 2px; }
 .rn-panel > .an-empty { margin: var(--s-4); }
@@ -345,6 +346,27 @@ body.theme-light .rn-viewing { color: var(--accent); border-color: color-mix(in 
 .sw-mode input, .sw-stop input { accent-color: var(--accent); }
 .sw-stop { display: flex; gap: 9px; align-items: flex-start; font-size: 14px; line-height: 1.45; margin-top: var(--s-2); }
 .sw-stop input { margin-top: 3px; }
+.sw-stop[hidden] { display: none; }
+.sw-n.is-bad { color: var(--fail); }
+/* A picked setting: what it is, its default and its value in this design. */
+.sw-info { grid-column: 1 / -1; display: grid; gap: 3px; margin: -2px 0 4px; font-size: 13px; line-height: 1.45; color: var(--text-muted); }
+.sw-info:empty { display: none; }
+.sw-desc { color: var(--text); text-wrap: pretty; }
+.sw-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; font-family: var(--mono); font-size: 12px; }
+.sw-facts > span { color: var(--text-muted); }
+.sw-facts .muted { font-family: var(--sans); }
+.sw-note {
+  margin: 0; padding: 9px 12px; font-size: 13.5px; line-height: 1.5; color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--met1) 34%, var(--border)); border-radius: var(--r-md);
+  background: linear-gradient(90deg, var(--accent-soft), transparent 75%), var(--surface-2); text-wrap: pretty;
+}
+.sw-note[hidden] { display: none; }
+/* The one-off settings that ride along on every point. */
+.sw-riders { font-size: 13.5px; line-height: 1.5; }
+.sw-riders p { margin: 4px 0; }
+.sw-riders ul { margin: 4px 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.sw-riders code { font-size: 12.5px; padding: 2px 7px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--warn) 12%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); color: var(--text-strong); }
+.sw-riders .sw-lbl { margin-top: var(--s-2); }
 .sw-foot { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-5); border-top: 1px solid var(--border); background: var(--bg-2); }
 .sw-spacer { flex: 1; }
 .sw-est { font-size: 14px; }
@@ -367,7 +389,44 @@ body.theme-light .sw-best-k { color: var(--accent); }
 .sw-best .btn { justify-self: start; margin-top: 4px; }
 .sw-best.is-fail .sw-best-k { color: var(--fail); }
 .sw-best.is-fail .sw-best-m { color: var(--text-muted); line-height: 1.5; }
-.sw-sum-act { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; margin-top: var(--s-3); font-size: 13.5px; }
+.sw-best-v b { font-family: var(--mono); font-size: 17px; font-weight: 600; color: var(--text-strong); }
+.sw-best-m code { font-size: 12.5px; color: var(--text); background: none; padding: 0; }
+.sw-sum-act { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; margin-top: var(--s-3); font-size: 13.5px; }
+.sw-sum-l { min-width: 0; }
+.sw-none { margin: var(--s-2) 0 0; font-size: 13.5px; }
+/* Why a sweep has fewer runs than it planned. */
+.sw-why { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 var(--s-3); padding: 8px 12px; font-size: 13.5px; line-height: 1.45; color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border)); border-left: 2px solid var(--warn); border-radius: var(--r-md); background: color-mix(in srgb, var(--warn) 7%, var(--surface)); }
+.sw-why svg { flex: none; margin-top: 2px; color: var(--warn); }
+.sw-plots-wrap { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.sw-mseg { justify-self: start; height: 28px; max-width: 100%; overflow-x: auto; }
+.sw-mseg .rn-segb { padding: 0 10px; font-size: 12.5px; }
+/* Results by value: the swept value(s) against how each point came out. */
+.sw-res-wrap { margin-top: var(--s-4); overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.sw-res { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.sw-res caption { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); background: var(--bg-2); }
+.sw-res th, .sw-res td { height: 36px; padding: 0 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.sw-res tbody tr:last-child td { border-bottom: 0; }
+.sw-res thead th { position: static; background: none; height: 32px; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); }
+.sw-res thead th small { font-size: 10.5px; letter-spacing: 0; text-transform: none; opacity: 0.75; }
+.sw-res .sw-num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-strong); }
+.sw-res td.sw-num.is-neg { color: var(--fail); font-weight: 600; }
+.sw-res-v { font-family: var(--mono); font-weight: 600; color: var(--text-strong); }
+.sw-res-v small { margin-left: 6px; font-weight: 400; font-size: 11.5px; color: var(--text-muted); }
+.sw-res-tag { font-family: var(--mono); font-size: 12.5px; color: var(--text-muted); }
+.sw-res .rn-v { font-size: 13.5px; }
+.sw-res-row { cursor: pointer; }
+.sw-res-row:hover > td { background: var(--hover); }
+.sw-res-row.is-old > td { opacity: 0.55; }
+.sw-res tr.is-missing > td { color: var(--text-muted); }
+/* "Use this configuration": the settings that change, now and after. */
+.sw-diff { width: 100%; border-collapse: collapse; margin: var(--s-2) 0; font-size: 14px; }
+.sw-diff th { text-align: left; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); padding: 0 8px 6px 0; }
+.sw-diff td { padding: 6px 8px 6px 0; border-top: 1px solid var(--border); vertical-align: baseline; }
+.sw-diff td .muted { display: block; font-size: 12px; }
+.sw-diff-from { font-family: var(--mono); color: var(--text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--fail) 60%, transparent); }
+.sw-diff-to { font-family: var(--mono); font-weight: 600; color: var(--pass); }
+.sw-add-out { min-height: 1.4em; margin: 8px 0 0; font-size: 13.5px; }
 .sw-plots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; min-width: 0; max-width: 900px; }
 .sw-plot { max-width: 445px; margin: 0; padding: 10px 12px 6px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
 .sw-plot figcaption { font-size: 13px; color: var(--text-muted); margin-bottom: 2px; }
@@ -384,3 +443,11 @@ body.theme-light .sw-best-k { color: var(--accent); }
 .sw-pt.is-fail path { stroke: var(--fail); stroke-width: 1.8; fill: none; }
 .sw-pt text { fill: var(--text); font-size: 11px; font-family: var(--mono); }
 @container (max-width: 940px) { .sw-sum { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- Compare with more than six runs (compare.js takes up to twelve) ---------- */
+/* The headline and settings blocks stack, and each table keeps its first
+   column (the metric or setting name) in view while the runs scroll. */
+#compare-body.cmp-many .cmp-grid { grid-template-columns: minmax(0, 1fr); }
+#compare-body.cmp-many .cmp-table th:first-child,
+#compare-body.cmp-many .cmp-table td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: inset -1px 0 0 var(--border); }
+#compare-body.cmp-many .cmp-table thead th:first-child { background: var(--bg-2); z-index: 2; }

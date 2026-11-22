@@ -381,41 +381,45 @@ check("display fidelity: all 300+ real run metrics render faithfully", () => {
   assert.equal(checked, keys.length);
 });
 
-// The Analytics charts draw from the same metrics object — the option builders
-// are pure (charts.js), so run them on the golden run's real values and require
-// exact passthrough into the series data. A unit conversion or key typo that
-// would plot wrong numbers fails here.
-const charts = await import(toUrl(resolve(MOD, "charts.js")));
-check("charts.js: golden run values reach the chart series unchanged", () => {
+// One formatter (metricfmt.js) for Runs, Compare, the sweep views and
+// Analytics: the golden run's numbers must read the same, in the same unit,
+// wherever they appear (audit 4.8: power was fixed mW in Runs, auto-prefixed
+// in Analytics and raw W in Compare; utilisation a fraction in Compare).
+const MF = await import(toUrl(resolve(MOD, "metricfmt.js")));
+const AM0 = await import(toUrl(resolve(MOD, "analytics-model.js")));
+check("metricfmt: power, utilisation and slack read the same on every page", () => {
   const raw = readFileSync(resolve(HERE, "goldens", "display_run", "metrics.json"), "utf8");
   const tokened = raw.replace(/([:\[,]\s*)(-?Infinity|NaN)(\s*[,}\]])/g, '$1"$2"$3');
   const m = JSON.parse(tokened);
+  const p = MF.show("power__total", m.power__total);
+  assert.match(p.unit, /^[mµn]W$/, "power is shown with an SI prefix, never raw W");
+  assert.ok(Math.abs(parseFloat(p.text) - m.power__total / { mW: 1e-3, "µW": 1e-6, nW: 1e-9 }[p.unit]) < 0.01);
+  const u = MF.show("design__instance__utilization", m.design__instance__utilization);
+  assert.equal(u.unit, "%");
+  assert.equal(Number(u.text), Math.round(m.design__instance__utilization * 1000) / 10);
+  assert.equal(MF.show("timing__setup__ws", 4.10025980329734).text, "+4.100");
+  assert.equal(MF.show("timing__setup__ws", 4.10025980329734, { compact: true }).text, "+4.10");
+  assert.equal(MF.show("design__die__area", 7214.42, { compact: true }).text, "7,214");
+  assert.equal(MF.show("design__die__area", 7214.42).text, "7,214.42", "compact only rounds in tables");
+  // A table reads down one prefix: the largest value's.
+  const sc = MF.scaleOf("power__total", [0.0021, 0.00004, null, "Infinity"]);
+  assert.deepEqual(sc, { div: 1e-3, unit: "mW" });
+  assert.equal(MF.showAt("power__total", 0.00004, sc).text, "0.040");
+  assert.equal(MF.showAt("power__total", 0.00004, sc).unit, "mW");
+  assert.equal(MF.scaleOf("design__die__area", [1, 2]), null, "only W gets a column prefix");
+  // Analytics reads the very same functions (re-exported, not copied).
+  assert.equal(AM0.show, MF.show);
+  assert.equal(AM0.si, MF.si);
+});
 
-  const slack = charts.timingSlackOption(m);
-  const wantSlack = ["timing__setup__ws", "timing__setup__tns",
-                     "timing__hold__ws", "timing__hold__tns"]
-    .map((k) => m[k]).filter((v) => typeof v === "number" && isFinite(v));
-  assert.deepEqual(slack.series[0].data.map((d) => d.value), wantSlack,
-    "slack bars diverged from the run's timing metrics");
-
-  const util = charts.utilizationOption(m);
-  const wantPct = Math.round(m["design__instance__utilization"] * 1000) / 10;
-  assert.equal(util.series[0].data[0].value, wantPct);
-
-  const power = charts.powerOption(m);
-  if (power) {
-    for (const d of power.series[0].data) {
-      const key = { Internal: "power__internal__total",
-                    Switching: "power__switching__total",
-                    Leakage: "power__leakage__total" }[d.name];
-      assert.equal(d.value, m[key], `${d.name} power mangled`);
-    }
+check("Runs, Compare and the sweep views format metrics through metricfmt.js", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["runs.js", "compare.js", "sweeps.js", "analytics.js"]) {
+    assert.match(src(f), /from "\.\/metricfmt\.js"/, f + " has its own metric formatting");
   }
-
-  // Non-finite values must be DROPPED from charts (honest), never plotted as 0.
-  const inf = charts.trendOption(
-    [{ tag: "a", value: "Infinity" }, { tag: "b", value: 1 }, { tag: "c", value: 2 }], "k");
-  assert.deepEqual(inf.series[0].data, [1, 2], "non-finite plotted instead of dropped");
+  // The old fixed-mW and fraction formatters are gone from Runs.
+  assert.doesNotMatch(src("runs.js"), /p \* 1e3|u \* 100; \}/);
+  assert.ok(!readdirSync(MOD).includes("charts.js"), "charts.js (imported by nothing) stays deleted");
 });
 
 // ------------------------------------------------ provenance line highlight
@@ -672,6 +676,71 @@ check("compare: a delta says how far a number moved, and whether that is better"
   assert.match(cell, /class='cmp-d is-worse'>\+23 %</);
 });
 
+// ------------------------------------------------ sweeps (audit G11, 4.7)
+const SW = (await import(toUrl(resolve(MOD, "sweeps.js"))))._test;
+check("sweeps: a range typo is an error, never one text value; values are type-checked", () => {
+  assert.deepEqual(SW.parseValuesStrict("35:65:15"), { values: ["35", "50", "65"], error: "" });
+  assert.deepEqual(SW.parseValuesStrict("10, 9, 8").values, ["10", "9", "8"]);
+  assert.match(SW.parseValuesStrict("35:65:x").error, /isn't a range/);
+  assert.match(SW.parseValuesStrict("35:65").error, /isn't a range/);
+  assert.match(SW.parseValuesStrict("40:20:0").error, /step/);
+  assert.match(SW.parseValuesStrict("40, abc", "number").error, /'abc' isn't a number/);
+  assert.match(SW.parseValuesStrict("3, 3.5", "int").error, /whole number/);
+  assert.match(SW.parseValuesStrict("yes", "bool").error, /true or false/);
+  assert.match(SW.parseValuesStrict("fixed", "choice", ["absolute", "relative"]).error, /isn't one of absolute, relative/);
+  assert.equal(SW.parseValuesStrict("0 0 300 300, 0 0 270 270", "numbers").error, "");
+  assert.match(SW.parseValuesStrict("0 0 x 300", "numbers").error, /numbers separated by spaces/);
+  // Text settings keep their colons (a path, a dir:: value).
+  assert.equal(SW.parseValuesStrict("dir::src/a.v", "path").error, "");
+  assert.equal(SW.countRuns([{ values: "35:65:x" }], "grid"), 0);
+});
+
+check("sweeps: the fastest-clock preset starts at this design's clock and goes down", () => {
+  assert.deepEqual(SW.clockValues(10), [10, 9, 8, 7]);
+  // A past run's slack says where the limit is: the steps reach it.
+  assert.deepEqual(SW.clockValues(10, { limit: 3.8 }), [10, 8, 6, 4]);
+  // Failing timing now: periods above the current one.
+  const up = SW.clockValues(10, { limit: 10.8 });
+  assert.equal(up[0], 10);
+  assert.ok(up.slice(1).every((v) => v > 10), up.join());
+  assert.deepEqual(SW.clockValues(0), []);
+  assert.deepEqual(SW.dieValues([0, 0, 300, 300]), ["0 0 300 300", "0 0 270 270", "0 0 240 240"]);
+  assert.deepEqual(SW.dieValues("10 10 110 60"), ["10 10 110 60", "10 10 100 55", "10 10 90 50"]);
+  assert.deepEqual(SW.dieValues("0 0 100"), []);
+});
+
+check("sweeps: points in planned order, a missing point and why the sweep ended short", () => {
+  const vOf = (r) => ({ state: r.st });
+  const sw = { id: "s", axes: [{ var: "CLOCK_PERIOD", values: ["10", "9", "8"] }], tags: ["c10", "c9", "c8"],
+    points: [{ CLOCK_PERIOD: "10" }, { CLOCK_PERIOD: "9" }, { CLOCK_PERIOD: "8" }], count: 3 };
+  const runs = [{ tag: "c9", st: "stopped", started_at: "2" }, { tag: "c10", st: "passed", started_at: "1" }];
+  const pts = SW.sweepPoints(sw, runs, vOf);
+  assert.deepEqual(pts.map((p) => p.tag), ["c10", "c9", "c8"]);
+  assert.equal(pts[2].missing, true);
+  assert.equal(pts[2].v.CLOCK_PERIOD, "8");
+  assert.match(SW.endReason({ ...sw, ended: { reason: "stopped" } }, pts), /You stopped it: 2 of 3 points ran/);
+  assert.match(SW.endReason({ ...sw, ended: { reason: "interrupted", assumed: true } }, pts), /was stopped/);
+  assert.match(SW.endReason({ ...sw, ended: { reason: "interrupted" } }, SW.sweepPoints(sw, [runs[1]], vOf)), /closed or restarted/);
+  assert.match(SW.endReason({ ...sw, ended: { reason: "failed-fast", detail: "config did not load" } }, pts), /before any step ran \(config did not load\)/);
+  assert.equal(SW.endReason({ ...sw, active: true }, pts), "");
+  // A rerun replaces the point it reran.
+  const re = SW.sweepPoints({ ...sw, tags: [...sw.tags, "c8-2"], points: [...sw.points, { CLOCK_PERIOD: "8" }], reruns: { c8: "c8-2" } },
+    [...runs, { tag: "c8", st: "failed" }, { tag: "c8-2", st: "passed" }], vOf);
+  assert.equal(re.find((p) => p.tag === "c8").superseded, "c8-2");
+});
+
+const RUNS = await import(toUrl(resolve(MOD, "runs.js")));
+check("runs: a sweep row names the values it tried, not a min-max range", () => {
+  assert.equal(RUNS.sweepAxesText({ axes: [{ var: "CLOCK_PERIOD", values: ["10", "9", "8"] }] }), "CLOCK_PERIOD 10, 9, 8");
+  assert.equal(RUNS.sweepAxesText({ axes: [{ var: "FP_CORE_UTIL", values: [40, 45, 50, 55, 60, 65, 70, 75, 80] }] }),
+    "FP_CORE_UTIL 40, 45, 50 … 80, 9 values");
+  // No six-run cap on ticking rows: only Compare has a limit (twelve).
+  const src = readFileSync(resolve(MOD, "runs.js"), "utf8");
+  assert.doesNotMatch(src, /_picked\.size >= 6/);
+  assert.match(src, /COMPARE_MAX = 12/);
+  assert.match(readFileSync(resolve(MOD, "compare.js"), "utf8"), /const MAX = 12;/);
+});
+
 check("overlays: one stack; the frame's menus, sheets and dialogs all open through it", () => {
   const src = (f) => readFileSync(resolve(MOD, f), "utf8");
   for (const f of ["shell.js", "dialog.js", "runbar.js", "palette.js", "wizard.js", "fs.js", "fixsheet.js", "sweeps.js", "runs.js", "layout.js", "autoconfig.js", "compare.js"]) {
@@ -826,26 +895,24 @@ check("decision surfaces never render a rounded metric without the raw escape", 
   // "run report card" check.)
   for (const f of ["compare.js", "sweeps.js"]) {
     const src = readFileSync(resolve(MOD, f), "utf8");
-    assert.match(src, /fmt\.metric\(/, `${f}: precondition — it does round a metric`);
+    assert.match(src, /fmt\.metric\(|MF\.show|F\.show/, `${f}: precondition — it does round a metric`);
     assert.match(src, /titleAttr\(/, `${f}: rounds a metric but carries no raw escape`);
   }
 });
 
 // ------------------------------------------------ one utilization%, two paths
 // Utilization% is derived server-side (history.design_summary: round(u*100,1))
-// AND client-side for the gauge (charts.utilizationOption: round(u*1000)/10).
+// AND client-side by the shared formatter (metricfmt.show: one decimal of %).
 // Two formulas for one number: they must agree to the digit on every fraction,
-// else the hero strip and the gauge silently disagree (gap #8, Fear G).
-check("utilization%: the server and chart formulas agree to the digit", () => {
+// else Compare's headline row and every other page silently disagree (gap #8).
+check("utilization%: the server and the shared formatter agree to the digit", () => {
   const serverPct = (u) => Math.round(u * 100 * 10) / 10; // mirror of round(u*100,1)
   for (const u of [0, 0.1, 0.455, 0.5001, 0.6789, 0.9999, 1.0]) {
-    const opt = charts.utilizationOption({ "design__instance__utilization": u });
-    const gauge = opt.series[0].data[0].value;
-    assert.equal(gauge, serverPct(u),
-      `gauge ${gauge} disagrees with server ${serverPct(u)} for fraction ${u}`);
+    const shown = Number(MF.show("design__instance__utilization", u).text);
+    assert.equal(shown, serverPct(u), `shown ${shown} disagrees with server ${serverPct(u)} for fraction ${u}`);
   }
-  // Absent fraction → no gauge invented.
-  assert.equal(charts.utilizationOption({}), null);
+  // Absent fraction → nothing invented.
+  assert.equal(MF.show("design__instance__utilization", undefined).text, "—");
 });
 
 // ------------------------------------------------ tools: normalizeUnavailableLibraries contract
