@@ -903,7 +903,7 @@ async function viewReport(rel, title, needle = "", last = false) {
   const { customDialog } = await import("./dialog.js");
   const tag = _tag;
   customDialog({
-    title: esc(title || rel), wide: true,
+    title: title || rel, wide: true,
     bodyHtml: "<div class='vf-viewer'><p class='muted'>Loading " + esc(rel) + "…</p></div>",
     onMount: async (dlg) => {
       const host = dlg.querySelector(".vf-viewer");
@@ -926,7 +926,7 @@ async function showLog(stepId) {
   const { customDialog } = await import("./dialog.js");
   const tag = _tag;
   customDialog({
-    title: esc(stepId + " · log"), wide: true,
+    title: stepId + " · log", wide: true,
     bodyHtml: "<div class='vf-viewer'><p class='muted'>Loading the log…</p></div>",
     onMount: async (dlg) => {
       const host = dlg.querySelector(".vf-viewer");

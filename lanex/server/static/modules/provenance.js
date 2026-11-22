@@ -122,7 +122,7 @@ export async function openProvenance(params, meta = {}) {
   const heading = meta.title ||
     (params.key ? "Source of " + params.key : "Source: " + r.rel);
   await customDialog({
-    title: fmt.escape(heading),
+    title: heading,
     wide: true,
     bodyHtml:
       "<p class='muted prov-note'>Raw file as written by <b>" +
