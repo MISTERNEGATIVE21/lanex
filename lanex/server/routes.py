@@ -5042,7 +5042,10 @@ _POST_ROUTES = {
     "/api/tools/install/", "/api/tools/uninstall/", "/api/pdk/uninstall",
     "/api/pdk/fix-permissions", "/api/copy-spm",
 }
-_BOTH_ROUTES = {"/api/run-note", "/api/watch", "/api/settings/pdk-root", "/api/suggest-config"}
+_BOTH_ROUTES = {
+    "/api/run-note", "/api/watch", "/api/settings/pdk-root", "/api/suggest-config",
+    "/api/update-check",
+}
 _GET_ROUTES = {
     "/api/templates", "/api/project/defaults", "/api/project/files", "/api/run-export",
     "/api/verify", "/api/cell-usage", "/api/run-stages", "/api/run-explain", "/api/problems",
@@ -5060,7 +5063,7 @@ _GET_ROUTES = {
     "/api/layout/commands", "/api/runs/", "/api/tools", "/api/metrics-catalog", "/api/run/status",
     "/api/reports/drc", "/api/reports/lvs", "/api/fs/roots", "/api/fs/list", "/api/walk-sources",
     "/api/run-reports", "/api/read-text", "/api/provenance", "/api/design-summary", "/api/step/",
-    "/api/design-dir", "/api/preflight", "/api/manual/result",
+    "/api/design-dir", "/api/preflight", "/api/manual/result", "/api/pdk-layers",
 }
 # A route in none of the sets keeps the old answer-anything behaviour, so a
 # route added elsewhere never breaks at run time; the test names it instead.
