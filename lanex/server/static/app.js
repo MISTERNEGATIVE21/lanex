@@ -242,6 +242,8 @@ async function boot() {
     }
     // First launch: the Press Start card; mid-guide: offer to carry on (guide.js).
     import("./modules/guide.js").then((m) => m.setupGuide()).catch((e) => console.error("guide", e));
+    // A newer LanEx release, when the "Check for updates" setting is on.
+    import("./modules/updatebanner.js").then((m) => m.setupUpdateBanner()).catch(() => {});
     // The pages a run lands on, in idle time; any tab while the pointer rests on it.
     prefetch(["flow", "runs"]);
     document.querySelectorAll(".side-tab").forEach((t) => {
@@ -371,7 +373,7 @@ function handle(ev) {
       if (isImagePull) {
         // The pull owns the runtime card; finishPull re-probes + reports.
         const rc = ev.type === "installer_done" ? (ev.rc ?? 0) : (typeof ev.rc === "number" ? ev.rc : 1);
-        page("tools").then((m) => m.finishPull(rc)).catch(() => {});
+        page("tools").then((m) => m.finishPull(rc, ev.log_path)).catch(() => {});
       } else {
         // The Tools page probes again if it has been shown (it probes on every visit).
         ifLoaded("tools", (m) => m.renderTools());

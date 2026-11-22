@@ -36,12 +36,17 @@ export const PREFS = [
   // ---- Keyboard
   { id: "keys", key: "ll.keys", group: "Keyboard", label: "Single-key shortcuts", type: "bool", def: "1", on: "1", off: "0",
     hint: "Number keys for pages, r to run, t for the theme, ? for help. Ctrl shortcuts always work." },
+
+  // ---- Updates (modules/updatebanner.js, controller/updatecheck.py)
+  { id: "updateCheck", key: "ll.updateCheck", group: "Updates", label: "Check for updates", type: "bool", def: "1", on: "1", off: "0",
+    hint: "Once a day LanEx asks GitHub for the newest LanEx release and tells you when there is one. Nothing about you, this computer or your projects is sent." },
 ];
 
 // What LanEx stores that is state, not preference (the tab you were on, panel
 // heights, recent lists, drafts). "Reset every preference" leaves these.
 export const STATE_PREFIXES = ["ll.recentDesigns", "ll.tab", "ll.context", "ll.draft:", "ll.rtl:", "ll.wave:", "ll.simok.",
-  "ll.guide.", "ll.paletteRecent", "ll.consoleHistory", "ll.runsBaseline", "ll.userPresets", "ll.ranOnce"];
+  "ll.guide.", "ll.paletteRecent", "ll.consoleHistory", "ll.runsBaseline", "ll.userPresets", "ll.ranOnce",
+  "ll.updateDismissed"];
 
 const BY_ID = Object.fromEntries(PREFS.map((p) => [p.id, p]));
 
