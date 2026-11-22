@@ -32,6 +32,9 @@ export const PREFS = [
   // ---- Editor
   { id: "lintOnSave", key: "ll.lintOnSave", group: "Editor", label: "Check syntax on save", type: "bool", def: "1", on: "1", off: "0",
     hint: "Runs Verilator each time you save a Verilog file." },
+  { id: "simTimeLimit", key: "ll.simTimeLimit", group: "Editor", label: "Simulation time limit", type: "choice", def: "120",
+    options: [["30", "30 s"], ["120", "2 min"], ["600", "10 min"], ["1800", "30 min"]],
+    hint: "A testbench that never reaches $finish is stopped after this long. Its waveform so far still shows." },
 
   // ---- Keyboard
   { id: "keys", key: "ll.keys", group: "Keyboard", label: "Single-key shortcuts", type: "bool", def: "1", on: "1", off: "0",

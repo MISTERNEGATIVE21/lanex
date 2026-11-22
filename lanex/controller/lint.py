@@ -103,8 +103,13 @@ def build_lint_command(
     run_mode: str = "local",
     engine: str = "docker",
     image: Optional[str] = None,
+    timing: bool = False,
 ) -> List[str]:
     """Build the argv for ``verilator --lint-only`` over *sources*.
+
+    *timing* adds ``--timing`` (Verilator 5): without it every ``#delay`` and
+    ``@(posedge clk)`` in a testbench is an error (NEEDTIMINGOPT), so a bench
+    the simulator runs fine read as a page of errors.
 
     Local mode returns a bare ``verilator …`` argv (caller sets
     ``cwd=design_dir``); container mode mounts the design dir at ``/work`` and
@@ -118,6 +123,8 @@ def build_lint_command(
     # instead of warnings that then stop the flow at Lint Errors Checker.
     flags: List[str] = ["verilator", "--lint-only", "-Wall", "-Wno-fatal", "--timescale", "1ns/1ps",
                         "--Werror-LATCH", "--Werror-MULTIDRIVEN"]
+    if timing:
+        flags.append("--timing")
     if top:
         flags += ["--top-module", str(top)]
     for inc in (include_dirs or []):
@@ -134,6 +141,140 @@ def build_lint_command(
         return [engine, "run", "--rm", "-v", f"{abs_design}:/work", "-w", "/work",
                 img, "bash", "-lc", shell]
     return flags
+
+
+_VERSION_RX = re.compile(r"Verilator\s+(\d+)\.(\d+)")
+_major_cache: Dict[str, Optional[int]] = {}
+
+
+def verilator_major(exe: str = "verilator") -> Optional[int]:
+    """The host Verilator's major version (``verilator --version``), cached;
+    None when it can't be run."""
+    if exe in _major_cache:
+        return _major_cache[exe]
+    major: Optional[int] = None
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout
+        m = _VERSION_RX.search(out or "")
+        major = int(m.group(1)) if m else None
+    except Exception:
+        major = None
+    _major_cache[exe] = major
+    return major
+
+
+def _strip_dir(entry: str, design_dir: Path) -> Optional[str]:
+    """A config path entry (``dir::x``, absolute, or design-relative) as the
+    path a job running in the design dir uses: design-relative when inside it,
+    else absolute. None for forms LanEx can't resolve (``ref::``, ``expr::``)."""
+    e = str(entry).strip()
+    if not e or e.startswith(("ref::", "refg::", "expr::", "pdk_dir::")):
+        return None
+    s = e[len("dir::"):] if e.startswith("dir::") else e
+    p = Path(s) if os.path.isabs(s) else design_dir / s
+    try:
+        return p.resolve().relative_to(design_dir).as_posix()
+    except ValueError:
+        return str(p.resolve())
+    except OSError:
+        return None
+
+
+def _as_list(v: Any) -> List[str]:
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v if x is not None and str(x).strip()]
+    return [x for x in str(v).split() if x]
+
+
+def parse_defines(v: Any) -> Dict[str, Optional[str]]:
+    """``VERILOG_DEFINES`` (``["A", "W=8"]`` or ``"A W=8"``) as ``{name: value}``,
+    in order; a bare name has the value None."""
+    out: Dict[str, Optional[str]] = {}
+    for item in _as_list(v):
+        name, eq, val = item.partition("=")
+        name = name.strip()
+        if re.fullmatch(r"[A-Za-z_][\w$]*", name):
+            out[name] = val.strip() if eq else None
+    return out
+
+
+def config_inputs(design_dir: str | Path, *, for_lint: bool = False) -> Dict[str, Any]:
+    """The Verilog the flow itself reads, from the project's config, so the
+    IDE's syntax check and simulation see what a run sees instead of every
+    ``.v`` in the folder (a stale copy then duplicates a module):
+
+    * ``files``: ``VERILOG_FILES`` resolved the way LibreLane does (``dir::``,
+      globs), design-relative where inside the project; ``missing`` the ones
+      the config names that don't exist;
+    * ``defines``: ``VERILOG_DEFINES`` (for the lint, ``LINTER_DEFINES`` when
+      the config sets it, as LibreLane's own lint step does);
+    * ``include_dirs``: ``VERILOG_INCLUDE_DIRS``.
+
+    ``mode`` is ``"list"`` when the config names its files, ``"none"`` when
+    there is no usable config or no ``VERILOG_FILES`` (the caller falls back to
+    the project's files), ``"unknown"`` for forms LanEx can't resolve.
+    """
+    from . import configedit
+
+    d = Path(design_dir).resolve()
+    out: Dict[str, Any] = {"mode": "none", "files": [], "missing": [], "defines": {},
+                           "include_dirs": [], "name": None, "reason": None}
+    try:
+        info = configedit.read_config(d)
+    except Exception as ex:  # pragma: no cover - defensive
+        out["reason"] = str(ex)
+        return out
+    out["name"] = info.get("name")
+    data = info.get("data") or {}
+    if not info.get("editable") or not isinstance(data, dict):
+        out["reason"] = info.get("reason")
+        return out
+    src = configedit.resolve_sources(d, data)
+    out["mode"] = src["mode"]
+    out["reason"] = src.get("reason")
+    for f in src.get("files") or []:
+        rel = _strip_dir(f, d)
+        if rel is None:
+            continue
+        if not (d / rel).is_file() and not Path(rel).is_file():
+            out["missing"].append(rel)
+            continue
+        if rel not in out["files"]:
+            out["files"].append(rel)
+    defs = data.get("LINTER_DEFINES") if for_lint and data.get("LINTER_DEFINES") is not None else data.get("VERILOG_DEFINES")
+    out["defines"] = parse_defines(defs)
+    for inc in _as_list(data.get("VERILOG_INCLUDE_DIRS")):
+        rel = _strip_dir(inc, d)
+        if rel is not None and rel not in out["include_dirs"]:
+            out["include_dirs"].append(rel)
+    return out
+
+
+def merge_inputs(cfg: Dict[str, Any], *, extra_sources: Sequence[str] = (),
+                 exclude: Sequence[str] = (), include_dirs: Sequence[str] = (),
+                 defines: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The job's sources, include dirs and defines: the config's (from
+    :func:`config_inputs`) plus what the IDE adds (testbenches, simulation
+    helpers, the folders that hold HDL for ``\\`include``), minus *exclude*."""
+    def norm(p: Any) -> str:
+        s = str(p).replace("\\", "/")
+        return s[2:] if s.startswith("./") else s
+
+    skip = {norm(x) for x in exclude if x}
+    sources: List[str] = []
+    for s in list(cfg.get("files") or []) + [str(x) for x in extra_sources if x]:
+        n = norm(s)
+        if n not in skip and n not in sources:
+            sources.append(n)
+    incs: List[str] = []
+    for i in list(cfg.get("include_dirs") or []) + [str(x) for x in include_dirs if x]:
+        if i not in incs:
+            incs.append(i)
+    defs: Dict[str, Any] = dict(cfg.get("defines") or {})
+    defs.update(defines or {})
+    return {"sources": sources, "include_dirs": incs, "defines": defs}
 
 
 class LintJob:

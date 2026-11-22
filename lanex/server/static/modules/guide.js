@@ -12,7 +12,8 @@ import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
 import { go } from "./nav.js";
-import { BEATS, GUIDE_TEMPLATE, advance, simOk, pillText, normState, counter, TOUR, chipFacts } from "./guide-steps.js";
+import { BEATS, GUIDE_TEMPLATE, advance, simOk, pillText, normState, counter, TOUR, chipFacts,
+  onGuideProject, isGuideProject, freeName, guideFiles } from "./guide-steps.js";
 
 const KEY = "ll.guide.state";
 const SEEN = "ll.guide.seen";
@@ -28,6 +29,28 @@ let _seq = 0;             // a newer pointer cancels an older one still waiting
 function save() {
   safeStorage.set(KEY, JSON.stringify(G));
   document.body.classList.toggle("guide-on", !!G.active);
+}
+
+// The guide template as the server lists it (its file names), read once.
+let _tpl = null;
+async function guideTemplate() {
+  if (_tpl) return _tpl;
+  try { _tpl = ((await api.templates()) || []).find((t) => t.name === GUIDE_TEMPLATE) || null; } catch (_e) { _tpl = null; }
+  return _tpl;
+}
+const files = () => guideFiles(_tpl);
+const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+
+// A name for the guide's project that isn't taken in the projects folder
+// (a second run of the guide makes blinky-2 instead of failing on blinky).
+async function guideProjectName() {
+  let dir = "";
+  try { dir = ((await api.projectDefaults()) || {}).projects_dir || ""; } catch (_e) { dir = ""; }
+  let taken = [];
+  if (dir) {
+    try { taken = (((await api.fsList(dir)) || {}).entries || []).map((e) => e.name); } catch (_e) { taken = []; }
+  }
+  return freeName(GUIDE_TEMPLATE, taken);
 }
 
 // ------------------------------------------------------------ waiting
@@ -232,7 +255,6 @@ export function startFirstChip() {
   hideStart();
   safeStorage.set(SEEN, "1");
   G = { active: true, beat: 1, project: "" };
-  // Already on an open blinky? Then the example is made.
   save();
   paintPill();
   showBeat();
@@ -250,7 +272,11 @@ const eb = () => pillText(G.beat);
 
 async function showBeat() {
   if (!G.active) return;
+  await guideTemplate();
   const b = BEATS[G.beat];
+  // Past the first beat the guide is about its own project: another one open
+  // means the next step would happen there.
+  if (b && b.id !== "project" && !onGuideProject(G, state.designDir)) return wrongProject();
   if (!b) return finale();
   if (b.id === "project") return beatProject();
   if (b.id === "sim") return beatSim();
@@ -261,16 +287,49 @@ async function showBeat() {
 
 async function beatProject() {
   go("setup", {}, { link: false });
-  const tile = await waitFor("#project-empty [data-open='example']", 3000);
-  const make = () => { hidePointer(); import("./wizard.js").then((m) => m.openWizard({ template: GUIDE_TEMPLATE })); };
+  const [tile, name] = await Promise.all([waitFor("#project-empty [data-open='example']", 3000), guideProjectName()]);
+  const make = async () => {
+    hidePointer();
+    G.expect = { name };
+    save();
+    const m = await import("./wizard.js");
+    await m.openWizard({ template: GUIDE_TEMPLATE });
+    // The wizard proposes the template's name; a free one when that is taken.
+    const input = document.getElementById("wiz-name");
+    if (input && input.value !== name) {
+      input.value = name;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  };
   point({
     el: tile || "#setup-design",
     eyebrow: eb(),
     title: "Make the example chip",
     body: "<p>Blinky is a counter that blinks an LED: a few lines of Verilog with a testbench. It is the quickest of the examples to build.</p>" +
-      "<p>Make it, keep the name, and press <b>Create project</b>.</p>",
+      "<p>Make it, keep the name" + (name !== GUIDE_TEMPLATE ? " (<code>" + esc(name) + "</code>, as you have a <code>" + esc(GUIDE_TEMPLATE) + "</code> already)" : "") +
+      ", and press <b>Create project</b>.</p>",
     buttons: [{ label: "Make Blinky", primary: true, run: make }],
     hideOnTargetClick: true,
+  });
+}
+
+// Another project is open than the one the guide is building.
+async function wrongProject() {
+  const name = baseName(G.project);
+  point({
+    eyebrow: eb(),
+    title: "The guide is building " + name,
+    body: "<p>You have " + (state.designDir ? "<code>" + esc(baseName(state.designDir)) + "</code>" : "another project") +
+      " open. The next step happens in <code>" + esc(name) + "</code>: open it again to carry on.</p>",
+    buttons: [
+      { label: "Open " + name, primary: true, run: async () => {
+        hidePointer();
+        const setup = await import("./setup.js");
+        await setup.adoptDesignDir(G.project, { explicit: false });
+        showBeat();
+      } },
+      { label: "End guide", run: () => endGuide() },
+    ],
   });
 }
 
@@ -286,7 +345,7 @@ async function beatSim() {
     eyebrow: eb(),
     title: "Simulate it",
     body: "<p>Before the long run, check the design does what you meant. <b>Simulate</b> builds the testbench " +
-      "(<code>verify/blinky_tb.v</code>), runs it, and draws the waveform.</p>",
+      "(<code>" + esc(files().testbench) + "</code>), runs it, and draws the waveform.</p>",
     buttons: [{ label: "Simulate", primary: true, run: () => { hidePointer(); document.getElementById("ide-sim")?.click(); } }],
     hideOnTargetClick: true,
   });
@@ -436,7 +495,7 @@ async function finale() {
   point({
     eyebrow: eb() + " · DONE",
     title: "Your chip is ready",
-    body: "<p>LibreLane turned blinky.v into a GDS: the file a foundry makes the chip from. Have a look at it.</p>",
+    body: "<p>LibreLane turned " + esc(files().sourceName) + " into a GDS: the file a foundry makes the chip from. Have a look at it.</p>",
     buttons: [{ label: "See the layout", primary: true, run: showLayout }, { label: "Skip to the summary", run: finishCard }],
   });
 }
@@ -513,7 +572,7 @@ async function finishCard() {
   document.addEventListener("keydown", onKey, true);
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
   ov.querySelector(".gd-close").addEventListener("click", close);
-  ov.querySelector("[data-g='verilog']").addEventListener("click", () => { close(); go("ide", { rel: "src/blinky.v" }); });
+  ov.querySelector("[data-g='verilog']").addEventListener("click", () => { close(); go("ide", { rel: files().source }); });
   ov.querySelector("[data-g='sweep']").addEventListener("click", () => { close(); go("runs");
     // Faster, the same, slower: the run's clock period x 0.8, 1, 1.25. Tightest first,
     // so the preset's "stop at the first clean run" finds the fastest that works.
@@ -532,14 +591,29 @@ function clockOf(p) {
 }
 
 // ------------------------------------------------------------ events
-function onProgress(e) {
+async function onProgress(e) {
   if (!G.active) return;
   const type = e.type, d = e.detail || {};
   const was = G.beat;
+  const b = BEATS[was];
+  if (!b || b.on !== type) return;   // an event for another beat
+  if (type === "g:project_opened") {
+    // Only the guide's own project moves it on: the one it asked the wizard
+    // for, or a folder with the template's files (an earlier Blinky).
+    await guideTemplate();
+    let have = null;
+    if (!isGuideProject(d.dir, G.expect, null, _tpl)) {
+      try { have = (((await api.projectFiles(d.dir)) || {}).files || []).map((f) => f.rel); } catch (_e) { have = []; }
+      if (!isGuideProject(d.dir, G.expect, have, _tpl)) return;
+    }
+  } else if (!onGuideProject(G, state.designDir)) {
+    // A simulation or run in another project: not the guide's.
+    return;
+  }
   const now = advance(was, type, d);
   if (now !== was) {
     G.beat = now;
-    if (type === "g:project_opened" && d.dir) G.project = d.dir;
+    if (type === "g:project_opened" && d.dir) { G.project = d.dir; delete G.expect; }
     save();
     paintPill();
     if (type === "g:sim_done") return afterSim(d);
@@ -551,8 +625,8 @@ function onProgress(e) {
     }
     return showBeat();
   }
-  if (type === "g:sim_done" && BEATS[was] && BEATS[was].id === "sim" && !simOk(d) && d.verdict !== "stopped") return simFailed(d);
-  if (type === "g:flow_done" && BEATS[was] && BEATS[was].id === "flow") return runFailed(d);
+  if (type === "g:sim_done" && b.id === "sim" && !simOk(d) && d.verdict !== "stopped") return simFailed(d);
+  if (type === "g:flow_done" && b.id === "flow") return runFailed(d);
 }
 
 // Any simulation of the open project that ran to the end ticks step 2 of

@@ -586,7 +586,13 @@ def h_read_text(handler: Any) -> None:
         _respond(handler, "path is outside the active design / PDK directories", 403)
         return
     try:
-        _respond(handler, fsbrowser.read_text(path))
+        res = fsbrowser.read_text(path)
+        if res.get("ok") and isinstance(res.get("text"), str):
+            # The stamp the IDE sends back with a save, so a file that changed
+            # on disk since (Setup, a terminal) is never overwritten unasked.
+            from ..controller import editor
+            res["hash"] = editor.text_hash(res["text"])
+        _respond(handler, res)
     except Exception as ex:
         _log.exception("read_text failed")
         _respond(handler, str(ex), 500)
@@ -3685,8 +3691,19 @@ def h_file_write(handler: Any) -> None:
     if not design_dir:
         _respond(handler, "no active design dir", 400)
         return
-    result = editor.write_text(design_dir, rel, content)
+    base_hash = body.get("base_hash")
+    on_exists = body.get("on_exists")
+    result = editor.write_text(
+        design_dir, rel, content,
+        base_hash=base_hash if isinstance(base_hash, str) and base_hash else None,
+        force=bool(body.get("force")),
+        on_exists=on_exists if on_exists in ("error", "keep_both", "replace") else None)
     if not result.get("ok"):
+        if result.get("conflict") or result.get("exists"):
+            # 409 with the details: the IDE asks Reload / Keep mine, Add files
+            # asks Replace / Keep both.
+            handler._send_json(result, 409)
+            return
         _respond(handler, result.get("error"), 400)
         return
     _respond(handler, result)
@@ -3776,9 +3793,21 @@ def h_lint(handler: Any) -> None:
         _respond(handler, "a lint is already running", 400)
         return
 
-    # Source list: prefer what the IDE sends; otherwise discover the design's
-    # Verilog (excluding testbenches, which the user lints separately).
+    # Source list: with from_config (the IDE), the files the flow reads (the
+    # config's VERILOG_FILES, defines and include dirs) plus the testbenches
+    # the IDE adds; else what the IDE sends; else discover the design's Verilog.
     sources = [s for s in (body.get("sources") or []) if s]
+    include_dirs = [s for s in (body.get("include_dirs") or []) if s]
+    defines = body.get("defines") if isinstance(body.get("defines"), dict) else {}
+    cfg_used: Optional[Dict[str, Any]] = None
+    if body.get("from_config"):
+        ci = lint.config_inputs(design_dir, for_lint=True)
+        cfg_used = {"mode": ci["mode"], "name": ci["name"], "reason": ci["reason"],
+                    "missing": ci["missing"], "files": ci["files"]}
+        if ci["mode"] == "list" and ci["files"]:
+            m = lint.merge_inputs(ci, extra_sources=body.get("extra_sources") or [],
+                                  include_dirs=include_dirs, defines=defines)
+            sources, include_dirs, defines = m["sources"], m["include_dirs"], m["defines"]
     if not sources:
         try:
             walked = fsbrowser.walk_sources(design_dir)
@@ -3812,8 +3841,12 @@ def h_lint(handler: Any) -> None:
 
     argv = lint.build_lint_command(
         design_dir, sources=sources, top=(body.get("top") or "").strip() or None,
-        include_dirs=body.get("include_dirs") or [], defines=body.get("defines") or {},
+        include_dirs=include_dirs, defines=defines,
         run_mode=run_mode, engine=engine_name or "docker",
+        # Verilator 5 (the LibreLane image's, or a host one) reads testbench
+        # delays and event controls only with --timing; 4.x doesn't know it.
+        timing=(run_mode == "container"
+                or (lint.verilator_major(platform_env.usable_which("verilator") or "verilator") or 0) >= 5),
     )
     if run_mode == "container" and engine_name and tools_mod.resolve_engine().get("sg_wrap"):
         argv = tools_mod.sg_wrap_argv(argv)
@@ -3823,6 +3856,9 @@ def h_lint(handler: Any) -> None:
             _respond(handler, result.get("error"), 400)
             return
         result["engine"] = "container" if run_mode == "container" else "verilator"
+        result["sources"] = list(sources)
+        if cfg_used is not None:
+            result["config"] = cfg_used
         _respond(handler, result)
     except Exception as ex:
         _log.exception("lint start failed")
@@ -3874,11 +3910,13 @@ def h_sim_start(handler: Any) -> None:
     # The RTL-IDE simulator is an INDEPENDENT tool — it is NOT the hardening flow,
     # so it does not follow the flow's container/local engine toggle. We pick the
     # best place to run each engine on its own:
-    #   • iverilog : event-driven, 4-state, great for classic testbenches. Runs on
-    #                the HOST (it isn't in the LibreLane image). Works regardless
-    #                of the flow's run mode, as long as iverilog is installed.
-    #   • verilator: host verilator if present, else the LibreLane container image.
-    #   • auto     : iverilog → host verilator → container verilator.
+    #   • iverilog : event-driven, 4-state, great for classic testbenches. The
+    #                host's when installed, else the LibreLane image's (3.0.4
+    #                ships Icarus on its PATH).
+    #   • verilator: the host's only. The image has Verilator but no make or
+    #                C++ compiler on its PATH, so `--binary` can't build there
+    #                (checked: "make ... exited with 127"); say so instead.
+    #   • auto     : host iverilog → host verilator → container iverilog.
     req_engine = (body.get("sim_engine") or "auto").lower()
     # usable_which skips Windows binaries on the WSL /mnt/c PATH so we never pick
     # a Windows iverilog/verilator the Linux flow can't run.
@@ -3888,19 +3926,21 @@ def h_sim_start(handler: Any) -> None:
     has_container = bool(eng_info.get("ready"))
 
     if req_engine == "iverilog":
-        if not has_iverilog:
-            _respond(handler, "Icarus Verilog (iverilog/vvp) isn't installed on this machine. "
-                              "Install it from the Tools tab, then retry.", 400)
+        if has_iverilog:
+            sim_engine, run_mode = "iverilog", "local"
+        elif has_container:
+            sim_engine, run_mode = "iverilog", "container"
+        else:
+            _respond(handler, "Icarus Verilog (iverilog/vvp) isn't installed on this machine and no "
+                              "container engine is available. Install Icarus from the Tools tab, then retry.", 400)
             return
-        sim_engine, run_mode = "iverilog", "local"
     elif req_engine == "verilator":
         if has_verilator:
             sim_engine, run_mode = "verilator", "local"
-        elif has_container:
-            sim_engine, run_mode = "verilator", "container"
         else:
-            _respond(handler, "Verilator isn't on this machine and no container engine is "
-                              "available. Install Verilator/Docker, or pick Icarus.", 400)
+            _respond(handler, "A Verilator simulation needs Verilator on this machine: the LibreLane "
+                              "image has no C++ build tools to compile one. Install Verilator from the "
+                              "Tools tab, or pick Icarus (Auto uses the image's Icarus).", 400)
             return
     else:  # auto
         if has_iverilog:
@@ -3908,10 +3948,10 @@ def h_sim_start(handler: Any) -> None:
         elif has_verilator:
             sim_engine, run_mode = "verilator", "local"
         elif has_container:
-            sim_engine, run_mode = "verilator", "container"
+            sim_engine, run_mode = "iverilog", "container"
         else:
             _respond(handler, "No simulator found. Install Icarus Verilog or Verilator from the "
-                              "Tools tab (or Docker/Podman for container Verilator).", 400)
+                              "Tools tab, or Docker/Podman for the LibreLane image's Icarus.", 400)
             return
 
     # Local sim builds + runs via `bash -lc` — fine on Linux/macOS/WSL2, but not
@@ -3929,21 +3969,44 @@ def h_sim_start(handler: Any) -> None:
         env = eng_info.get("env") or {}
         import uuid as _uuid
         container_name = "ll-sim-" + _uuid.uuid4().hex[:12]
+    # With from_config (the IDE): the design is the config's VERILOG_FILES with
+    # its VERILOG_DEFINES and VERILOG_INCLUDE_DIRS, as a run builds it, plus the
+    # simulation-only helpers the IDE adds; never another testbench.
+    defines = body.get("defines") if isinstance(body.get("defines"), dict) else {}
+    include_dirs = [s for s in (body.get("include_dirs") or []) if s]
+    cfg_used: Optional[Dict[str, Any]] = None
+    if body.get("from_config"):
+        from ..controller import lint as lint_mod
+        ci = lint_mod.config_inputs(design_dir)
+        cfg_used = {"mode": ci["mode"], "name": ci["name"], "reason": ci["reason"],
+                    "missing": ci["missing"], "files": ci["files"]}
+        if ci["mode"] == "list" and ci["files"]:
+            m = lint_mod.merge_inputs(
+                ci, extra_sources=body.get("extra_sources") or [],
+                exclude=[testbench] + [t for t in (body.get("testbenches") or []) if isinstance(t, str)],
+                include_dirs=include_dirs, defines=defines)
+            sources, include_dirs, defines = m["sources"], m["include_dirs"], m["defines"]
+    timeout = simulate.sim_timeout(body.get("timeout"))
     argv = simulate.build_sim_command(
         design_dir, top=top, sources=sources, testbench=testbench,
-        defines=body.get("defines") or {}, include_dirs=body.get("include_dirs") or [],
+        defines=defines, include_dirs=include_dirs,
         trace=trace, run_mode=run_mode, engine=engine or "docker", container_name=container_name,
         sim_engine=sim_engine,
     )
     # iverilog always emits VCD; Verilator honours the requested trace format.
     vcd_name = "dump.fst" if (trace == "fst" and sim_engine == "verilator") else "dump.vcd"
     result = simulate.job.start(argv, design_dir=design_dir, run_mode=run_mode, env=env,
-                                vcd_name=vcd_name, container_name=container_name, engine=engine)
+                                vcd_name=vcd_name, container_name=container_name, engine=engine,
+                                timeout=timeout)
     if not result.get("ok"):
         _respond(handler, result.get("error"), 400)
         return
     result["sim_engine"] = sim_engine
     result["top"] = top
+    result["timeout"] = timeout
+    result["sources"] = list(sources)
+    if cfg_used is not None:
+        result["config"] = cfg_used
     _respond(handler, result)
 
 

@@ -29,6 +29,52 @@ export function advance(beat, type, detail = {}) {
   return beat + 1;
 }
 
+// The guide builds one project: once it is made, only events in that project
+// move the guide on (a simulation or run in another project doesn't count).
+export function sameProject(a, b) {
+  const n = (p) => String(p || "").replace(/[\\/]+$/, "");
+  return !!a && !!b && n(a) === n(b);
+}
+export function onGuideProject(g, current) {
+  return !g || !g.project || sameProject(g.project, current);
+}
+
+// The project the guide just asked for (`expect`: {name}) or one with the
+// guide template's files (`files`: the opened folder's relative paths, when
+// read) is the guide's. Any other project opened meanwhile is not.
+export function isGuideProject(dir, expect, files, tpl) {
+  if (!dir) return false;
+  const base = String(dir).replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  if (expect && expect.name && base === expect.name) return true;
+  if (!Array.isArray(files) || !tpl) return false;
+  const need = [].concat(tpl.sources || [], tpl.testbench ? [tpl.testbench] : []);
+  return need.length > 0 && need.every((rel) => files.includes(rel));
+}
+
+// A project name that isn't taken yet: blinky, then blinky-2, blinky-3 …
+export function freeName(base, taken) {
+  const have = new Set((taken || []).map((x) => String(x).toLowerCase()));
+  if (!have.has(String(base).toLowerCase())) return base;
+  for (let i = 2; i < 1000; i++) {
+    const cand = base + "-" + i;
+    if (!have.has(cand.toLowerCase())) return cand;
+  }
+  return base + "-" + Date.now();
+}
+
+// The guide template's own file names (template.json), with Blinky's as the
+// fallback when the server's list isn't to hand.
+export function guideFiles(tpl) {
+  const src = (tpl && Array.isArray(tpl.sources) && tpl.sources[0]) || "src/blinky.v";
+  return {
+    source: src,
+    sourceName: src.split("/").pop(),
+    testbench: (tpl && tpl.testbench) || "verify/blinky_tb.v",
+    top: (tpl && tpl.top) || "blinky",
+    title: (tpl && tpl.title) || "Blinky",
+  };
+}
+
 export function simOk(d) {
   return !!d && (d.verdict === "passed" || d.verdict === "ran");
 }
@@ -45,7 +91,9 @@ export function normState(raw) {
   if (typeof s === "string") { try { s = JSON.parse(s); } catch (_e) { s = null; } }
   if (!s || typeof s !== "object") return { active: false, beat: 1 };
   const beat = Number.isInteger(s.beat) ? Math.min(Math.max(s.beat, 1), BEATS.length) : 1;
-  return { active: !!s.active, beat, project: typeof s.project === "string" ? s.project : "" };
+  const out = { active: !!s.active, beat, project: typeof s.project === "string" ? s.project : "" };
+  if (s.expect && typeof s.expect === "object" && typeof s.expect.name === "string") out.expect = { name: s.expect.name };
+  return out;
 }
 
 // Tour counter, two digits like the rest of the mono labels: "02/05".

@@ -291,6 +291,19 @@ def create_project(
             return {"ok": False, "error": "this example isn't available in this install"}
         shutil.copytree(str(verbatim), str(dest), dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("runs", "__pycache__"))
+        # LanEx's own testbench (self-checking: PASS or FAIL) replaces the
+        # example's, which only prints what it got.
+        overlay = tdir / "verify"
+        if overlay.is_dir():
+            for f in sorted(overlay.rglob("*")):
+                if f.is_file():
+                    target = (dest / f.relative_to(tdir)).resolve()
+                    try:
+                        target.relative_to(dest)
+                    except ValueError:
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(f, target)
         files = sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file())
         return {"ok": True, "design_dir": str(dest), "template": template,
                 "top": manifest.get("top") or template, "files": files}

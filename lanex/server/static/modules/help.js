@@ -140,7 +140,7 @@ const CATALOG = {
     how: [
       "The explorer sorts the project's files by what they're for: Design (built into the chip), Simulation (testbenches), Constraints (SDC, pin order) and Project. The + on each group makes that kind of file; a new testbench is wired to the top module's ports and clock. Right-click a file (or its ⋯) to make one of its modules the top, build it into the chip or leave it out, or simulate a testbench.",
       "The editor works like VS Code: Ctrl S saves, Ctrl F finds and replaces (case, regex, whole word), Ctrl / comments a line, Alt ↑/↓ moves it, Ctrl D adds the next match, Ctrl Z undoes per file. Typing offers keywords, system tasks and blocks (module, always_ff, case, a testbench clock); Tab accepts.",
-      "Check syntax runs Verilator in lint-only mode over every design and testbench file, and runs again on each save while Check on save is ticked. Problems groups what it finds by file; a click jumps to the line and explains the warning code. Style notes in testbenches are folded away.",
+      "Check syntax runs Verilator in lint-only mode over the files the config builds (with its defines and include folders) and the testbenches, and runs again on each save while Check on save is ticked. Problems groups what it finds by file; a click jumps to the line and explains the warning code. Style notes in testbenches are folded away.",
       "Simulate saves every changed file, builds the testbench named on the button (its arrow picks another) with the design files, and says how it went: ran to the end, reported failures, didn't build. File:line in the output is a link.",
       "Waveform: Signals lists everything in the dump; click one to add it, click it again to take it off. Click a name to select it (click it again, the empty space below, or Esc to let it go). Click the waves for the cursor, right-click for the marker (Δ shows the time and frequency between them), drag across to zoom in, Ctrl+wheel to zoom, Shift+wheel to pan, ←/→ to jump between changes, F to fit. Right-click a name for its number format and colour; double-click it to open its declaration. The signal list is kept per testbench.",
       "GTKWave opens the same dump in the desktop viewer with the signals on screen already loaded.",
@@ -152,7 +152,7 @@ const CATALOG = {
     ],
     pitfalls: [
       "No waveform means the testbench has no $dumpfile/$dumpvars, or the top module is set to the design instead of the testbench. Leave Top module blank to take it from the testbench.",
-      "A testbench with a free-running clock needs $finish, or the simulation stops at the 120 s limit with a partial waveform.",
+      "A testbench with a free-running clock needs $finish, or the simulation stops at its time limit (2 minutes; change it in Settings, Editor) with a partial waveform.",
       "A clean syntax check doesn't prove the logic is right. Simulate it, and check the waveform against what you expect.",
     ],
   },

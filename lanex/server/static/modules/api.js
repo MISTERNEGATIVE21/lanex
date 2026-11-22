@@ -337,8 +337,11 @@ export const api = {
   dseSweeps: () => _fetch("/api/dse/sweeps"),
 
   // ---------- Phase 3: editor + lint + sim
-  fileWrite: (rel_path, content) =>
-    _fetch("/api/file/write", { method: "POST", body: JSON.stringify({ rel_path, content }) }),
+  // opts: base_hash (the read's hash: 409 {conflict} when the file changed on
+  // disk since), force (overwrite anyway), on_exists ("error" → 409 {exists,
+  // suggested}; "keep_both" → saved under a free name).
+  fileWrite: (rel_path, content, opts) =>
+    _fetch("/api/file/write", { method: "POST", body: JSON.stringify(Object.assign({ rel_path, content }, opts || {})) }),
   fileDelete: (rel_path) =>
     _fetch("/api/file/delete", { method: "POST", body: JSON.stringify({ rel_path }) }),
   fileRename: (rel_path, new_rel) =>
