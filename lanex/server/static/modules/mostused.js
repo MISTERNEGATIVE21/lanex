@@ -12,7 +12,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
-import { pdkFacts } from "./pdkinfo.js";
+import { routingLayers, isMetal, layerCaseFix } from "./pdkinfo.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
 
 const SYNTH = [
@@ -105,9 +105,30 @@ function defLabel(it) {
   return String(it.def) + (it.unit ? " " + it.unit : "");
 }
 
-function metals(pdk) {
-  // The routing layers of the selected process (met1…, Metal1…, TopMetal…).
-  return (pdkFacts(pdk).stack || []).filter((l) => /^(met\d|metal\d|topmetal\d)/i.test(l));
+// The routing layers of the selected process, spelled exactly as its tech
+// LEF does (met1…, Metal1…, TopMetal…): RT_MAX_LAYER takes the name as
+// written. The installed PDK's own list from the server first; pdkinfo.js's
+// table (the same names) when the PDK isn't installed here.
+const _layers = {};   // pdk -> [names] from /api/pdk-layers ([] when it has none)
+export function metals(pdk) {
+  const live = _layers[pdk];
+  return live && live.length ? live : routingLayers(pdk);
+}
+
+// A PDK installed or removed on the Tools page changes the answer.
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("g:tools_changed", () => { for (const k of Object.keys(_layers)) delete _layers[k]; });
+}
+
+async function loadLayers(pdk) {
+  if (!pdk || Object.prototype.hasOwnProperty.call(_layers, pdk)) return;
+  _layers[pdk] = [];
+  try {
+    const r = await api.pdkLayers(pdk, state.selectedScl || "");
+    _layers[pdk] = ((r && r.layers) || []).filter(isMetal);
+  } catch (_e) {
+    _layers[pdk] = [];
+  }
 }
 
 function control(it, id, val) {
@@ -146,6 +167,19 @@ function notesFor(it) {
   }
   if (it.key === "DIE_AREA" && _vals.FP_SIZING === "absolute" && !shown(_vals.DIE_AREA)) {
     out.push("A fixed die needs its area.");
+  }
+  if (it.kind === "layer") {
+    const v = shown(_vals[it.key]);
+    const layers = metals(state.selectedPdk);
+    const fix = layerCaseFix(v, layers);
+    if (fix) {
+      // An older LanEx wrote gf180 and IHP layers in lower case.
+      out.push("<b>" + fmt.escape(v) + "</b> is not a layer name LibreLane knows: the case matters. " +
+        "This PDK calls it <b>" + fmt.escape(fix) + "</b>; pick it from the list to fix the config.");
+    } else if (v && layers.length && !layers.includes(v)) {
+      out.push("<b>" + fmt.escape(v) + "</b> is not a routing layer of " + fmt.escape(state.selectedPdk || "this PDK") +
+        " (" + layers.map(fmt.escape).join(", ") + ").");
+    }
   }
   return out;
 }
@@ -232,10 +266,13 @@ export async function paintSettings() {
   if (!state.designDir) { _cfg = null; render(); return; }
   const seq = ++_seq;
   try {
-    const info = await api.designInfo({
-      files: (state.selectedFiles || []).filter((f) => /\.(s?v|verilog)$/i.test(f)),
-      pdk: state.selectedPdk || null, scl: state.selectedScl || null, keys: KEYS,
-    });
+    const [info] = await Promise.all([
+      api.designInfo({
+        files: (state.selectedFiles || []).filter((f) => /\.(s?v|verilog)$/i.test(f)),
+        pdk: state.selectedPdk || null, scl: state.selectedScl || null, keys: KEYS,
+      }),
+      loadLayers(state.selectedPdk || ""),
+    ]);
     if (seq !== _seq) return;
     _cfg = info.config || null;
     _vals = info.settings || {};
