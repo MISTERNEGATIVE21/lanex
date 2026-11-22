@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -243,6 +244,51 @@ def test_foreign_name_collision_gets_distinct_owned_name_and_exact_binding(tmp_p
     bound = _run_setup("-Action", "BindAppliance", "-StatePath", state,
                        "-RegistrySnapshotPath", owned_snapshot, "-TestOwnerSid", OWNER)
     assert bound["registryId"] == "{OWNED}"
+
+
+def _bound_appliance(tmp_path: Path):
+    state, _, _, _ = _initialize(tmp_path)
+    base = tmp_path / "appliance"
+    empty = tmp_path / "empty-registry.json"
+    empty.write_text("[]", encoding="utf-8")
+    _run_setup("-Action", "ResolveAppliance", "-StatePath", state, "-PreferredDistroName", "lanex",
+               "-ExpectedBasePath", base, "-RegistrySnapshotPath", empty, "-TestOwnerSid", OWNER)
+    owned = tmp_path / "owned-registry.json"
+    owned.write_text(json.dumps([{"registryId": "{OWNED}", "name": "lanex", "basePath": str(base)}]),
+                     encoding="utf-8")
+    _run_setup("-Action", "BindAppliance", "-StatePath", state,
+               "-RegistrySnapshotPath", owned, "-TestOwnerSid", OWNER)
+    _run_setup("-Action", "SetComponent", "-StatePath", state, "-Component", "app",
+               "-ComponentStatus", "complete", "-InputFingerprint", "app-1", "-TestOwnerSid", OWNER)
+    return state, base
+
+
+def test_repair_recreates_an_environment_unregistered_behind_setups_back(tmp_path: Path) -> None:
+    # The launcher's "environment is missing" case: Repair must be able to put
+    # it back under the recorded name and folder when nothing else holds them.
+    state, base = _bound_appliance(tmp_path)
+    gone = tmp_path / "gone-registry.json"
+    gone.write_text(json.dumps([{"registryId": "{USER}", "name": "Ubuntu",
+                                 "basePath": str(tmp_path / "ubuntu")}]), encoding="utf-8")
+    appliance = _run_setup("-Action", "ResolveAppliance", "-StatePath", state,
+                           "-PreferredDistroName", "lanex", "-ExpectedBasePath", base,
+                           "-RegistrySnapshotPath", gone, "-TestOwnerSid", OWNER)
+    assert appliance["name"] == "lanex" and appliance["registryId"] == ""
+    saved = json.loads(state.read_text())
+    assert saved["phase"] == "appliance-missing" and saved["components"] == {}
+
+
+def test_recorded_name_taken_by_another_distro_is_refused_untouched(tmp_path: Path) -> None:
+    state, base = _bound_appliance(tmp_path)
+    before = state.read_text()
+    taken = tmp_path / "taken-registry.json"
+    taken.write_text(json.dumps([{"registryId": "{SOMEONE}", "name": "lanex",
+                                  "basePath": str(tmp_path / "theirs")}]), encoding="utf-8")
+    failed = _run_setup("-Action", "ResolveAppliance", "-StatePath", state,
+                        "-PreferredDistroName", "lanex", "-ExpectedBasePath", base,
+                        "-RegistrySnapshotPath", taken, "-TestOwnerSid", OWNER, ok=False)
+    assert "no longer matches Windows" in failed.stderr
+    assert state.read_text() == before
 
 
 def test_wrong_owner_and_newer_schema_are_rejected(tmp_path: Path) -> None:
@@ -701,8 +747,12 @@ def test_inno_requires_exact_payload_and_never_deletes_distro_by_name() -> None:
     assert 'DestName: "{#LanexWheelFile}"' in body
     assert "lanex-candidate.whl" not in body
     assert "BindAppliance" in body and "VerifyRepairIdentity" in body
-    uninstall = body[body.index("procedure CurUninstallStepChanged") :]
-    assert "DelTree(AppDataRoot" not in uninstall
+    # The whole uninstall section, RunUninstallChoice included: "Remove for
+    # good" once ended with DelTree(AppDataRoot), which took the user's
+    # earlier backups in %LOCALAPPDATA%\LanEx\backups with it.
+    uninstall = body[body.index("// ------------------------------------------------------------------ uninstall --"):]
+    assert "DelTree(AppDataRoot," not in uninstall
+    assert "DelTree(AppDataRoot + '\\backups'" not in uninstall
     assert "RemoveAppliance" in body and "ConfirmedInstallId" in body
     assert "Validate-UninstallOwnership" in SETUP.read_text()
 
@@ -955,6 +1005,83 @@ def test_memory_floor_and_warning(tmp_path: Path, gb: int, code: str, low: bool)
     result = _preflight(tmp_path, _base_preflight(memoryBytes=gb * (1 << 30) - (1 << 26)))
     assert result["decision"]["code"] == code
     assert result["memory"]["low"] is low
+    # Setup's messages quote the thresholds the check itself uses.
+    assert result["memory"]["minGb"] == 5 and result["memory"]["recommendedGb"] == 7
+
+
+def test_memory_words_come_from_the_check() -> None:
+    body = INNO.read_text(encoding="utf-8")
+    worker = SETUP.read_text(encoding="utf-8")
+    assert "$MinMemoryBytes = [int64]5GB" in worker and "$RecommendedMemoryBytes = [int64]7GB" in worker
+    assert "$p.memory.minGb" in body and "$p.memory.recommendedGb" in body
+    assert "at least ' + MinGB + ' GB usable" in body
+    assert "MemoryRecGBValue + ' GB usable" in body
+    # The old fixed numbers disagreed with the check (it blocks below 5, warns below 7).
+    assert "'at least 6 GB: Windows gives" not in body
+    assert "run out of memory. 8 GB or more is recommended." not in body
+
+
+def test_failures_use_plain_words_and_name_the_issue_tracker() -> None:
+    # What a person reads: every line but the comments.
+    body = "\n".join(ln for ln in INNO.read_text(encoding="utf-8").splitlines()
+                     if not ln.lstrip().startswith((";", "//")))
+    for jargon in ("structured Windows/WSL preflight", "exact Windows registration identity",
+                   "owner-only continuation trigger", "owner-bound", "(curl exit",
+                   "Please report it", "selected-component readiness failed",
+                   "private appliance kernel", "required capabilities: '"):
+        assert jargon not in body, jargon
+    assert "/issues/new?template=windows-install.yml" in body
+    assert (REPO / ".github" / "ISSUE_TEMPLATE" / "windows-install.yml").is_file()
+    assert "function CurlProblem(Code: Integer" in body
+    # The curl exit code still reaches the log, just not the dialog.
+    assert "LogLine('curl exit ' + IntToStr(Code)" in body
+
+
+def test_welcome_page_states_real_size_and_time() -> None:
+    body = INNO.read_text(encoding="utf-8")
+    welcome = next(ln for ln in body.splitlines() if ln.startswith("WelcomeLabel2="))
+    assert "a few GB" not in welcome
+    assert "2.4 GB" in welcome and "22 GB" in welcome and "15 to 18 minutes" in welcome
+    # The Configure page's Recommended figures the welcome text quotes.
+    assert "DownloadMB := 2400;" in body and "AppMB := 22500;" in body
+
+
+def test_desktop_shortcut_follows_the_finished_page_tick() -> None:
+    body = INNO.read_text(encoding="utf-8")
+    post = body[body.index("procedure CurStepChanged"):]
+    # ssPostInstall runs before the Finished page exists on screen, so it must
+    # not read the box (it only ever saw the default, ticked).
+    assert "DesktopShortcutCheckbox.Checked" not in post
+    nxt = body[body.index("function NextButtonClick"):body.index("function ShouldSkipPage")]
+    assert "CurPageID = wpFinished" in nxt
+    assert "ApplyDesktopShortcut(DesktopShortcutCheckbox.Checked)" in nxt
+    assert "{param:DESKTOPSHORTCUT|1}" in post
+
+
+def test_uninstall_names_the_recorded_distro_and_keeps_backups() -> None:
+    body = INNO.read_text(encoding="utf-8")
+    uninstall = body[body.index("// ------------------------------------------------------------------ uninstall --"):]
+    assert "ConvertFrom-Json; ''n'' + $s.appliance.name" in uninstall
+    assert re.search(r"wsl --unregister '\s*\+ UninstallDistroName", uninstall)
+    assert "wsl --unregister lanex" not in body
+    confirm = uninstall[uninstall.index("Remove the LanEx environment for good?"):]
+    confirm = confirm[:confirm.index("UninstallMode := 'remove'")]
+    assert "Deleted:" in confirm and "Kept:" in confirm and "BackupListText" in confirm
+    # Only this install's browser profile; the parents go only when empty.
+    assert "DelTree(AppDataRoot + '\\app-profile\\' + InstallId" in uninstall
+    assert "RemoveDir(AppDataRoot);" in uninstall
+    assert ('Name: "{userprograms}\\{#AppGroupName}\\Uninstall or remove {#AppName}"; '
+            'Filename: "{uninstallexe}"') in body
+
+
+def test_docs_never_tell_users_a_fixed_distro_name_to_unregister() -> None:
+    for doc in [REPO / "README.md", *sorted((REPO / "docs").rglob("*.md"))]:
+        if doc.name.startswith("audit-"):
+            continue  # the audit quotes the old advice to describe the bug
+        text = doc.read_text(encoding="utf-8", errors="replace")
+        assert "wsl --unregister lanex" not in text, doc
+    install = (REPO / "docs" / "INSTALL.md").read_text(encoding="utf-8")
+    assert "appliance.name" in install
 
 
 def test_wsl_group_policy_blocks_with_its_own_reason(tmp_path: Path) -> None:

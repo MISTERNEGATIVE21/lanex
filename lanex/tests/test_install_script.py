@@ -23,10 +23,15 @@ a future edit could silently drop:
 """
 from __future__ import annotations
 
+import importlib.util
 import os
+import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 INSTALL = REPO / "scripts" / "install.sh"
@@ -153,3 +158,172 @@ def test_readme_points_at_universal_installer() -> None:
     # The paste-broken `exec bash` pattern must not come back to the blocks.
     assert "&& exec bash" not in readme
     assert "&& exec zsh" not in readme
+
+
+# --- the release the one-liner installs (G22) -------------------------------
+
+STAMPER = REPO / "scripts" / "stamp_release_ref.py"
+FAKE_CURL = """#!/bin/sh
+# Test double for curl: "downloads" a tiny installer that reports how it ran.
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift ;; -*) ;; *) url="$1" ;; esac
+    shift
+done
+[ "${FAKE_CURL_FAIL:-0}" = 1 ] && exit 22
+printf 'main() { echo "handover url=%s ref=$LANEX_REF boot=$LANEX_BOOTSTRAPPED args=$*"; }\\nmain "$@"\\n' "$url" > "$out"
+"""
+
+
+def _stamper():
+    spec = importlib.util.spec_from_file_location("stamp_release_ref", STAMPER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _stamp_of(path: Path) -> str:
+    found = re.findall(r'^LANEX_RELEASE_REF="([^"]*)"$', path.read_text(), re.M)
+    assert len(found) == 1, path
+    return found[0]
+
+
+# Git for Windows' bash.exe puts its own bin folders first on PATH, so the
+# fake curl is put first from inside bash, then the real command runs.
+_WITH_FAKE_CURL = ('fb="$LX_FAKE_BIN"; if command -v cygpath >/dev/null 2>&1; then '
+                   'fb="$(cygpath -u "$fb")"; fi; PATH="$fb:$PATH"; exec bash "$@"')
+
+
+def _run_with_fake_curl(tmp_path: Path, *args: str, stdin: str | None = None,
+                        fail: bool = False) -> subprocess.CompletedProcess:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    curl = bindir / "curl"
+    curl.write_text(FAKE_CURL, newline="\n")
+    curl.chmod(0o755)
+    env = os.environ.copy()
+    for knob in ("LANEX_REF", "LANEX_FROM", "LANEX_BOOTSTRAPPED", "LANEX_REPO"):
+        env.pop(knob, None)
+    env["LX_FAKE_BIN"] = str(bindir)
+    if fail:
+        env["FAKE_CURL_FAIL"] = "1"
+    return subprocess.run([_bash_executable(), "-c", _WITH_FAKE_CURL, "bash", *args],
+                          input=stdin, env=env, capture_output=True, text=True, cwd=tmp_path)
+
+
+def test_release_stamp_matches_in_both_scripts_and_any_head_tag() -> None:
+    # Fails on a tagged checkout whose installers would install main or
+    # another release: "not main in a tagged build".
+    assert _stamp_of(INSTALL) == _stamp_of(SHIM)
+    res = subprocess.run([sys.executable, "-I", str(STAMPER), "--check"], cwd=REPO,
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr + res.stdout
+
+
+def test_default_ref_is_the_stamp() -> None:
+    body = INSTALL.read_text()
+    assert 'REF="${LANEX_REF:-$LANEX_RELEASE_REF}"' in body
+    assert 'REF="${LANEX_REF:-main}"' not in body
+    env = os.environ.copy()
+    for knob in ("LANEX_REF", "LANEX_FROM", "LANEX_REPO"):
+        env.pop(knob, None)
+    res = subprocess.run([_bash_executable(), str(INSTALL), "--print-source"], env=env,
+                         capture_output=True, text=True)
+    assert res.stdout.strip().endswith("/tar.gz/" + _stamp_of(INSTALL))
+
+
+def test_stamper_writes_both_scripts_and_refuses_non_tags(tmp_path: Path, monkeypatch) -> None:
+    mod = _stamper()
+    copies = []
+    for src in (INSTALL, SHIM):
+        dst = tmp_path / src.name
+        dst.write_text(src.read_text(), newline="\n")
+        copies.append(dst)
+    monkeypatch.setattr(mod, "SCRIPTS", tuple(copies))
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    assert mod.main(["v9.8.7"]) == 0
+    assert all(_stamp_of(p) == "v9.8.7" for p in copies)
+    assert mod.main(["main"]) == 2 and mod.main(["latest"]) == 2
+    assert all(_stamp_of(p) == "v9.8.7" for p in copies)
+
+
+def test_piped_stamped_installer_hands_over_to_the_release_copy(tmp_path: Path) -> None:
+    # A stamped main copy run through a pipe runs the release's own install.sh.
+    stamped = INSTALL.read_text().replace('LANEX_RELEASE_REF="main"', 'LANEX_RELEASE_REF="v9.9.9"', 1)
+    assert 'LANEX_RELEASE_REF="v9.9.9"' in stamped
+    res = _run_with_fake_curl(tmp_path, "-s", "--", "--help", stdin=stamped)
+    assert res.returncode == 0, res.stderr
+    assert "/AkshatIsWired/lanex/v9.9.9/scripts/install.sh" in res.stdout
+    assert "ref=v9.9.9 boot=1 args=--help" in res.stdout
+
+
+def test_shim_fails_loudly_when_the_download_fails(tmp_path: Path) -> None:
+    shim = tmp_path / "install-wsl.sh"          # no sibling install.sh here
+    shim.write_text(SHIM.read_text(), newline="\n")
+    res = _run_with_fake_curl(tmp_path, str(shim), fail=True)
+    assert res.returncode != 0
+    assert "Could not download the LanEx installer" in res.stderr
+    assert "handover" not in res.stdout
+
+
+def test_shim_runs_the_downloaded_installer_with_its_arguments(tmp_path: Path) -> None:
+    shim = tmp_path / "install-wsl.sh"
+    shim.write_text(SHIM.read_text(), newline="\n")
+    res = _run_with_fake_curl(tmp_path, str(shim), "--profile", "minimal")
+    assert res.returncode == 0, res.stderr
+    ref = _stamp_of(SHIM)
+    assert f"/{ref}/scripts/install.sh ref={ref} boot=1 args=--profile minimal" in res.stdout
+
+
+def test_every_network_fetch_checks_its_result() -> None:
+    for path in (INSTALL, SHIM):
+        body = path.read_text()
+        # bash -c "$(curl ...)" runs an empty script and succeeds when curl fails.
+        assert 'bash -c "$(curl' not in body and 'bash -c "$(wget' not in body, path.name
+
+
+# --- PATH line and the /usr/local/bin link (audit 4.1) -----------------------
+
+def _function(name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{.*?^\}}$", INSTALL.read_text(), re.M | re.S)
+    assert match, name
+    return match.group(0)
+
+
+def test_path_line_is_added_once(tmp_path: Path) -> None:
+    rc = tmp_path / ".bashrc"
+    rc.write_text('export PATH="/opt/lanexbin:$PATH"\n', newline="\n")   # an older run's line
+    script = (_function("add_path_line")
+              + "\nadd_path_line /opt/lanexbin\nadd_path_line /opt/lanexbin"
+              + "\nadd_path_line /opt/other\nadd_path_line /opt/other\n")
+    env = dict(os.environ, HOME=str(tmp_path), SHELL="/bin/bash")
+    res = subprocess.run([_bash_executable(), "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    text = rc.read_text()
+    assert text.count('export PATH="/opt/lanexbin:$PATH"') == 1
+    assert text.count('export PATH="/opt/other:$PATH"') == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Git Bash's ln -s copies instead of linking")
+def test_only_our_own_link_counts_as_ours(tmp_path: Path) -> None:
+    script = _function("lanex_link_is_ours") + """
+LAUNCHER="$HOME/.local/bin/lanex"
+mkdir -p "$HOME/.lanex/venv/bin"
+ln -s "$HOME/.lanex/venv/bin/lanex" "$HOME/ours"
+ln -s /opt/someone-else/lanex "$HOME/theirs"
+ln -s /home/alice/.local/bin/lanex "$HOME/alices"
+echo plain > "$HOME/file"
+for p in ours theirs alices file; do
+    if lanex_link_is_ours "$HOME/$p"; then echo "$p=ours"; else echo "$p=not"; fi
+done
+"""
+    env = dict(os.environ, HOME=str(tmp_path))
+    res = subprocess.run([_bash_executable(), "-c", script], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.split() == ["ours=ours", "theirs=not", "alices=not", "file=not"]
+
+
+def test_existing_foreign_lanex_command_is_not_overwritten() -> None:
+    body = _function("expose_on_path")
+    assert body.index("lanex_link_is_ours") < body.index('ln -sfn "$LAUNCHER"')
+    assert 'ln -sf "$LAUNCHER" /usr/local/bin/lanex' not in INSTALL.read_text()

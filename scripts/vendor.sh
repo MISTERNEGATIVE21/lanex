@@ -19,6 +19,17 @@ echo "==> ECharts  ${ECHARTS_VERSION} -> $VENDOR/echarts.min.js"
 curl -fsSL \
   "https://cdn.jsdelivr.net/npm/echarts@${ECHARTS_VERSION}/dist/echarts.min.js" \
   -o "$VENDOR/echarts.min.js"
+# Apache-2.0 asks for the NOTICE to travel with the code; the bundle also
+# contains ZRender and d3.js code under BSD 3-Clause (see NOTICE at the repo
+# root, which records the versions: update it when bumping).
+ZRENDER_VERSION="5.6.0"   # echarts@5.5.1's dependency
+mkdir -p "$VENDOR/echarts-licenses"
+curl -fsSL "https://cdn.jsdelivr.net/npm/echarts@${ECHARTS_VERSION}/LICENSE" -o "$VENDOR/echarts.LICENSE"
+curl -fsSL "https://cdn.jsdelivr.net/npm/echarts@${ECHARTS_VERSION}/NOTICE" -o "$VENDOR/echarts.NOTICE"
+curl -fsSL "https://cdn.jsdelivr.net/npm/echarts@${ECHARTS_VERSION}/licenses/LICENSE-d3" \
+  -o "$VENDOR/echarts-licenses/LICENSE-d3"
+curl -fsSL "https://cdn.jsdelivr.net/npm/zrender@${ZRENDER_VERSION}/LICENSE" \
+  -o "$VENDOR/echarts-licenses/LICENSE-zrender"
 
 # CodeMirror 6 — the RTL IDE's editor (modules/ide/editor.js). npm packages,
 # bundled by esbuild into one ES module from scripts/vendor/codemirror-entry.js

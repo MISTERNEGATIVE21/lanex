@@ -84,6 +84,13 @@ def main() -> int:
         print("[!] WARNING: tracked files have uncommitted changes; the source SHA "
               "does not describe this build exactly:\n" + dirty)
     print(f"[*] Source ref: {source_ref}")
+    # The Unix one-liner installs the ref stamped in scripts/install.sh. A
+    # tagged release build whose stamp is not its own tag would send Linux and
+    # macOS users to main (or an older release): refuse it here.
+    stamp = subprocess.run([sys.executable, "-I", str(REPO_ROOT / "scripts" / "stamp_release_ref.py"),
+                            "--check"], cwd=REPO_ROOT)
+    if stamp.returncode != 0:
+        raise SystemExit("The installers' LANEX_RELEASE_REF does not match this release; see above.")
 
     # 2. Build Python wheel
     print("[*] Building Python wheel...")

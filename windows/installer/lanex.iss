@@ -226,7 +226,11 @@ UninstalledAll=The LanEx app was removed from your computer.
 ; the version and the reason.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
-WelcomeLabel2=This installs [name/ver], the chip design app, on your computer.%n%nLanEx runs in its own private Linux environment (WSL). Your other WSL distributions are not changed.%n%nSetup downloads the design tools and a chip process kit (PDK): a few GB, so a steady connection helps. If WSL is not on yet, Windows asks for permission and restarts once; Setup then carries on by itself.%n%nUninstalling keeps your projects unless you choose otherwise.
+; The numbers are the Recommended setup's, measured on clean Windows 10 and 11
+; VMs (installer-workspace/START-HERE.md): 2.35 GB downloaded, 14 to 18 min
+; from Install to Finished including the restart, and the 22.5 GB the
+; Configure page asks for (CalculateEstimatesFast). Keep them in step.
+WelcomeLabel2=This installs [name/ver], the chip design app, on your computer.%n%nLanEx runs in its own private Linux environment (WSL). Your other WSL distributions are not changed.%n%nThe Recommended setup downloads about 2.4 GB (the design tools and the SKY130 chip process kit) and needs about 22 GB of free disk space. On a fast connection it takes about 15 to 18 minutes, including one restart if WSL is not on yet; a slower connection adds download time. If WSL has to be turned on, Windows asks for permission, and Setup carries on by itself after the restart.%n%nUninstalling keeps your projects unless you choose otherwise.
 
 
 [Files]
@@ -260,6 +264,10 @@ Name: "{userprograms}\{#AppGroupName}\{#AppName}"; Filename: "{app}\LanEx.exe"; 
 ; own PC, not something sealed inside a black box.
 Name: "{userprograms}\{#AppGroupName}\{#AppName} Project Files"; Filename: "{code:DistroProjectPath}"; IconFilename: "{app}\lanex.ico"
 Name: "{userprograms}\{#AppGroupName}\Repair {#AppName}"; Filename: "{localappdata}\{#DataDirName}\installer-cache\LanEx-Setup.exe"; Parameters: "/REPAIR=1"; IconFilename: "{app}\lanex.ico"
+; The same uninstaller as Settings > Apps. It is also the one safe way to remove
+; the LanEx environment: its "remove for good" choice deletes only the WSL
+; distro LanEx recorded and proved it owns, never one found by name.
+Name: "{userprograms}\{#AppGroupName}\Uninstall or remove {#AppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\lanex.ico"
 
 
 [Run]
@@ -328,6 +336,9 @@ var
   FirmwareNoticeValue: Boolean;
   LowMemoryValue: Boolean;
   MemoryGBValue: String;
+  // The worker's own thresholds (setup.ps1 $MinMemoryBytes and
+  // $RecommendedMemoryBytes), so the words on screen always match the check.
+  MemoryMinGBValue, MemoryRecGBValue: String;
   WslVersionValue: String;
   ConfigurePage: TWizardPage;
   ProfileRadioRecommended, ProfileRadioComplete, ProfileRadioCustom, ProfileRadioMinimal: TRadioButton;
@@ -376,6 +387,9 @@ var
   // Preparation ended with a message: the Preparing page must show it.
   PrepareResultShown: Boolean;
   UninstallMode, UninstallExportFile: String;
+  // The WSL distro and folder LanEx recorded for this install (from
+  // installer-state.json), read once when the uninstaller starts.
+  UninstallDistroName, UninstallDistroPath: String;
   // Why the elevated feature step failed, in Windows' own words.
   FeatureFailure: String;
   BaselineDownloadMB, BaselineAppMB: Int64;
@@ -413,11 +427,14 @@ begin
 end;
 
 // The folder New project uses (lanex/controller/platform_env.py
-// projects_dir): LanEx-Projects in the Windows profile, or the Linux home
-// when the profile path has a space (LibreLane splits file lists on spaces).
+// projects_dir): LanEx-Projects in the Windows profile, or ~/lanex-projects
+// in the Linux home when the profile path has a space (LibreLane splits file
+// lists on spaces). The shortcut is made at the end of the install, while the
+// environment is running, so the Linux folder can be created here; if that
+// fails, the Linux home (which always exists) is the fallback.
 function DistroProjectPath(Param: String): String;
 var
-  Home: String;
+  Home, LinuxHome: String;
 begin
   Home := ExpandConstant('{%USERPROFILE}');
   if (Home <> '') and (Pos(' ', Home) = 0) and (Pos(#9, Home) = 0) then
@@ -426,7 +443,12 @@ begin
     ForceDirectories(Result);
   end
   else
-    Result := '\\wsl.localhost\' + DistroNameValue + '\home\{#AppUser}';
+  begin
+    LinuxHome := '\\wsl.localhost\' + DistroNameValue + '\home\{#AppUser}';
+    Result := LinuxHome + '\lanex-projects';
+    if not DirExists(Result) and not ForceDirectories(Result) then
+      Result := LinuxHome;
+  end;
 end;
 
 function PSQuote(const S: String): String;
@@ -1032,6 +1054,91 @@ begin
       Result := Result + StripNulls(Lines[I]) + #13#10;
 end;
 
+// Where a person reports a failure Setup cannot fix by itself. The template
+// asks for install.log, so the message always says where that file is too.
+function ReportHint: String;
+begin
+  Result := 'If it keeps failing, report it at {#AppURL}/issues/new?template=windows-install.yml '
+    + 'and attach the install log (' + LogFile + ').';
+end;
+
+// CurlProblem turns curl's exit code into words a person can act on. The
+// number itself goes to install.log, never into a dialog.
+function CurlProblem(Code: Integer; const Url: String): String;
+var
+  Host: String;
+  P: Integer;
+begin
+  Host := Url;
+  P := Pos('://', Host);
+  if P > 0 then Host := Copy(Host, P + 3, Length(Host));
+  P := Pos('/', Host);
+  if P > 0 then Host := Copy(Host, 1, P - 1);
+  case Code of
+    5, 6: Result := 'This PC could not look up ' + Host + ' (no internet, or the network''s DNS blocks it).';
+    7: Result := 'This PC could not connect to ' + Host + ' (offline, or a firewall or VPN blocks it).';
+    18, 56: Result := 'The connection to ' + Host + ' broke off in the middle of the download.';
+    22: Result := Host + ' does not have the file or refused to send it.';
+    23: Result := 'Setup could not write the download to disk. Check that drive '
+      + ExtractFileDrive(CacheDir) + ' has free space.';
+    28: Result := 'The download from ' + Host + ' was too slow or stopped answering.';
+    33, 36: Result := Host + ' could not continue the earlier partial download; Setup starts that file again.';
+    35, 51, 53, 54, 58, 59, 60, 77, 80, 83, 90, 91:
+      Result := 'The secure connection to ' + Host + ' could not be checked. A company network that '
+        + 'inspects HTTPS traffic, or a wrong date and time on this PC, causes this.';
+  else
+    Result := 'The download from ' + Host + ' did not finish.';
+  end;
+end;
+
+// PreflightStopText says, for each check Windows cannot pass, what is wrong
+// and what to do. The wizard's first look and the check before Install show
+// the same words; the decision code itself stays in install.log.
+function PreflightStopText(const Code: String): String;
+var
+  MinGB: String;
+begin
+  MinGB := MemoryMinGBValue;
+  if MinGB = '' then MinGB := '5';
+  if Code = 'unsupported-architecture' then
+    Result := 'This LanEx installer is for x64 PCs (Intel or AMD). This PC has a different '
+      + 'processor (for example ARM64), which LanEx does not support yet.'
+  else if Code = 'unsupported-windows' then
+    Result := 'LanEx needs Windows 10 version 21H2 (build 19044) or newer, so its desktop '
+      + 'tools can open their windows. Windows 11 x64 is recommended. Update Windows, then run '
+      + 'LanEx Setup again.'
+  else if Code = 'vm-nested-virtualization-off' then
+    Result := 'This Windows runs inside a virtual machine that cannot run WSL 2.'
+      + #13#10#13#10 + 'LanEx needs WSL 2, which is itself a small virtual machine. The host of this '
+      + 'virtual machine does not pass virtualization through ("nested virtualization"), so WSL 2 '
+      + 'cannot start, and restarting will not change that.'
+      + #13#10#13#10 + 'Install LanEx on the PC itself, or turn on nested virtualization for this VM '
+      + '(Hyper-V: Set-VMProcessor -ExposeVirtualizationExtensions $true while the VM is off; '
+      + 'VMware: "Virtualize Intel VT-x/EPT or AMD-V/RVI"; VirtualBox: "Enable Nested VT-x/AMD-V").'
+  else if Code = 'windows-update-required' then
+    Result := 'This copy of Windows needs its updates before LanEx can be installed.'
+      + #13#10#13#10 + 'LanEx uses the current Windows Subsystem for Linux, which needs a Windows '
+      + 'update from late 2022 or newer. Open Settings > Windows Update, install all updates, '
+      + 'restart, then run LanEx Setup again.'
+  else if Code = 'wsl-blocked-by-policy' then
+    Result := 'Windows Subsystem for Linux is switched off by a policy on this PC.'
+      + #13#10#13#10 + 'LanEx runs inside WSL, so it cannot be installed here until the policy '
+      + 'allows it. On a work or school PC, ask the IT administrator to allow WSL '
+      + '(policy "Allow the Windows Subsystem For Linux"), then run Setup again.'
+  else if Code = 'not-enough-memory' then
+    Result := 'This PC has ' + MemoryGBValue + ' GB of memory (RAM) that Windows can use. LanEx '
+      + 'needs at least ' + MinGB + ' GB usable, which a PC sold with 6 GB or more has '
+      + '(Windows keeps a little for the hardware). Windows gives its Linux environment half of '
+      + 'the memory, and a chip design run needs more than what would be left.'
+      + #13#10#13#10 + 'Install LanEx on a PC with more memory.'
+  else if Code = 'preflight-query-failed' then
+    Result := 'Windows did not let Setup check whether Windows Subsystem for Linux and Virtual '
+      + 'Machine Platform are turned on. On a managed PC, ask an administrator to turn on both '
+      + 'features, then run Setup again.'
+  else
+    Result := '';
+end;
+
 // WindowsToWslPath converts C:\dir\file to /mnt/c/dir/file — how the appliance
 // sees a file on the Windows drive (automount is on by default, and
 // provision.sh's wsl.conf pins it on).
@@ -1133,6 +1240,7 @@ begin
     + '$p.decision.code; $p.bootIdentity; '
     + '(($p.computer.manufacturer + '' '' + $p.computer.model) -replace ''[\r\n\t]'','' '').Trim(); '
     + '$p.decision.firmwareNotice; $p.memory.low; $p.memory.gb; '
+    + '(''m'' + $p.memory.minGb); (''m'' + $p.memory.recommendedGb); '
     + '(''v'' + $p.wsl.version); '
     + '($p | ConvertTo-Json -Depth 20 -Compress)';
   Result := PowerShellCapture(Snippet, Output);
@@ -1147,13 +1255,17 @@ begin
   FirmwareNoticeValue := CompareText(TakeLine(Output), 'true') = 0;
   LowMemoryValue := CompareText(TakeLine(Output), 'true') = 0;
   MemoryGBValue := TakeLine(Output);
-  // 'v' + version, so an empty version still occupies its line.
+  // 'm' and 'v' prefixes, so an empty value still occupies its line.
+  MemoryMinGBValue := Copy(TakeLine(Output), 2, 16);
+  MemoryRecGBValue := Copy(TakeLine(Output), 2, 16);
+  if MemoryMinGBValue = '' then MemoryMinGBValue := '5';
+  if MemoryRecGBValue = '' then MemoryRecGBValue := '7';
   WslVersionValue := Copy(TakeLine(Output), 2, 64);
   JsonLine := TakeLine(Output);
   LogLine('preflight: ' + JsonLine);
   Result := (PreflightDecision <> '') and (BootIdentityValue <> '');
   if not Result then
-    Failure := 'The structured preflight result was incomplete.';
+    Failure := 'Setup''s check of this PC stopped before it gave a full answer.';
 end;
 
 function IsResumeRun: Boolean;
@@ -2192,76 +2304,22 @@ begin
     Exit;
   end;
 
-  if PreflightDecision = 'unsupported-architecture' then
+  // Checks Windows cannot pass: one plain explanation each (PreflightStopText),
+  // shown before anything on the PC is changed.
+  if PreflightStopText(PreflightDecision) <> '' then
   begin
-    if not WizardSilent then MsgBox('This LanEx installer contains an amd64 Linux appliance and requires '
-      + 'an x64 Windows PC. ARM64 and other native architectures are not '
-      + 'supported by this build.' + #13#10#13#10 + 'Log: ' + LogFile, mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
-  if PreflightDecision = 'unsupported-windows' then
-  begin
-    if not WizardSilent then MsgBox('LanEx needs Windows build 19044 or newer so its WSLg desktop tools '
-      + 'can open correctly. Windows 11 x64 is recommended.' + #13#10#13#10 + 'Log: ' + LogFile, mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
-  if PreflightDecision = 'vm-nested-virtualization-off' then
-  begin
-    if not WizardSilent then MsgBox('This Windows runs inside a virtual machine that cannot run WSL 2.'
-      + #13#10#13#10 + 'LanEx needs WSL 2, which is itself a small virtual machine. The host of this '
-      + 'virtual machine does not pass virtualization through ("nested virtualization"), so WSL 2 '
-      + 'cannot start, and restarting will not change that.'
-      + #13#10#13#10 + 'Install LanEx on the PC itself, or turn on nested virtualization for this VM '
-      + '(Hyper-V: Set-VMProcessor -ExposeVirtualizationExtensions $true while the VM is off; '
-      + 'VMware: "Virtualize Intel VT-x/EPT or AMD-V/RVI"; VirtualBox: "Enable Nested VT-x/AMD-V").'
-      + #13#10#13#10 + 'LanEx was not installed. Log: ' + LogFile, mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
-  if PreflightDecision = 'windows-update-required' then
-  begin
-    if not WizardSilent then MsgBox('This copy of Windows needs its updates before LanEx can be installed.'
-      + #13#10#13#10 + 'LanEx uses the current Windows Subsystem for Linux, which needs a Windows '
-      + 'update from late 2022 or newer. Open Settings > Windows Update, install all updates, '
-      + 'restart, then run LanEx Setup again.'
-      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
-  if PreflightDecision = 'wsl-blocked-by-policy' then
-  begin
-    if not WizardSilent then MsgBox('Windows Subsystem for Linux is switched off by a policy on this PC.'
-      + #13#10#13#10 + 'LanEx runs inside WSL, so it cannot be installed here until the policy '
-      + 'allows it. On a work or school PC, ask the IT administrator to allow WSL '
-      + '(policy "Allow the Windows Subsystem For Linux"), then run Setup again.'
-      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
-  if PreflightDecision = 'not-enough-memory' then
-  begin
-    if not WizardSilent then MsgBox('This PC has ' + MemoryGBValue + ' GB of memory (RAM). LanEx needs '
-      + 'at least 6 GB: Windows gives its Linux environment half of the memory, and a chip '
-      + 'design run needs more than what would be left.'
-      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
+    LogLine('preflight stopped Setup: ' + PreflightDecision);
+    if not WizardSilent then MsgBox(PreflightStopText(PreflightDecision)
+      + #13#10#13#10 + 'LanEx was not installed, and nothing on this PC was changed.'
+      + #13#10#13#10 + 'Log: ' + LogFile, mbError, MB_OK);
     Result := False;
     Exit;
   end;
   if LowMemoryValue and not WizardSilent then
-    MsgBox('This PC has ' + MemoryGBValue + ' GB of memory (RAM). LanEx works, and the example '
-      + 'designs run, but large designs can run out of memory. 8 GB or more is recommended.',
+    MsgBox('This PC has ' + MemoryGBValue + ' GB of memory (RAM) that Windows can use. LanEx '
+      + 'works, and the example designs run, but large designs can run out of memory below '
+      + MemoryRecGBValue + ' GB usable. A PC with 8 GB or more is recommended.',
       mbInformation, MB_OK);
-  if PreflightDecision = 'preflight-query-failed' then
-  begin
-    if not WizardSilent then MsgBox('Windows did not allow Setup to determine the required WSL feature '
-      + 'states. On a managed PC, ask an administrator to enable Windows '
-      + 'Subsystem for Linux and Virtual Machine Platform, then run Setup again.'
-      + #13#10#13#10 + 'No feature or distribution was changed.' + #13#10#13#10 + 'Log: ' + LogFile, mbError, MB_OK);
-    Result := False;
-    Exit;
-  end;
 
   // Firmware disabled is the only early BIOS/UEFI block. A running hypervisor
   // overrides misleading firmware=false signals; unknown produces a notice.
@@ -2354,8 +2412,10 @@ begin
   StagedChoices := ExpandConstant('{tmp}\choices-state.json');
   if not SaveStringsToUTF8FileWithoutBOM(StagedChoices, [ChoicesJsonValue], False) then
   begin
-    Result := 'LanEx could not stage its selected component choices.'
-      + #13#10#13#10 + 'No WSL distribution or user data was changed.';
+    Result := 'Setup could not save your choices to its temporary folder ('
+      + ExpandConstant('{tmp}') + '). Check that drive ' + ExtractFileDrive(ExpandConstant('{tmp}'))
+      + ' has free space, then run LanEx Setup again.'
+      + #13#10#13#10 + 'Nothing on this PC was changed.';
     Exit;
   end;
 
@@ -2389,9 +2449,11 @@ begin
     Snippet := Snippet + ' -ResumeMode 1 -BootIdentity ' + PSQuote(BootIdentityValue);
   if not PowerShellCapture(Snippet, Output) then
   begin
-    Result := 'LanEx could not validate its saved setup state.' + #13#10#13#10
-      + Output + #13#10#13#10
-      + 'No WSL distribution or user data was changed.';
+    LogLine('InitializeState failed: ' + Output);
+    Result := 'Setup could not use the record it keeps of this LanEx install ('
+      + StateFile + ').' + #13#10#13#10 + 'Reason: ' + Output + #13#10#13#10
+      + 'Nothing on this PC was changed. If you ran an older or a different LanEx Setup, '
+      + 'run the newest LanEx-Setup.exe instead. ' + ReportHint;
     Exit;
   end;
 
@@ -2407,9 +2469,11 @@ begin
     + ' -ExpectedBasePath ' + PSQuote(DistroDir);
   if not PowerShellCapture(Snippet, Output) then
   begin
-    Result := 'LanEx could not prove ownership of the saved appliance.'
-      + #13#10#13#10 + Output + #13#10#13#10
-      + 'The existing distribution was left untouched.';
+    LogLine('ResolveAppliance failed: ' + Output);
+    Result := 'Setup found a LanEx environment on record, but Windows'' list of Linux '
+      + 'environments no longer matches that record, so Setup cannot be sure which one is '
+      + 'LanEx''s. It stopped without touching any of them.' + #13#10#13#10
+      + 'Reason: ' + Output + #13#10#13#10 + ReportHint;
     Exit;
   end;
   if LoadStringFromFile(StateFile, RawState) then
@@ -2449,17 +2513,23 @@ begin
     DistroBasePathValue := DistroDir;
   if DistroNameValue = '' then
   begin
-    Result := 'LanEx could not read the selected appliance name from setup state.';
+    Result := 'The record Setup keeps of this LanEx install (' + StateFile + ') is '
+      + 'incomplete, so Setup stopped without changing anything. Run LanEx Setup again. '
+      + ReportHint;
     Exit;
   end;
   if InstallIdValue = '' then
   begin
-    Result := 'LanEx could not read the install identity from setup state.';
+    Result := 'The record Setup keeps of this LanEx install (' + StateFile + ') is '
+      + 'incomplete, so Setup stopped without changing anything. Run LanEx Setup again. '
+      + ReportHint;
     Exit;
   end;
   if OwnerSidValue = '' then
   begin
-    Result := 'LanEx could not read the owner identity from setup state.';
+    Result := 'The record Setup keeps of this LanEx install (' + StateFile + ') is '
+      + 'incomplete, so Setup stopped without changing anything. Run LanEx Setup again. '
+      + ReportHint;
     Exit;
   end;
   ManifestHashValue := Lowercase(GetSHA256OfFile(Manifest));
@@ -2479,9 +2549,11 @@ begin
         + ' -Destination ' + PSQuote(SetupCopy) + ' -Force';
       if not PowerShellCapture(Snippet, Output) then
       begin
-        Result := 'LanEx could not stage a durable copy of this exact installer.'
-          + #13#10#13#10 + Output + #13#10#13#10
-          + 'No Windows feature or WSL distribution was changed.';
+        LogLine('could not copy Setup to the cache: ' + Output);
+        Result := 'Setup could not keep a copy of itself in ' + CacheDir + ', which it needs '
+          + 'to carry on after a restart. Check that drive ' + ExtractFileDrive(CacheDir)
+          + ' has free space and that no antivirus blocks that folder, then run LanEx Setup '
+          + 'again.' + #13#10#13#10 + 'Nothing on this PC was changed.';
         Exit;
       end;
     end;
@@ -2509,9 +2581,10 @@ begin
     + PSQuote(StateFile) + ' -ResumeInstallerPath ' + PSQuote(SetupCopy);
   if not PowerShellCapture(Snippet, Output) then
   begin
-    Result := 'LanEx could not verify its cached installer or manual Continue '
-      + 'shortcut.' + #13#10#13#10 + Output
-      + #13#10#13#10 + 'No Windows feature or WSL distribution was changed.';
+    LogLine('StageInstaller failed: ' + Output);
+    Result := 'Setup could not check its saved copy of itself, or could not create the '
+      + '"Continue LanEx Setup" Start-menu entry it needs after a restart.' + #13#10#13#10
+      + 'Run LanEx Setup again. Nothing on this PC was changed. ' + ReportHint;
     Exit;
   end;
   RepairExisting := (OperationName = 'repair') and HadState and DistroExists;
@@ -2735,7 +2808,9 @@ begin
           end;
           LogLine('download from ' + Url + ' did not match the pinned SHA-256; discarded');
           DeleteFile(Part);
-          LastError := 'The file from ' + Url + ' did not match its pinned SHA-256.';
+          LastError := 'The file from ' + Url + ' was not the expected file (its checksum did '
+            + 'not match), so Setup threw it away. This happens when a download is cut short '
+            + 'or a network filter changes it.';
           Break;                                 // next URL
         end;
         if (Code = 22) or (Code = 33) or (Code = 36) then
@@ -2744,11 +2819,11 @@ begin
           // stale .part does not fit this server's file) or no range support.
           LogLine('curl exit ' + IntToStr(Code) + ' for ' + Url + '; trying the next location');
           if (Code = 33) or (Code = 36) then DeleteFile(Part);
-          LastError := 'The server at ' + Url + ' refused the download (curl exit '
-            + IntToStr(Code) + ').';
+          LastError := CurlProblem(Code, Url);
           Break;
         end;
-        LastError := 'The connection to ' + Url + ' failed (curl exit ' + IntToStr(Code) + ').';
+        LogLine('curl exit ' + IntToStr(Code) + ' for ' + Url);
+        LastError := CurlProblem(Code, Url);
         WaitSec := 5 * Attempt;
         if WaitSec > 30 then WaitSec := 30;
         SetStatus(Format('The connection dropped. Retrying in %d seconds (attempt %d of 8); '
@@ -2831,7 +2906,7 @@ var
 begin
   if CancelRequested then
   begin
-    Result := 'Setup was cancelled before downloading the appliance image.';
+    Result := 'Setup was cancelled before downloading the LanEx environment.';
     Exit;
   end;
 #ifdef EmbeddedRootfs
@@ -2986,9 +3061,10 @@ begin
       + #13#10#13#10 + 'Install log: ' + LogFile,
       mbError, MB_RETRYCANCEL);
   until Answer <> IDRETRY;
-  Result := 'The LanEx environment could not be prepared.' + #13#10#13#10
-    + 'The full log is at:' + #13#10 + LogFile + #13#10#13#10
-    + 'Please report it — the log tells us exactly which step failed.';
+  Result := 'The LanEx environment could not be set up. The last lines of the install log '
+    + 'name the step that failed.' + #13#10#13#10
+    + 'Run LanEx Setup again: it keeps what is already downloaded and checked. '
+    + ReportHint;
   RecordSetupOutcome('failed', Result);
 end;
 
@@ -3065,9 +3141,11 @@ begin
       + #13#10#13#10 + 'Install log: ' + LogFile,
       mbError, MB_RETRYCANCEL);
   until Answer <> IDRETRY;
-  Result := 'LanEx base setup is intact, but selected-component readiness failed.'
-    + #13#10#13#10 + 'No existing distribution or project was deleted.'
-    + #13#10#13#10 + 'Full log: ' + LogFile;
+  Result := 'LanEx itself is set up, but some of the tools or PDKs you chose did not '
+    + 'finish installing or did not pass their check. The last lines of the install log '
+    + 'name them.' + #13#10#13#10
+    + 'Run LanEx Setup again to retry them; finished parts are kept. Or choose Minimal now '
+    + 'and add them later in LanEx -> Tools. Nothing was deleted. ' + ReportHint;
   RecordSetupOutcome('failed', Result);
 end;
 
@@ -3207,7 +3285,11 @@ begin
   ProcessSystemMessages;
   if not PlanSelections('', StateFile, Output) then
   begin
-    Result := 'LanEx could not revalidate the saved component choices.' + #13#10#13#10 + Output;
+    LogLine('PlanChoices failed: ' + Output);
+    Result := 'Setup could not read back the choices it saved (' + StateFile + ').'
+      + #13#10#13#10 + 'Reason: ' + Output + #13#10#13#10
+      + 'Run LanEx Setup again and pick your choices on the Configure page. Nothing on this '
+      + 'PC was changed. ' + ReportHint;
     Exit;
   end;
   if CancelRequested then
@@ -3233,30 +3315,28 @@ begin
   LogLine('Starting WSL once to check that it works. The first start after a restart can take a few minutes.');
   if not RunPreflight(False, Output) then
   begin
-    Result := 'LanEx could not recheck Windows/WSL prerequisites.'
-      + #13#10#13#10 + Output + #13#10#13#10
-      + 'Use Continue LanEx Setup from the Start menu after resolving the issue.';
+    LogLine('preflight recheck failed: ' + Output);
+    Result := 'Setup could not check this PC''s Windows and WSL settings again before '
+      + 'installing.' + #13#10#13#10 + 'Reason: ' + Output + #13#10#13#10
+      + 'Restart Windows, then open "Continue LanEx Setup" from the Start menu (or run '
+      + 'LanEx Setup again). Nothing on this PC was changed. ' + ReportHint;
     Exit;
   end;
 
   if PreflightDecision = 'firmware-disabled' then
   begin
-    Result := 'Firmware virtualization is disabled. No feature, distribution, '
-      + 'or user data was changed. Use Microsoft''s virtualization instructions '
-      + 'and then choose Continue LanEx Setup from the Start menu.';
+    Result := 'Your processor''s virtualization feature is turned off in this PC''s BIOS/UEFI '
+      + 'settings, and LanEx cannot run without it. Nothing on this PC was changed.'
+      + #13#10#13#10 + 'Restart into the BIOS/UEFI settings, set "Virtualization Technology" '
+      + '(Intel VT-x) or "SVM Mode" (AMD-V) to Enabled, save and exit, then open "Continue '
+      + 'LanEx Setup" from the Start menu. Step-by-step help: {#VirtualizationHelpURL}';
     Exit;
   end;
-  if (PreflightDecision = 'unsupported-architecture') or
-     (PreflightDecision = 'unsupported-windows') or
-     (PreflightDecision = 'windows-update-required') or
-     (PreflightDecision = 'vm-nested-virtualization-off') or
-     (PreflightDecision = 'wsl-blocked-by-policy') or
-     (PreflightDecision = 'not-enough-memory') or
-     (PreflightDecision = 'preflight-query-failed') then
+  if PreflightStopText(PreflightDecision) <> '' then
   begin
-    Result := 'This PC did not pass the structured Windows/WSL preflight: '
-      + PreflightDecision + '.' + #13#10#13#10
-      + 'No Windows feature or WSL distribution was changed.';
+    LogLine('preflight stopped Setup: ' + PreflightDecision);
+    Result := PreflightStopText(PreflightDecision) + #13#10#13#10
+      + 'Nothing on this PC was changed.';
     Exit;
   end;
 
@@ -3308,9 +3388,10 @@ begin
     end;
     if not ScheduleResume then
     begin
-      Result := 'The Windows features were enabled, but Setup could not verify '
-        + 'the owner-only continuation trigger. Restart was not requested. '
-        + 'Use Continue LanEx Setup from the Start menu after restarting Windows.';
+      Result := 'Windows turned on the features LanEx needs, but Setup could not arrange '
+        + 'to open again by itself after the restart, so it did not restart Windows.'
+        + #13#10#13#10 + 'Save your work, restart Windows yourself, then open "Continue LanEx '
+        + 'Setup" from the Start menu. Your choices are saved.';
       Exit;
     end;
     WslPending := True;
@@ -3324,9 +3405,10 @@ begin
   begin
     if not ScheduleResume then
     begin
-      Result := 'Windows reports a pending WSL feature restart, but Setup could '
-        + 'not verify the owner-only continuation trigger. Use Continue LanEx '
-        + 'Setup from the Start menu after restarting Windows.';
+      Result := 'Windows needs to restart to finish turning on WSL, but Setup could not '
+        + 'arrange to open again by itself afterwards.' + #13#10#13#10
+        + 'Save your work, restart Windows yourself, then open "Continue LanEx Setup" '
+        + 'from the Start menu. Your choices are saved.';
       Exit;
     end;
     WslPending := True;
@@ -3340,8 +3422,10 @@ begin
   begin
     if WizardSilent and (ExpandConstant('{param:ALLOWWSLUPDATE|0}') <> '1') then
     begin
-      Result := 'WSL update required. Silent setup will not change the machine-wide '
-        + 'WSL runtime without /ALLOWWSLUPDATE=1.';
+      Result := 'Windows Subsystem for Linux needs an update before LanEx can be installed. '
+        + 'A silent Setup does not update WSL, which affects every WSL user on this PC, '
+        + 'unless it is run with /ALLOWWSLUPDATE=1. Run it again with that option, or run '
+        + 'wsl --update first.';
       Exit;
     end;
     if (not WizardSilent) and (WslVersionValue <> '') and (Trim(ListedDistros) <> '') and (MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
@@ -3350,8 +3434,9 @@ begin
       + 'not shut down or convert any distribution.' + #13#10#13#10
       + 'Update WSL now?', mbConfirmation, MB_YESNO) <> IDYES) then
     begin
-      Result := 'WSL update deferred. Your choices and exact installer are saved; '
-        + 'choose Continue LanEx Setup from the Start menu when ready.';
+      Result := 'You chose not to update Windows Subsystem for Linux now, so LanEx was not '
+        + 'installed yet. Your choices are saved: open "Continue LanEx Setup" from the Start '
+        + 'menu when you are ready, and answer Yes to the WSL update.';
       Exit;
     end;
     // A PC with the features on but no WSL package (every clean Windows 11
@@ -3389,9 +3474,13 @@ begin
         end;
         if not (RunLogged(WslExe, '--update', Code) and (Code = 0)) then
         begin
-          Result := 'Windows could not update WSL. This may be a managed-policy or '
-            + 'network restriction; the existing distributions were not stopped or '
-            + 'changed.' + #13#10#13#10 + LogTail(12) + #13#10 + 'Install log: ' + LogFile;
+          Result := 'Windows could not update Windows Subsystem for Linux. The PC may be '
+            + 'offline, or a company policy may block the update. Your other WSL '
+            + 'distributions were not stopped or changed.' + #13#10#13#10
+            + 'Last lines of the log:' + #13#10 + LogTail(12) + #13#10
+            + 'Check the connection and run LanEx Setup again. On a work or school PC, ask '
+            + 'the administrator to update WSL (wsl --update).' + #13#10#13#10
+            + 'Install log: ' + LogFile;
           Exit;
         end;
       end;
@@ -3405,16 +3494,20 @@ begin
     end;
     if not RunPreflight(False, Output) then
     begin
-      Result := 'WSL updated, but Setup could not verify its capabilities.'
-        + #13#10#13#10 + Output;
+      LogLine('preflight after the WSL update failed: ' + Output);
+      Result := 'Windows Subsystem for Linux was updated, but Setup could not check it '
+        + 'afterwards.' + #13#10#13#10 + 'Reason: ' + Output + #13#10#13#10
+        + 'Restart Windows and run LanEx Setup again. ' + ReportHint;
       Exit;
     end;
     if PreflightDecision = 'restart-required' then
     begin
       if not ScheduleResume then
       begin
-        Result := 'WSL updated but its restart continuation could not be verified. '
-          + 'Use Continue LanEx Setup after restarting Windows.';
+        Result := 'WSL was updated and Windows needs to restart, but Setup could not '
+          + 'arrange to open again by itself afterwards.' + #13#10#13#10
+          + 'Save your work, restart Windows yourself, then open "Continue LanEx Setup" '
+          + 'from the Start menu. Your choices are saved.';
         Exit;
       end;
       WslPending := True;
@@ -3425,17 +3518,27 @@ begin
     end;
     if PreflightDecision <> 'ready' then
     begin
-      Result := 'The WSL runtime still does not provide the required capabilities: '
-        + PreflightDecision + '.' + #13#10#13#10 + LogTail(12);
+      LogLine('after the WSL update the check still says: ' + PreflightDecision);
+      if PreflightStopText(PreflightDecision) <> '' then
+        Result := PreflightStopText(PreflightDecision)
+      else
+        Result := 'Windows Subsystem for Linux was updated, but it is still not ready to run '
+          + 'LanEx. Restart Windows and run LanEx Setup again. If this happens again, open '
+          + 'PowerShell, run  wsl --update  and restart.';
+      Result := Result + #13#10#13#10 + 'Nothing was downloaded, and your other WSL '
+        + 'distributions were not changed.' + #13#10#13#10 + ReportHint;
       Exit;
     end;
   end;
 
   if (PreflightDecision <> 'ready') or (not WslUsable) then
   begin
-    Result := 'WSL could not start the private appliance kernel. Setup will not '
-      + 'download or import an environment until this prerequisite is healthy.'
-      + #13#10#13#10 + 'No existing distribution was stopped or changed.';
+    LogLine('WSL is not usable before the import: decision=' + PreflightDecision);
+    Result := 'Windows Subsystem for Linux is not working yet, so Setup cannot create '
+      + 'LanEx''s environment. Restart Windows and run LanEx Setup again. If this happens '
+      + 'again, open PowerShell, run  wsl --update  and restart.'
+      + #13#10#13#10 + 'Nothing was downloaded, and your other WSL distributions were not '
+      + 'stopped or changed.' + #13#10#13#10 + ReportHint;
     Exit;
   end;
 
@@ -3477,7 +3580,7 @@ begin
     begin
       if CancelRequested then
       begin
-        Result := 'LanEx Setup was cancelled. A partial rootfs transfer was not cached; completed verified downloads remain reusable.';
+        Result := 'LanEx Setup was cancelled during the download. Run LanEx Setup again to carry on; the part already downloaded is kept.';
         RecordSetupOutcome('cancelled', Result);
       end;
       Exit;
@@ -3492,9 +3595,10 @@ begin
     if not (RunLogged(WslExe, '--import ' + DistroNameValue + ' "' + DistroBasePathValue + '" "'
         + ImportPath + '" --version 2', Code) and (Code = 0)) then
     begin
-      Result := 'The LanEx environment could not be created.' + #13#10#13#10
-        + 'Last lines of the log:' + #13#10 + LogTail(10) + #13#10
-        + 'Full log: ' + LogFile;
+      Result := 'Windows could not create the LanEx environment from the downloaded file.'
+        + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(10) + #13#10
+        + 'Check that drive ' + ExtractFileDrive(DistroBasePathValue) + ' has free space, '
+        + 'restart Windows, then run LanEx Setup again; the download is kept. ' + ReportHint;
       RecordSetupOutcome('failed', Result);
       Exit;
     end;
@@ -3502,15 +3606,18 @@ begin
     if not PowerShellCapture('& ' + PSQuote(Worker) + ' -Action BindAppliance -StatePath '
         + PSQuote(StateFile), Output) then
     begin
-      Result := 'The LanEx environment was imported, but Setup could not bind its '
-        + 'exact Windows registration identity.' + #13#10#13#10 + Output
-        + #13#10#13#10 + 'It was left intact for a safe retry.';
+      LogLine('BindAppliance failed: ' + Output);
+      Result := 'Setup created the LanEx environment, but then could not find it in Windows'' '
+        + 'list of Linux environments under the name and folder it used ('
+        + DistroNameValue + ' in ' + DistroBasePathValue + '). To be safe it stopped there and '
+        + 'deleted nothing.' + #13#10#13#10 + 'Run LanEx Setup again: it checks again and '
+        + 'carries on. ' + ReportHint;
       Exit;
     end;
     if CancelRequested then
     begin
-      Result := 'LanEx Setup was cancelled after safely finishing the environment import. '
-        + 'The owner-bound environment is preserved for Continue/Retry.';
+      Result := 'LanEx Setup was cancelled after it finished creating the LanEx environment. '
+        + 'The environment is kept; run LanEx Setup again to carry on.';
       RecordSetupOutcome('cancelled', Result);
       Exit;
     end;
@@ -3533,9 +3640,11 @@ begin
     if not VerifyRepairIdentity(IdentityFailure) then
     begin
       LogLine('repair identity verification failed: ' + IdentityFailure);
-      Result := 'LanEx could not verify ownership of the existing appliance for repair:' + #13#10#13#10
-        + IdentityFailure + #13#10#13#10
-        + 'Setup stopped without changing any distribution files.';
+      Result := 'Repair checks that the LanEx environment is the one this Setup installed, '
+        + 'and that check did not pass, so it stopped without changing anything.'
+        + #13#10#13#10 + 'Reason: ' + IdentityFailure + #13#10#13#10
+        + 'If you installed a newer LanEx, run its LanEx-Setup.exe instead of Repair. '
+        + ReportHint;
       Exit;
     end
     else if HealthyRepairNeedsNoChanges then
@@ -3580,15 +3689,17 @@ begin
   StopLanExLauncher;
   if not (RunLogged(WslExe, '--terminate ' + DistroNameValue, Code) and (Code = 0)) then
   begin
-    Result := 'Windows could not restart the owner-bound LanEx environment.'
-      + #13#10#13#10 + 'No other WSL distribution was stopped.' + #13#10#13#10
-      + LogTail(10);
+    Result := 'Windows could not restart the LanEx environment, which Setup needs to '
+      + 'finish. No other WSL distribution was stopped.' + #13#10#13#10
+      + 'Last lines of the log:' + #13#10 + LogTail(10) + #13#10
+      + 'Restart Windows, then run LanEx Setup again; everything finished so far is kept. '
+      + ReportHint;
     Exit;
   end;
   if CancelRequested then
   begin
-    Result := 'LanEx Setup was cancelled after stopping only its owner-bound environment. '
-      + 'Selected-component finalization did not start.';
+    Result := 'LanEx Setup was cancelled before it installed the tools and PDKs you chose. '
+      + 'Run LanEx Setup again to carry on; everything finished so far is kept.';
     RecordSetupOutcome('cancelled', Result);
     CompleteUpdateCheckpoint(True);
     Exit;
@@ -3601,8 +3712,9 @@ begin
   end;
   if not MarkSelectionsComplete then
   begin
-    Result := 'The selected components are ready, but Setup could not save their '
-      + 'owner-bound completion checkpoint. The appliance and all data were preserved.';
+    Result := 'The tools and PDKs you chose are installed, but Setup could not note that in '
+      + 'its record (' + StateFile + '). Nothing was deleted.' + #13#10#13#10
+      + 'Run LanEx Setup again; it checks what is installed and finishes in a few minutes.';
     CompleteUpdateCheckpoint(True);
     Exit;
   end;
@@ -3622,12 +3734,45 @@ begin
   Result := (not WslPending) and FileExists(ExpandConstant('{app}\LanEx.exe')) and FileExists(ExpandConstant('{app}\appliance.json'));
 end;
 
+// The desktop shortcut is exactly what the user asked for: made when the box
+// is ticked, and LanEx's own shortcut removed when it is not (an upgrade
+// whose box is unticked must not keep the one an earlier install made).
+procedure ApplyDesktopShortcut(Want: Boolean);
+var
+  Link: String;
+begin
+  Link := ExpandConstant('{userdesktop}\{#AppName}.lnk');
+  if Want then
+  begin
+    try
+      CreateShellLink(Link, '{#AppName}', ExpandConstant('{app}\LanEx.exe'), '',
+        ExpandConstant('{app}'), ExpandConstant('{app}\lanex.ico'), 0, SW_SHOWNORMAL);
+      LogLine('created desktop shortcut');
+    except
+      // Not worth failing a finished install over: the Start menu has LanEx.
+      LogLine('WARNING: could not create the desktop shortcut: ' + GetExceptionMessage);
+    end;
+  end
+  else if FileExists(Link) then
+  begin
+    DeleteFile(Link);
+    LogLine('desktop shortcut not wanted; removed ' + Link);
+  end;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Failure: String;
 begin
   Result := True;
   if WizardSilent then Exit;
+  // Finish: the tick on this page is the user's answer about the desktop
+  // shortcut (ssPostInstall runs before the page is shown, so it cannot ask).
+  if (CurPageID = wpFinished) and InstallCompleted and (DesktopShortcutCheckbox <> nil) then
+  begin
+    ApplyDesktopShortcut(DesktopShortcutCheckbox.Checked);
+    Exit;
+  end;
   if CurPageID = ConfigurePage.ID then
   begin
     WizardForm.Cursor := crHourGlass;
@@ -3718,6 +3863,10 @@ begin
   else if CurPageID = wpFinished then
   begin
     WizardForm.NextButton.Caption := SetupMessage(msgButtonFinish);
+    // Before the restart nothing is installed yet, and the page shows
+    // Windows' restart question instead: no shortcut to offer.
+    if DesktopShortcutCheckbox <> nil then
+      DesktopShortcutCheckbox.Visible := InstallCompleted;
     if not WslPending then
     begin
       if (ProfileRadioMinimal <> nil) and ProfileRadioMinimal.Checked then
@@ -3819,16 +3968,105 @@ begin
   Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ' + PSQuote('*' + AppDataRoot + '\app-profile*') + ' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
-function KeptDataText: String;
+// The distro name and folder LanEx recorded when it created its environment.
+// A matching name alone never proves ownership (a user may have their own
+// distro called lanex, and LanEx's is then lanex-<id8>), so the words on
+// screen always use the recorded name, and only the worker's
+// RemoveAppliance, which checks the registration and the Linux marker too,
+// ever removes it.
+procedure ReadRecordedAppliance;
+var
+  Output, Text: String;
 begin
+  UninstallDistroName := '';
+  UninstallDistroPath := '';
+  if not FileExists(StateFile) then Exit;
+  if not PowerShellCapture('$s = Get-Content -LiteralPath ' + PSQuote(StateFile)
+      + ' -Raw | ConvertFrom-Json; ''n'' + $s.appliance.name; ''p'' + $s.appliance.basePath',
+      Output) then Exit;
+  Text := Output;
+  UninstallDistroName := Copy(TakeLine(Text), 2, 260);
+  UninstallDistroPath := Copy(TakeLine(Text), 2, 1024);
+end;
+
+function SizeText(SizeHigh, SizeLow: Cardinal): String;
+var
+  MB: Int64;
+begin
+  MB := Int64(SizeHigh) * 4096 + Int64(SizeLow) div 1048576;
+  if MB >= 1024 then
+    Result := IntToStr(MB div 1024) + '.' + IntToStr((MB mod 1024) * 10 div 1024) + ' GB'
+  else
+    Result := IntToStr(MB) + ' MB';
+end;
+
+// The backups an earlier uninstall saved in %LOCALAPPDATA%\LanEx\backups.
+// They are the user's files: listed, never deleted.
+function BackupListText: String;
+var
+  FindRec: TFindRec;
+  Dir: String;
+  Count: Integer;
+begin
+  Result := '';
+  Count := 0;
+  Dir := AppDataRoot + '\backups';
+  if FindFirst(Dir + '\*', FindRec) then
+  try
+    repeat
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+      begin
+        Count := Count + 1;
+        if Count <= 5 then
+          Result := Result + '    ' + FindRec.Name + ' ('
+            + SizeText(FindRec.SizeHigh, FindRec.SizeLow) + ')' + #13#10;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+  if Count > 5 then
+    Result := Result + '    and ' + IntToStr(Count - 5) + ' more' + #13#10;
+  if Result <> '' then
+    Result := '- your backups in ' + Dir + ':' + #13#10 + Result;
+end;
+
+function ProjectsKeptText: String;
+begin
+  Result := '- your projects in ' + ExpandConstant('{%USERPROFILE}') + '\LanEx-Projects';
+end;
+
+// How to remove what Keep left behind, with LanEx's real distro name.
+function RemoveLaterText: String;
+begin
+  Result := 'To remove it for good later: install LanEx again (it reuses all of this and '
+    + 'takes a few minutes), then open "Uninstall or remove LanEx" in the Start menu and '
+    + 'answer No twice. That removes only LanEx''s own environment, after checking it is '
+    + 'the one LanEx created.';
+  if UninstallDistroName <> '' then
+    Result := Result + #13#10#13#10 + 'By hand instead: in PowerShell run  wsl --unregister '
+      + UninstallDistroName + '  (LanEx''s environment on this PC is named "'
+      + UninstallDistroName + '"; check the name in  wsl -l  first), then delete the folders '
+      + 'appliance, installer-cache and logs in ' + AppDataRoot + '.';
+end;
+
+function KeptDataText: String;
+var
+  Distro: String;
+begin
+  if UninstallDistroName <> '' then
+    Distro := ' (the WSL distribution "' + UninstallDistroName + '")'
+  else
+    Distro := '';
   Result := 'Kept on this PC:' + #13#10
-    + '- your projects in ' + ExpandConstant('{%USERPROFILE}') + '\LanEx-Projects'
+    + ProjectsKeptText
     + ' (or, if your Windows user name has a space, inside the LanEx environment)' + #13#10
-    + '- the LanEx environment with its tools, PDKs and run results: '
+    + '- the LanEx environment' + Distro + ' with its tools, PDKs and run results: '
     + ApplianceRoot + #13#10
-    + '- the download cache and logs in ' + AppDataRoot + #13#10#13#10
-    + 'Installing LanEx again finds and reuses all of it. To remove it for good '
-    + 'instead, see "Uninstalling" in the LanEx README (one wsl command and one folder).';
+    + '- the download cache and logs in ' + AppDataRoot + #13#10
+    + BackupListText + #13#10
+    + 'Installing LanEx again finds and reuses all of it.' + #13#10#13#10
+    + RemoveLaterText;
 end;
 
 // The questions are asked here, but nothing is done until Windows' own "Remove
@@ -3838,10 +4076,12 @@ end;
 function InitializeUninstall(): Boolean;
 var
   Choice: Integer;
+  Distro, Where: String;
 begin
   Result := False;
   UninstallMode := '';
   UninstallExportFile := '';
+  ReadRecordedAppliance;
   Choice := MsgBox('Keep your LanEx projects, tools and PDKs? (Recommended)' + #13#10#13#10
     + 'Yes: remove the LanEx app and its shortcuts, keep everything else, so '
     + 'installing again takes minutes instead of downloading gigabytes.' + #13#10#13#10
@@ -3873,21 +4113,57 @@ begin
     Exit;
   end;
 
-  if MsgBox('Remove the LanEx environment for good?' + #13#10#13#10
-      + 'This deletes the LanEx tools, PDKs, run results and any projects stored inside '
-      + 'the environment, the download cache and the logs. It cannot be undone.' + #13#10#13#10
-      + 'Projects in ' + ExpandConstant('{%USERPROFILE}') + '\LanEx-Projects are NOT deleted. '
-      + 'Your other WSL distributions and Windows features are not changed.',
+  if UninstallDistroName <> '' then
+    Distro := ' "' + UninstallDistroName + '"'
+  else
+    Distro := '';
+  if UninstallDistroPath <> '' then
+    Where := UninstallDistroPath
+  else
+    Where := DistroDir;
+  if MsgBox('Remove the LanEx environment for good? This cannot be undone.' + #13#10#13#10
+      + 'Deleted:' + #13#10
+      + '- the LanEx environment' + Distro + ' (a WSL distribution) with its tools, PDKs, '
+      + 'run results and any projects stored inside it: ' + Where + #13#10
+      + '- the download cache and the logs in ' + AppDataRoot + #13#10
+      + '- the LanEx app window''s settings' + #13#10#13#10
+      + 'Kept:' + #13#10
+      + ProjectsKeptText + #13#10
+      + BackupListText
+      + '- your other WSL distributions and Windows features' + #13#10#13#10
+      + 'Setup first checks that this environment is the one LanEx created; if it cannot '
+      + 'prove that, nothing is deleted.',
       mbError, MB_YESNO or MB_DEFBUTTON2) <> IDYES then Exit;
   UninstallMode := 'remove';
   Result := True;
+end;
+
+// What is still in %LOCALAPPDATA%\LanEx after a removal: only things that were
+// not this install's (earlier backups, another install's browser profile).
+function LeftInDataRootText: String;
+var
+  FindRec: TFindRec;
+begin
+  Result := '';
+  if FindFirst(AppDataRoot + '\*', FindRec) then
+  try
+    repeat
+      if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+      begin
+        if Result <> '' then Result := Result + ', ';
+        Result := Result + FindRec.Name;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
 end;
 
 // Runs the choice made in InitializeUninstall, after Windows' confirmation and
 // before the app's files go. Every failure keeps the environment.
 procedure RunUninstallChoice;
 var
-  Output, Snippet: String;
+  Output, Snippet, Kept, Left, InstallId: String;
 begin
   if (UninstallMode = 'keep') or (UninstallMode = 'backup') then
   begin
@@ -3910,17 +4186,44 @@ begin
   end;
   if UninstallMode <> 'remove' then
     Exit;
+  InstallId := '';
+  PowerShellCapture('(Get-Content -LiteralPath ' + PSQuote(StateFile)
+    + ' -Raw | ConvertFrom-Json).installId', InstallId);
+  InstallId := Trim(StripNulls(InstallId));
   Snippet := '-Action RemoveAppliance -StatePath ' + PSQuote(StateFile)
     + ' -OwnedDataRoot ' + PSQuote(AppDataRoot)
-    + ' -ConfirmedInstallId $((Get-Content -LiteralPath ' + PSQuote(StateFile)
-    + ' -Raw | ConvertFrom-Json).installId)';
+    + ' -ConfirmedInstallId ' + PSQuote(InstallId);
   if UninstallWorker(Snippet, Output) then
-    // What the worker leaves: the app window's browser profile.
-    DelTree(AppDataRoot, True, True, True)
+  begin
+    // The worker removed exactly this install's folders: the environment's
+    // disk, the download cache, the logs, this install's browser profile
+    // and the state file. A second pass over the profile catches files the
+    // just-closed app window still held. Nothing else in the data root is
+    // touched: earlier backups and any other install's profile stay, and
+    // the two parent folders go only when they are empty.
+    if InstallId <> '' then
+      DelTree(AppDataRoot + '\app-profile\' + InstallId, True, True, True);
+    RemoveDir(AppDataRoot + '\app-profile');
+    RemoveDir(AppDataRoot);
+    Kept := ProjectsKeptText + #13#10 + BackupListText;
+    Left := '';
+    if DirExists(AppDataRoot) then
+    begin
+      Left := LeftInDataRootText;
+      if Left <> '' then
+        Left := #13#10 + 'Still in ' + AppDataRoot + ' (not part of this install): ' + Left
+          + '. Delete them in File Explorer once you no longer need them.' + #13#10;
+    end;
+    MsgBox('The LanEx environment was removed, with its download cache and logs.'
+      + #13#10#13#10 + 'Kept on this PC:' + #13#10 + Kept + Left + #13#10
+      + 'Your other WSL distributions and Windows features are not changed. WSL itself stays '
+      + 'installed; uninstall "Windows Subsystem for Linux" in Settings > Apps if you no '
+      + 'longer want it.', mbInformation, MB_OK);
+  end
   else
     MsgBox('Removing the LanEx environment did not complete, so it was kept and nothing '
-      + 'more was deleted; only the app is removed. To remove the environment yourself, '
-      + 'see "Uninstalling" in the LanEx README.' + #13#10#13#10 + Output, mbError, MB_OK);
+      + 'more was deleted; only the app is removed.' + #13#10#13#10 + 'Reason: ' + Output
+      + #13#10#13#10 + RemoveLaterText, mbError, MB_OK);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -3971,21 +4274,11 @@ begin
     Exit;
   end;
 
-  // 3. Create Desktop shortcut if requested
-  if (DesktopShortcutCheckbox <> nil) and DesktopShortcutCheckbox.Checked then
-  begin
-    CreateShellLink(
-      ExpandConstant('{userdesktop}\{#AppName}.lnk'),
-      '{#AppName}',
-      ExpandConstant('{app}\LanEx.exe'),
-      '',
-      ExpandConstant('{app}'),
-      ExpandConstant('{app}\lanex.ico'),
-      0,
-      SW_SHOWNORMAL
-    );
-    LogLine('created desktop shortcut');
-  end;
+  // 3. The desktop shortcut follows the Finished page's tick, which is
+  //    answered after this step (NextButtonClick on wpFinished). A silent
+  //    install has no page: /DESKTOPSHORTCUT=0 leaves it out.
+  if WizardSilent then
+    ApplyDesktopShortcut(ExpandConstant('{param:DESKTOPSHORTCUT|1}') <> '0');
 
   // 4. Commit final readiness now that Windows files, appliance.json, and Linux
   //    appliance are verified. The launcher refuses to start without it, so a
