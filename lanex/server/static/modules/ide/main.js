@@ -972,7 +972,7 @@ function renderStart() {
         "<button class='btn btn-sm' data-new='tb_v'>" + (hasTb ? "New testbench" : "Write a testbench") + "</button></div>" +
         "<ol class='ide-path'>" +
         "<li><b><span>1</span>Write</b><small>Design modules go in <code>src/</code> and into the chip.</small></li>" +
-        "<li><b><span>2</span>Check syntax</b><small>Verilator reads every file; errors land in Problems with their line.</small></li>" +
+        "<li><b><span>2</span>Check syntax</b><small>Verilator reads the files the config builds and the testbenches; errors land in Problems with their line.</small></li>" +
         "<li><b><span>3</span>Simulate</b><small>A testbench in <code>verify/</code> drives the design; the waveform shows below.</small></li>" +
         "<li><b><span>4</span>Run the flow</b><small>Setup checks the project, PDK and engine, then Run builds the GDS.</small></li></ol>";
   }
@@ -1325,28 +1325,70 @@ function wirePanel() {
 
 async function lint({ quiet = false } = {}) {
   if (state.linting) { if (!quiet) note("A syntax check is already running."); return; }
-  // Every design and testbench file (a testbench is linted as a source too):
-  // a standalone verilator --lint-only job, not the hardening flow.
+  // A standalone verilator --lint-only job, not the hardening flow. The server
+  // checks what a run reads (the config's VERILOG_FILES, VERILOG_DEFINES and
+  // VERILOG_INCLUDE_DIRS), plus the testbenches sent here; `sources` (every
+  // Verilog file) is only used for a project whose config names no files.
   const sources = state.files.filter((f) => /\.s?v$/.test(f.relpath)).map((f) => f.relpath);
   if (!sources.length) { note("There's no Verilog file to check yet.", true); return; }
+  const benches = state.files.filter((f) => f.role === "testbench" && /\.s?v$/i.test(f.relpath)).map((f) => f.relpath);
   // Verilator reads the files on disk: an unsaved tab would be checked as it
   // was last saved (a pasted module against a bench that uses its new ports
   // reads as a page of "Pin not found"). Save everything first, as Simulate does.
   setLintBusy(true);
-  await saveAll();
+  const unsaved = await saveAll();
+  if (unsaved.length) {
+    setLintBusy(false);
+    note("Not checked: " + unsaved.join(", ") + " changed on disk and your edits aren't saved. Save it to choose which version to keep.", true);
+    return;
+  }
   note("Checking the syntax with Verilator…");
   state.lintLines = [];
   armLintSafety();
   if (!quiet) setPanel("problems");
   try {
-    const start = await api.lintStart({ run_mode: state.runMode, sources, include_dirs: includeDirs() });
+    const start = await api.lintStart({ run_mode: state.runMode, sources, include_dirs: includeDirs(),
+      from_config: true, extra_sources: benches });
     if (!start.ok) { note("Lint refused: " + (start.reason || start.error || "?"), true); setLintBusy(false); }
+    else noteLintInputs(start);
   } catch (ex) {
     // A 400 "a lint is already running" throws here too: reset so the button is
     // usable, and tell the user how to recover instead of looking frozen.
     note("Lint failed: " + (ex.message || ex), true);
     setLintBusy(false);
   }
+}
+
+// What the check read: the files (for the Problems count and the Run gate,
+// which counts only errors in files a run builds) and what the config said.
+function noteLintInputs(start) {
+  const cfg = start && start.config;
+  state.lintSources = Array.isArray(start && start.sources) ? start.sources : null;
+  state.lintFlowFiles = cfg && cfg.mode === "list" && Array.isArray(cfg.files) && cfg.files.length ? cfg.files : null;
+  state.lintConfigNote = configNote(cfg);
+}
+
+// A line about the config's file list when it isn't what the check could use.
+function configNote(cfg) {
+  if (!cfg) return "";
+  if (cfg.missing && cfg.missing.length) {
+    return (cfg.name || "The config") + " lists " + cfg.missing.slice(0, 3).join(", ") + (cfg.missing.length > 3 ? "…" : "") +
+      ", which " + (cfg.missing.length === 1 ? "doesn't" : "don't") + " exist. A run stops on that.";
+  }
+  if (cfg.mode !== "list" || !(cfg.files || []).length) {
+    return (cfg.reason || (cfg.name ? cfg.name + " names no Verilog files (VERILOG_FILES)" : "This project has no config yet")) +
+      ", so every Verilog file in the project was used.";
+  }
+  return "";
+}
+
+// Is this diagnostic in a file a run reads? The config's files when known (an
+// `include file the flow pulls in counts too), else any non-testbench file.
+function inFlow(d) {
+  if (isTestbenchFile(d.file)) return false;
+  const flow = state.lintFlowFiles;
+  if (!flow) return true;
+  return flow.some((f) => sameFile(f, d.file)) || /\.(vh|svh)$/i.test(d.file || "");
 }
 
 function sameFile(a, b) {
@@ -1486,24 +1528,27 @@ function renderProblems() {
     return;
   }
   if (!checked) {
-    host.innerHTML = "<div class='pb-empty'><p><b>Not checked yet.</b> Check syntax runs Verilator over every design and testbench " +
-      "file. It takes seconds and catches most mistakes before you simulate.</p>" +
+    host.innerHTML = "<div class='pb-empty'><p><b>Not checked yet.</b> Check syntax runs Verilator over the files the config " +
+      "builds into the chip, with its defines, and over the testbenches. It takes seconds and catches most mistakes before you simulate.</p>" +
       "<button class='btn btn-sm' data-pb='lint'>Check syntax</button></div>";
     return;
   }
   const f = state.pbFilter || (state.pbFilter = { error: true, warning: true });
   const shown = real.filter((d) => f[d.severity]);
-  const files = new Set(state.files.filter((x) => /\.s?v$/.test(x.relpath)).map((x) => x.relpath)).size;
+  const files = state.lintSources ? state.lintSources.length
+    : new Set(state.files.filter((x) => /\.s?v$/.test(x.relpath)).map((x) => x.relpath)).size;
   const when = state.lintAt ? new Date(state.lintAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   host.innerHTML =
     "<div class='pb-bar'>" +
       "<button class='pb-filter pb-f-error' data-sev='error' aria-pressed='" + f.error + "'>" + IC_ERR + "Errors <b>" + errors + "</b></button>" +
       "<button class='pb-filter pb-f-warning' data-sev='warning' aria-pressed='" + f.warning + "'>" + IC_WARN + "Warnings <b>" + warnings + "</b></button>" +
-      "<span class='pb-meta'>" + (state.lintChecked ? "Verilator, " + plural(files, "file") + (when ? ", checked at " + when : "") : "From the last simulation") + "</span>" +
+      "<span class='pb-meta'" + (state.lintConfigNote ? " title='" + fmt.escape(state.lintConfigNote) + "'" : "") + ">" +
+        (state.lintChecked ? "Verilator, " + plural(files, "file") + (when ? ", checked at " + when : "") : "From the last simulation") + "</span>" +
       "<span class='ide-spacer'></span>" +
       "<button class='btn btn-ghost btn-sm' data-pb='lint'" + (state.linting ? " disabled" : "") + ">Check again</button>" +
     "</div>" +
     "<div class='pb-list'>" +
+      (state.lintChecked && state.lintConfigNote ? "<p class='pb-clean'>" + fmt.escape(state.lintConfigNote) + "</p>" : "") +
       (shown.length ? fileGroups(shown)
         : "<p class='pb-clean'>" + (real.length ? "Nothing to show with these filters."
           : "No problems. Verilator read " + plural(files, "file") + " without an error or warning.") + "</p>") +
@@ -1646,10 +1691,19 @@ function setLintBusy(busy) {
 // well after the server's own watchdog would have fired, as a last resort.
 let _simSafety = 0;
 let _lintSafety = 0;
-const SIM_SAFETY_MS = 140000;   // > server DEFAULT_SIM_TIMEOUT (120s) + slack
 const LINT_SAFETY_MS = 100000;  // > server DEFAULT_LINT_TIMEOUT (90s) + slack
+// The simulation's time limit, seconds (Settings > Editor; the server clamps it).
+export function simTimeLimit(v = getPref("simTimeLimit")) {
+  const n = parseInt(v, 10);
+  return n > 0 ? Math.max(5, Math.min(3600, n)) : 120;
+}
+function limitText(sec) {
+  return sec % 60 === 0 && sec >= 60 ? (sec / 60) + " min" : sec + " s";
+}
 function armSimSafety() {
   clearTimeout(_simSafety);
+  // Well after the server's own watchdog (the time limit) would have fired.
+  const SIM_SAFETY_MS = (simTimeLimit() + 20) * 1000;
   _simSafety = setTimeout(() => {
     if (!document.getElementById("ide-sim")?.disabled) return;
     if (state.simRun) state.simRun.done = true;
@@ -1695,16 +1749,27 @@ async function simulate() {
     return;
   }
   // Simulate what's on screen: save every changed file first.
-  await saveAll();
-  // The design, plus simulation-only helpers (a bus model or memory model in
-  // verify/), but not the other testbenches: each of those is a top of its own.
+  const unsaved = await saveAll();
+  if (unsaved.length) {
+    simStatus({ verdict: "none-saved", tb, error: unsaved.join(", ") });
+    note("Not simulated: " + unsaved.join(", ") + " changed on disk and your edits aren't saved. Save it to choose which version to keep.", true);
+    return;
+  }
+  // The design as a run builds it (the server takes the config's
+  // VERILOG_FILES, VERILOG_DEFINES and VERILOG_INCLUDE_DIRS), plus
+  // simulation-only helpers (a bus model or memory model in verify/), but
+  // not the other testbenches: each of those is a top of its own. `sources`
+  // (every Verilog file) is only used when the config names no files.
   const benches = new Set(state.testbenches || []);
   const sources = state.files.filter((f) => /\.s?v$/i.test(f.relpath) && f.relpath !== tb &&
       (f.role !== "testbench" || !benches.has(f.relpath)))
     .map((f) => f.relpath);
+  const helpers = state.files.filter((f) => f.role === "testbench" && /\.s?v$/i.test(f.relpath) &&
+      f.relpath !== tb && !benches.has(f.relpath)).map((f) => f.relpath);
+  const limit = simTimeLimit();
   state.waveTb = tb;
   state.simDiags = [];
-  state.simRun = { tb, started: Date.now(), lines: [], engine: null, top: null, done: false };
+  state.simRun = { tb, started: Date.now(), lines: [], engine: null, top: null, done: false, limit };
   appendLog("── simulate " + tb + " · " + new Date().toLocaleTimeString() + " ──", "ll-head");
   note("Building and running the simulation…");
   setSimBusy(true);
@@ -1713,13 +1778,17 @@ async function simulate() {
   try {
     const r = await api.simStart({
       top, testbench: tb, sources, trace: "vcd", run_mode: state.runMode, sim_engine: simEngine,
-      include_dirs: includeDirs(),
+      include_dirs: includeDirs(), from_config: true, extra_sources: helpers, testbenches: [...benches],
+      timeout: limit,
     });
     if (!r.ok) { state.simRun.done = true; clearTimeout(_simSafety); note("Sim refused: " + (r.error || "?"), true); setSimBusy(false); simStatus({ verdict: "refused", error: r.error }); }
     else {
       if (r.top) { const x = document.getElementById("ide-top"); if (x && !x.value) x.placeholder = r.top; }
       state.simRun.engine = r.sim_engine || simEngine;
       state.simRun.top = r.top || top;
+      if (r.timeout) state.simRun.limit = r.timeout;
+      const cn = configNote(r.config);
+      if (cn) appendLog(cn, "ll-warn");
       state.simEngineLabel = ENGINE_LABEL[state.simRun.engine] || state.simRun.engine;
       note("Simulating with " + state.simEngineLabel + " (top: " + (r.top || top) + ")…");
       simStatus({ verdict: "running" });
@@ -1762,6 +1831,8 @@ function parseSimDiags(lines) {
   const out = [];
   for (const l of lines) {
     let m = l.match(VLT_RX);
+    // "%Error: tb.v:83: Verilog $stop" is Verilator ending at a $fatal/$stop, not a build error.
+    if (m && /^Verilog \$(stop|finish|fatal)\b/.test(m[6])) continue;
     if (m && projectFile(m[3])) { out.push({ file: projectFile(m[3]).relpath, line: +m[4], col: m[5] ? +m[5] : 1, severity: m[1].toLowerCase(), code: m[2] || "", msg: m[6] }); continue; }
     m = l.match(IV_RX);
     if (m && projectFile(m[1]) && !/\$finish|\$stop/.test(m[4])) {
@@ -1809,7 +1880,11 @@ function finishSim(ev) {
   renderProblems();
   applyMarkers();
   const out = run.lines.filter((l) => !TOOLISH_RX.test(l));
-  run.fails = out.filter((l) => FAIL_RX.test(l)).length;
+  // A self-checking bench prints a FAIL line per mismatch, then $fatal
+  // (Icarus "FATAL: …", Verilator "%Fatal: …"): that one isn't counted again.
+  const FATAL_RX = /^FATAL:|%Fatal\b/;
+  run.fails = out.filter((l) => FAIL_RX.test(l) && !FATAL_RX.test(l)).length;
+  if (!run.fails && out.some((l) => FATAL_RX.test(l))) run.fails = 1;
   run.passes = out.filter((l) => PASS_RX.test(l)).length;
   run.finish = parseFinish(run.lines);
   run.vcd = ev.vcd || null;
@@ -1817,7 +1892,7 @@ function finishSim(ev) {
   const buildErrors = state.simDiags.filter((d) => d.severity === "error").length;
   run.verdict = ev.cancelled ? "stopped"
     : ev.timed_out ? (ev.vcd ? "timeout-partial" : "timeout")
-    : !ev.ok ? (buildErrors ? "build" : "failed")
+    : !ev.ok ? (buildErrors ? "build" : run.fails ? "reported-fail" : "failed")
     : run.fails ? "reported-fail"
     : !ev.vcd ? "nowave"
     : run.passes ? "passed" : "ran";
@@ -1961,8 +2036,9 @@ function simStatus(run) {
         "<button class='btn btn-primary btn-sm' data-ss='rewrite-tb'>Rewrite the testbench for these ports</button><button class='btn btn-ghost btn-sm' data-ss='first-error'>Show the first error</button>"]
       : ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
     failed: ["fail", "The simulator stopped with an error", "Exit code " + r.rc + ". The output below says why." + (secs ? " " + secs : ""), ""],
-    "timeout-partial": ["warn", "Stopped at the time limit", "No $finish within 120 s, so the waveform is partial. Add $finish at the end of the testbench's initial block.", wave + "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
-    timeout: ["fail", "Stopped at the time limit, no waveform", "Add $finish at the end of the testbench's initial block, and $dumpfile/$dumpvars to write a waveform.", "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
+    "timeout-partial": ["warn", "Stopped at the time limit", "No $finish within " + limitText(r.limit || simTimeLimit()) + ", so the waveform is partial. Add $finish at the end of the testbench's initial block, or raise the limit in Settings.", wave + "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
+    timeout: ["fail", "Stopped at the time limit, no waveform", "No $finish within " + limitText(r.limit || simTimeLimit()) + ". Add $finish at the end of the testbench's initial block, and $dumpfile/$dumpvars to write a waveform.", "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
+    "none-saved": ["warn", "Not simulated", (r.error || "A file") + " changed on disk and your edits aren't saved. Save it to choose which version to keep.", ""],
     nowave: ["warn", "Ran, but wrote no waveform", "The testbench needs $dumpfile and $dumpvars. " + facts, "<button class='btn btn-sm' data-ss='add-dump'>Add them to " + fmt.escape(tbName) + "</button>"],
     stopped: ["info", "Stopped", "You stopped the simulation.", ""],
     refused: ["fail", "Couldn't start the simulation", fmt.escape(r.error || ""), ""],
@@ -2086,7 +2162,7 @@ function recordRtlStatus() {
     lint: state.lintChecked ? { errors: real.filter((d) => d.severity === "error").length,
       warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt,
       // What the flow's own lint (design files only, never testbenches) will hit.
-      design_errors: real.filter((d) => d.severity === "error" && !isTestbenchFile(d.file)).length } : prev.lint,
+      design_errors: real.filter((d) => d.severity === "error" && inFlow(d)).length } : prev.lint,
     sim: state.simRun && state.simRun.verdict && state.simRun.verdict !== "running"
       ? { tb: state.simRun.tb, verdict: state.simRun.verdict, at: Date.now() } : prev.sim,
   };

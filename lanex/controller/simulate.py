@@ -17,12 +17,11 @@ Two engines, picked to fit the testbench:
 
 * **Icarus Verilog** (``iverilog`` + ``vvp``) — event-driven, full 4-state,
   honours ``#delay`` timing controls and classic ``initial`` testbenches. The
-  better fit for hand-written RTL testbenches (and beginners), but it is **not**
-  in the LibreLane container image, so it only runs in **Local-tools** mode when
-  the host has it.
-* **Verilator** (``--binary``) — fast, cycle-based, SV-leaning. It ships in the
-  LibreLane image, so it is the default for **container** mode (and a host
-  fallback when iverilog is absent).
+  better fit for hand-written RTL testbenches (and beginners). The host's when
+  installed, else the one on the LibreLane image's PATH (3.0.4 ships it).
+* **Verilator** (``--binary``) — fast, cycle-based, SV-leaning. The host's
+  only: the image has Verilator but no make or C++ compiler, so ``--binary``
+  can't build a simulator there.
 
 Either way this is our own subprocess wrapping a binary (image or host) via the
 public image + ``tools.resolve_engine`` only — no new dependency and no new
@@ -49,6 +48,24 @@ from . import container_run, events, lint
 # running". The timeout kills a runaway sim so the job always frees itself; the
 # (partial) VCD it already wrote is still loaded. Cancel/Stop bypasses it.
 DEFAULT_SIM_TIMEOUT = 120
+# The time limit a person can choose (Settings > Editor), in seconds.
+MIN_SIM_TIMEOUT = 5
+MAX_SIM_TIMEOUT = 3600
+
+# The time unit and precision of a file without a `timescale.
+DEFAULT_TIMESCALE = "1ns/1ps"
+
+
+def sim_timeout(value: Any) -> int:
+    """The time limit for one simulation: *value* in seconds (the IDE sends the
+    Settings choice), clamped to 5 s .. 1 h; the default when missing or junk."""
+    try:
+        n = int(float(value))
+    except (TypeError, ValueError):
+        return DEFAULT_SIM_TIMEOUT
+    if n <= 0:
+        return DEFAULT_SIM_TIMEOUT
+    return max(MIN_SIM_TIMEOUT, min(MAX_SIM_TIMEOUT, n))
 
 # Compiled simulators (Icarus .vvp, Verilator obj_dir) live here, inside the
 # project but out of the way, like cocotb's sim_build/.
@@ -66,8 +83,13 @@ def _verilator_shell(*, top: str, sources: Sequence[str], testbench: str,
     folder holds only the user's files (the waveform is still written where the
     testbench's ``$dumpfile`` says, relative to the project)."""
     trace_flag = "--trace-fst" if trace == "fst" else "--trace"
+    # --timescale: the unit for files that have no `timescale. Every template
+    # (and most hand-written projects) has one in the testbench and none in the
+    # design, which Verilator reports as TIMESCALEMOD (an error in some
+    # versions); Icarus and the syntax check (lint.py) assume 1ns/1ps too.
     parts: List[str] = ["verilator", "--binary", trace_flag, "--trace-structs",
-                        "-Wno-fatal", "--Mdir", SIM_BUILD + "/obj_dir", "-o", out_name, "--top-module", top]
+                        "-Wno-fatal", "--timescale", DEFAULT_TIMESCALE,
+                        "--Mdir", SIM_BUILD + "/obj_dir", "-o", out_name, "--top-module", top]
     for k, v in (defines or {}).items():
         parts.append(f"-D{k}={v}" if v not in (None, "") else f"-D{k}")
     for inc in (include_dirs or []):
@@ -76,7 +98,9 @@ def _verilator_shell(*, top: str, sources: Sequence[str], testbench: str,
     parts.append(str(testbench))
     build = " ".join(_shquote(p) for p in parts)
     # Build, then run the produced simulator (which dumps the VCD/FST).
-    return f"set -e; {build}; ./{SIM_BUILD}/obj_dir/{out_name}"
+    # Verilator makes --Mdir but not its parent: a fresh project (no Icarus run
+    # made sim_build/ before) failed with "Cannot write sim_build/obj_dir/...".
+    return f"set -e; mkdir -p {SIM_BUILD}; {build}; ./{SIM_BUILD}/obj_dir/{out_name}"
 
 
 def _iverilog_shell(*, top: str, sources: Sequence[str], testbench: str,
@@ -126,8 +150,8 @@ def build_sim_command(
     ``sim_engine`` selects ``"iverilog"`` or ``"verilator"``. Container mode
     wraps the build+run in ``<engine> run --rm -v <design>:/work -w /work <image>
     bash -lc '…'`` (mount only the design dir); local mode is a bare
-    ``bash -lc '…'`` (the caller sets ``cwd=design_dir``). iverilog is local-only
-    (not in the image); the caller enforces that. Pure — no system probing."""
+    ``bash -lc '…'`` (the caller sets ``cwd=design_dir``). Verilator is
+    host-only (the image can't compile its C++); the caller enforces that. Pure."""
     if sim_engine == "iverilog":
         shell = _iverilog_shell(top=top, sources=sources, testbench=testbench,
                                 defines=defines, include_dirs=include_dirs)
