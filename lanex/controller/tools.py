@@ -1050,16 +1050,34 @@ def check_tools(*, force: bool = False) -> Dict[str, Any]:
         ts, cached = _check_tools_cache[0]
         if (time.time() - ts) >= _CHECK_TOOLS_TTL_S:
             _background("tools", _refresh_check_tools)
-        return cached
+        return _with_live_jobs(cached)
     with _probe_lock:
         if not force and _check_tools_cache:
-            return _check_tools_cache[0][1]
+            return _with_live_jobs(_check_tools_cache[0][1])
         gen = _check_tools_cache.gen
         result = _check_tools_uncached()
         if gen == _check_tools_cache.gen:   # nothing invalidated it meanwhile
             list.clear(_check_tools_cache)   # replace, not invalidate
             _check_tools_cache.append((time.time(), result))
+        return _with_live_jobs(result)
+
+
+def _with_live_jobs(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The probe plus the PDK installs running right now (never cached), so a
+    reloaded page shows them busy instead of offering a second Install, or a
+    Repair for a version that is being unpacked."""
+    try:
+        from . import installer as _inst
+
+        running = _inst.installing_pdks()
+    except Exception:
         return result
+    if not running:
+        return result   # the cached answer itself (the usual case)
+    out = dict(result)
+    out["pdk"] = dict(result.get("pdk") or {})
+    out["pdk"]["installing_pdks"] = running
+    return out
 
 
 def _refresh_check_tools() -> None:
@@ -1137,11 +1155,18 @@ def _check_tools_uncached() -> Dict[str, Any]:
         # exactly what LibreLane resolves at run time, and what the catalog
         # keys against.
         installed_pdks: List[str] = []
+        incomplete_pdks: List[str] = []
         vdirs: List[Tuple[str, Path]] = []
+        from . import pdk as _pdk_mod
         for root in _pdk_roots():
             for variant in catalog:
                 vdir = root / variant
                 if (vdir / "libs.ref").is_dir() and variant not in installed_pdks:
+                    # A download cut off while unpacking is not an install.
+                    if _pdk_mod.variant_incomplete(vdir):
+                        if variant not in incomplete_pdks:
+                            incomplete_pdks.append(variant)
+                        continue
                     installed_pdks.append(variant)
                     vdirs.append((variant, vdir))
         size_f = [(v, pool.submit(_dir_size_mb, vdir)) for v, vdir in vdirs]
@@ -1178,6 +1203,14 @@ def _check_tools_uncached() -> Dict[str, Any]:
         ),
     }
     pdk_out["versions"] = versions
+    pdk_out["incomplete_pdks"] = [v for v in incomplete_pdks if v not in installed_pdks]
+    try:
+        from . import installer as _inst
+        # librelane and ciel in LanEx's own environment: no Remove for them.
+        for row in out:
+            row["own_dependency"] = bool(_inst.own_dependency_reason(row["key"]))
+    except Exception:
+        pass
     return {
         "platform": _platform_key(),
         "tools": out,

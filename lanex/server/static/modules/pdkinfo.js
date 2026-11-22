@@ -1,6 +1,14 @@
 // pdkinfo.js — what a PDK is, in one line, and its layer stack for the Setup
 // hero. Facts come from the open PDKs' own documentation; the stack shows layer
 // order and count, not to scale.
+//
+// Layer names are the PDK's own, exactly as its technology LEF spells them:
+// LibreLane variables such as RT_MAX_LAYER take them as written, and the case
+// matters (sky130 met4, gf180mcu Metal4, IHP Metal4 and TopMetal1; "metal4"
+// is no layer at all, audit G17). Checked against the tech LEFs of sky130A,
+// gf180mcuA-D (gf180mcu_fd_sc_mcu7t5v0) and ihp-sg13g2 (sg13g2_tech.lef). The
+// Setup card asks the server for the installed PDK's own list
+// (/api/pdk-layers) and uses this table only when that is not available.
 
 const FAMILIES = [
   {
@@ -19,14 +27,14 @@ const FAMILIES = [
     },
     stack: (n) => {
       const m = { gf180mcuA: 3, gf180mcuB: 4, gf180mcuC: 5, gf180mcuD: 5 }[n] || 5;
-      return ["poly2"].concat(Array.from({ length: m }, (_, i) => "metal" + (i + 1)));
+      return ["Poly2"].concat(Array.from({ length: m }, (_, i) => "Metal" + (i + 1)));
     },
     node: "180 nm",
   },
   {
     match: /^ihp-sg13g2/,
     about: () => "IHP 130 nm SiGe BiCMOS. Five thin metal layers and two thick top metals.",
-    stack: ["gatpoly", "metal1", "metal2", "metal3", "metal4", "metal5", "topmetal1", "topmetal2"],
+    stack: ["GatPoly", "Metal1", "Metal2", "Metal3", "Metal4", "Metal5", "TopMetal1", "TopMetal2"],
     node: "130 nm",
   },
 ];
@@ -34,11 +42,28 @@ const FAMILIES = [
 // Layer colour by name: poly, local interconnect, then metal N in the metN hue
 // (top metals share the highest metal colours).
 function hue(layer) {
-  if (/poly/.test(layer)) return "--poly";
+  if (/poly/i.test(layer)) return "--poly";
   if (layer === "li1") return "--li";
-  if (/^topmetal/.test(layer)) return layer.endsWith("2") ? "--met5" : "--met4";
+  if (/^topmetal/i.test(layer)) return layer.endsWith("2") ? "--met5" : "--met4";
   const n = parseInt(layer.replace(/\D+/g, ""), 10);
   return "--met" + Math.min(Math.max(n || 1, 1), 5);
+}
+
+// The routing layers RT_MAX_LAYER / RT_MIN_LAYER may name, bottom up, from
+// this table (sky130's li1 is a routing layer in its LEF but not one a design
+// limits routing to, so it is left out).
+export const isMetal = (l) => /^(met\d|metal\d|topmetal\d)$/i.test(String(l || ""));
+
+export function routingLayers(name) {
+  return (pdkFacts(name).stack || []).filter(isMetal);
+}
+
+// A value a config sets that names a layer only in another case ("metal4"
+// for Metal4): the exact name, or "" when it is no such near miss.
+export function layerCaseFix(value, layers) {
+  const v = String(value || "");
+  if (!v || (layers || []).includes(v)) return "";
+  return (layers || []).find((l) => l.toLowerCase() === v.toLowerCase()) || "";
 }
 
 export function pdkFacts(name) {

@@ -71,3 +71,42 @@ body.theme-light .st-keys summary { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   .st-switch, .st-switch span { transition: none; }
 }
+
+/* ---- The update card (modules/updatebanner.js) ------------------------------
+ * A newer LanEx release: a small card under the top bar's right end, in the
+ * card language above (gradient fill, accent line on top, blue border, a soft
+ * glow), so it reads as LanEx and not as a system warning. Below every dialog
+ * and menu; it never covers the Run button or the rail. */
+.ub {
+  position: fixed; z-index: calc(var(--z-drawer) - 1);
+  top: calc(var(--topbar-h) + 12px); right: 16px;
+  width: min(392px, calc(100vw / var(--ll-zoom, 1) - 32px));
+  padding: var(--s-3) var(--s-4) var(--s-3);
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--r-md);
+  box-shadow: var(--sh-3), 0 0 22px var(--accent-soft);
+}
+.ub[hidden] { display: none; }
+.ub::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: 0.7;
+}
+.ub-top { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.ub-x { color: var(--text-muted); }
+.ub-x:hover { color: var(--text-strong); }
+.ub-title { margin-top: 2px; font-size: 22px; font-weight: 800; line-height: 1.15; color: var(--text-strong); }
+.ub-ver { font-family: var(--mono); font-weight: 600; color: var(--met1); }
+body.theme-light .ub-ver { color: var(--accent); }
+.ub-text { margin: 6px 0 var(--s-2); font-size: 14px; line-height: 1.45; color: var(--text); text-wrap: pretty; }
+.ub-cmd {
+  margin: 0 0 var(--s-2); padding: 8px 10px; font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-all; user-select: all;
+}
+.ub-acts { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.ub-foot {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px var(--s-3);
+  margin-top: var(--s-3); padding-top: var(--s-2); border-top: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-muted);
+}
+.ub-foot .linklike { font-size: 12.5px; }
+@media (max-width: 720px) { .ub { left: 16px; right: 16px; width: auto; } }

@@ -5,7 +5,7 @@
 // keep a control of their own in the Run menu or the IDE toolbar, so both
 // stay in step).
 
-import { fmt } from "./api.js";
+import { api, fmt } from "./api.js";
 import { safeStorage } from "./state.js";
 import { PREFS, getPref, setPref, resetPrefs } from "./prefs.js";
 import { setTheme, themeChoice } from "./theme.js";
@@ -31,7 +31,44 @@ const APPLY = {
   showFlow: () => syncMirror("run-pref-show", getPref("showFlow") === "1"),
   chime: () => syncMirror("run-pref-chime", getPref("chime") === "1"),
   lintOnSave: () => syncMirror("ide-autolint", getPref("lintOnSave") === "1"),
+  updateCheck: async (v) => {
+    (await import("./updatebanner.js")).onPrefChanged(v === "1");
+    paintUpdateLine();
+  },
 };
+
+// The Updates card's status line: this version, and what the last check said.
+function agoText(t) {
+  if (!t) return "";
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
+}
+
+export function updateLineHtml(s, on) {
+  if (!s) return "<span class='muted'>No check yet.</span>";
+  const cur = "LanEx " + esc(s.current);
+  const off = on ? "" : " <span class='muted'>The daily check is off.</span>";
+  if (!s.checked_at) return cur + "." + (on ? " <span class='muted'>Not checked yet.</span>" : off);
+  const when = " <span class='muted'>Checked " + esc(agoText(s.checked_at)) + (s.last_ok ? "" : ", GitHub could not be reached") + ".</span>";
+  if (s.newer && s.latest)
+    return cur + ". <b>" + esc(s.latest.version) + " is out</b> (<a href='" + esc(s.latest.url) + "' target='_blank' rel='noopener'>what's new</a>)." + when + off;
+  if (s.latest) return cur + ", the newest release." + when + off;
+  return cur + "." + when + off;
+}
+
+async function paintUpdateLine(status) {
+  const el = typeof document !== "undefined" ? document.getElementById("st-update-line") : null;
+  if (!el) return;
+  let s = status;
+  if (!s) {
+    const m = await import("./updatebanner.js");
+    s = m.lastStatus() || await m.updateStatus();
+  }
+  el.innerHTML = updateLineHtml(s, getPref("updateCheck") === "1");
+}
 
 function syncMirror(id, on) {
   const el = document.getElementById(id);
@@ -81,8 +118,7 @@ function keysHtml() {
 async function aboutHtml() {
   let about = null;
   try {
-    const r = await fetch("/api/about", { headers: { "X-Requested-With": "XMLHttpRequest" } });
-    about = r.ok ? await r.json() : null;
+    about = await api.about();
   } catch (_e) {}
   const ver = about && about.version, ll = about && about.librelane;
   return "<dl class='about-facts'>" +
@@ -121,9 +157,14 @@ export async function renderSettings() {
     card("Data",
       row("Preferences", "Back to the defaults: everything on this page, plus column choices, sort orders and panel sizes. Projects and runs are not touched.", btn("reset", "Reset…")) +
       row("Recent projects", "Clear the list this window remembers. The folders stay where they are.", btn("clear-recent", "Clear"))) +
+    card("Updates", prefRows("Updates") +
+      "<div class='st-row'><div class='st-row-l'><span class='st-row-t'>This version</span>" +
+      "<span class='st-row-h' id='st-update-line'><span class='muted'>Loading…</span></span></div>" +
+      "<div class='st-row-c'>" + btn("update-now", "Check now") + "</div></div>") +
     card("About", "<div id='st-about'><span class='muted'>Loading…</span></div>") +
     "</div>";
   aboutHtml().then((h) => { const el = document.getElementById("st-about"); if (el) el.innerHTML = h; });
+  paintUpdateLine().catch(() => {});
 }
 
 function repaintZoom(host) {
@@ -170,6 +211,18 @@ function wireOnce(host) {
     if (act === "first-chip" || act === "tour") document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: act } }));
     else if (act === "reset-start") document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: "reset" } }));
     else if (act === "notices") (await import("./shell.js")).openHelp("about");
+    else if (act === "update-now") {
+      a.disabled = true;
+      const line = document.getElementById("st-update-line");
+      if (line) line.innerHTML = "<span class='spinner-sm'></span> Asking GitHub…";
+      // An explicit click asks even with the daily check off: it is the
+      // person asking, once.
+      const s = await (await import("./updatebanner.js")).checkForUpdates({ force: true });
+      a.disabled = false;
+      paintUpdateLine(s || undefined);
+      if (s && !s.last_ok) toast.show("GitHub could not be reached. LanEx will try again later.", "warn");
+      else if (s && !s.newer) toast.show("LanEx " + s.current + " is the newest release.", "success");
+    }
     else if (act === "clear-recent") {
       safeStorage.remove("ll.recentDesigns");
       toast.show("Recent projects cleared in this window.", "success");
@@ -187,11 +240,13 @@ function wireOnce(host) {
       await APPLY.engine("container");
       ["showFlow", "notify", "chime", "lintOnSave"].forEach((id) => { if (id !== "notify") APPLY[id](); });
       syncMirror("run-pref-notify", false);
+      (await import("./updatebanner.js")).onPrefChanged(getPref("updateCheck") === "1");
       renderSettings();
       toast.show("Preferences are back to their defaults.", "success");
     }
   });
   window.addEventListener("g:zoom", () => repaintZoom(host));
+  document.addEventListener("g:update_status", (e) => paintUpdateLine(e.detail || undefined).catch(() => {}));
   // The same preference changed somewhere else (the theme button, the t key,
   // the Run menu): show it.
   document.addEventListener("g:theme_changed", () => {

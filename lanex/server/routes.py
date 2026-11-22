@@ -329,6 +329,33 @@ def h_pdk_ready(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_pdk_layers(handler: Any) -> None:
+    """Routing layer names of an installed PDK variant, read from its tech LEF
+    (RT_MAX_LAYER and friends need the exact, case-sensitive name)."""
+    pdk = _query_param(handler.path, "pdk")
+    if not pdk:
+        _respond(handler, "missing pdk", 400)
+        return
+    try:
+        _respond(handler, pdk_mod.routing_layers(pdk, _query_param(handler.path, "scl") or None))
+    except Exception as ex:
+        _log.exception("routing_layers failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_update_check(handler: Any) -> None:
+    """The release check (controller/updatecheck.py). GET returns what is
+    known without going online; POST asks GitHub when the last check is a day
+    old (``force`` asks now). The browser only POSTs while the "Check for
+    updates" setting is on."""
+    from ..controller import updatecheck
+    if handler.command == "POST":
+        body = getattr(handler, "_body", {}) or {}
+        _respond(handler, updatecheck.check(force=bool(body.get("force"))))
+    else:
+        _respond(handler, updatecheck.status())
+
+
 def h_known_designs(handler: Any) -> None:
     """Design dirs the user has opened (server-remembered) + the active one — so
     cross-design pickers (Compare/DSE) find every design, not just localStorage's."""
@@ -1892,17 +1919,23 @@ def h_tools_cancel(handler: Any) -> None:
 
 
 def h_settings_pdk_root(handler: Any) -> None:
+    """The PDK folder: GET reads it, POST changes it now and for later starts
+    (saved in $LANEX_HOME/settings.json; an empty value goes back to the
+    default)."""
     if handler.command == "GET":
-        pdk_root = os.environ.get("PDK_ROOT", os.path.expanduser("~/.ciel"))
-        _respond(handler, {"ok": True, "pdk_root": pdk_root})
+        _respond(handler, installer.pdk_root_info())
     elif handler.command == "POST":
         body = getattr(handler, "_body", {})
         new_root = body.get("pdk_root")
-        if not new_root:
+        if new_root is None:
             _respond(handler, "missing pdk_root", 400)
             return
-        os.environ["PDK_ROOT"] = os.path.expanduser(new_root)
-        _respond(handler, {"ok": True, "pdk_root": os.environ["PDK_ROOT"]})
+        res = installer.set_pdk_root(str(new_root))
+        if not res.get("ok"):
+            _respond(handler, res.get("reason") or "could not change the PDK folder", 400)
+            return
+        tools_mod._check_tools_cache.clear()
+        _respond(handler, res)
     else:
         _respond(handler, "Method Not Allowed", 405)
 
@@ -4902,6 +4935,8 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/pdks", h_pdks),
     ("/api/scls", h_scls),
     ("/api/pdk-ready", h_pdk_ready),
+    ("/api/pdk-layers", h_pdk_layers),
+    ("/api/update-check", h_update_check),
     ("/api/runs", h_runs),
     ("/api/known-designs", h_known_designs),
     ("/api/run-step-log", h_run_step_log),

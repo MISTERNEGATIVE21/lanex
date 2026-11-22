@@ -234,6 +234,115 @@ check("tools: engine-not-usable card is platform-aware with a Start action", () 
     "the Recheck button no longer forces a fresh probe");
 });
 
+// ------------------------------------------- Tools, image lock, update check (audit 2026-11-15)
+await checkAsync("tools: a 429 on Install waits and asks once more; a double click asks once", async () => {
+  // The server refuses a second install request within a second. The button
+  // used to stick on "Installing…" after that refusal.
+  let calls = 0;
+  const waited = [];
+  const r = await toolsModule.requestJob("k1", async () => {
+    calls++;
+    if (calls === 1) { const e = new Error("Rate limit exceeded"); e.status = 429; throw e; }
+    return { ok: true, status: "started" };
+  }, async (ms) => { waited.push(ms); });
+  assert.equal(calls, 2);
+  assert.deepEqual(waited, [1100]);
+  assert.equal(r.status, "started");
+  // Two clicks while the first request is out: the second does not ask.
+  let n = 0;
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const first = toolsModule.requestJob("k2", async () => { n++; await gate; return { ok: true }; });
+  const second = await toolsModule.requestJob("k2", async () => { n++; return { ok: true }; });
+  assert.equal(second.duplicate, true);
+  release();
+  await first;
+  assert.equal(n, 1);
+  // Any other error still reaches the caller (which repaints the button).
+  await assert.rejects(toolsModule.requestJob("k3", async () => { const e = new Error("boom"); e.status = 500; throw e; }));
+  assert.equal(toolsModule.logHint({ log_path: "/h/.lanex/logs/install/docker.log" }), " Full log: /h/.lanex/logs/install/docker.log");
+  assert.equal(toolsModule.logHint({}), "");
+});
+
+check("tools: an image recorded for an older LibreLane asks for Update image", () => {
+  const info = {
+    container: { ready: true, available: true, image_present: false, librelane_version: "3.0.5",
+      image_stale_record: { source: "image.lock", image: "ghcr.io/librelane/librelane:3.0.4@sha256:ab", librelane_version: "3.0.4" } },
+    pdk: { ciel_installed: true, installed_pdks: ["sky130A"], versions: {} }, pdk_catalog: {}, tools: [],
+  };
+  const items = toolsModule.attentionItems(info);
+  const img = items.find((x) => x.key === "image");
+  assert.ok(img, "an image item");
+  assert.equal(img.fix.label, "Update image");
+  assert.match(img.title, /3\.0\.5/);
+  assert.match(img.detail, /3\.0\.4/);
+});
+
+check("tools: a PDK whose download stopped mid-unpack is a problem with Repair, never ready", () => {
+  const info = {
+    container: { ready: true, image_present: true },
+    pdk: { ciel_installed: true, installed_pdks: [], incomplete_pdks: ["sky130A"], installing_pdks: [], versions: {} },
+    pdk_catalog: { sky130A: { family: "sky130", default_variant: true } }, tools: [],
+  };
+  const items = toolsModule.attentionItems(info);
+  const it = items.find((x) => x.key === "pdk-incomplete-sky130A");
+  assert.ok(it && it.tone === "fail" && /Repair/.test(it.fix.label));
+  assert.ok(!items.some((x) => x.key === "pdk-none"), "no second 'No PDK installed' item for the same thing");
+  // A server-side install in progress (a reloaded page) reads as busy, not incomplete.
+  info.pdk.installing_pdks = ["sky130A"];
+  const busy = toolsModule.attentionItems(info);
+  assert.ok(busy.some((x) => x.key === "pdk-busy-sky130A"));
+  assert.ok(!busy.some((x) => x.key === "pdk-incomplete-sky130A"));
+});
+
+const PDKI = await import(toUrl(resolve(MOD, "pdkinfo.js")));
+check("pdkinfo: routing layers spelled as each PDK's tech LEF does (audit G17)", () => {
+  assert.deepEqual(PDKI.routingLayers("sky130A"), ["met1", "met2", "met3", "met4", "met5"]);
+  assert.deepEqual(PDKI.routingLayers("gf180mcuA"), ["Metal1", "Metal2", "Metal3"]);
+  assert.deepEqual(PDKI.routingLayers("gf180mcuB"), ["Metal1", "Metal2", "Metal3", "Metal4"]);
+  assert.deepEqual(PDKI.routingLayers("gf180mcuD"), ["Metal1", "Metal2", "Metal3", "Metal4", "Metal5"]);
+  assert.deepEqual(PDKI.routingLayers("ihp-sg13g2"), ["Metal1", "Metal2", "Metal3", "Metal4", "Metal5", "TopMetal1", "TopMetal2"]);
+  assert.equal(PDKI.layerCaseFix("metal4", PDKI.routingLayers("gf180mcuD")), "Metal4");
+  assert.equal(PDKI.layerCaseFix("topmetal1", PDKI.routingLayers("ihp-sg13g2")), "TopMetal1");
+  assert.equal(PDKI.layerCaseFix("Metal4", PDKI.routingLayers("gf180mcuD")), "");
+  assert.equal(PDKI.layerCaseFix("met9", PDKI.routingLayers("sky130A")), "");
+  // The Setup hero colours the right-case names the same way.
+  assert.match(PDKI.stackHtml("ihp-sg13g2"), /--lc:var\(--met5\)[^>]*title='TopMetal2'/);
+  const ms = readFileSync(resolve(MOD, "mostused.js"), "utf8");
+  assert.match(ms, /api\.pdkLayers\(/, "the Setup card asks the server for the installed PDK's layers");
+});
+
+const UB = await import(toUrl(resolve(MOD, "updatebanner.js")));
+check("update banner: shown for a newer release unless that version was dismissed", () => {
+  const s = { current: "1.0.0", newer: true, latest: { version: "1.1.0", tag: "v1.1.0", url: "https://github.com/AkshatIsWired/lanex/releases/tag/v1.1.0" },
+    how: { platform: "unix", text: "Run this in a terminal.", command: "curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/v1.1.0/scripts/install.sh | LANEX_REF=v1.1.0 bash" } };
+  assert.equal(UB.shouldShow(s, ""), true);
+  assert.equal(UB.shouldShow(s, "1.1.0"), false);
+  assert.equal(UB.shouldShow(s, "1.0.9"), true);
+  assert.equal(UB.shouldShow({ ...s, newer: false }, ""), false);
+  assert.equal(UB.shouldShow(null, ""), false);
+  const h = UB.bannerHtml(s);
+  assert.match(h, /Update available/);
+  assert.match(h, /LanEx <span class='ub-ver'>1\.1\.0<\/span>/);
+  assert.match(h, /What's new/);
+  assert.match(h, /LANEX_REF=v1\.1\.0 bash/);
+  assert.match(h, /data-ub='dismiss'/);
+  const w = UB.bannerHtml({ ...s, how: { platform: "windows", text: "Download the new LanEx Setup.", download: "https://github.com/AkshatIsWired/lanex/releases/download/v1.1.0/LanEx-Setup.exe" } });
+  assert.match(w, /href='https:\/\/github\.com\/AkshatIsWired\/lanex\/releases\/download\/v1\.1\.0\/LanEx-Setup\.exe'/);
+  assert.ok(!/<pre/.test(w), "Windows gets the installer, not a shell command");
+  const bad = UB.bannerHtml({ ...s, latest: { ...s.latest, version: "<img src=x>" } });
+  assert.ok(!/<img/.test(bad), "release data is escaped");
+});
+
+await checkAsync("prefs: Check for updates is on by default and a dismissal is state, not a preference", async () => {
+  const PRF = await import(toUrl(resolve(MOD, "prefs.js")));
+  const p = PRF.pref("updateCheck");
+  assert.ok(p && p.type === "bool" && p.def === "1" && p.key === "ll.updateCheck");
+  assert.match(p.hint, /GitHub/);
+  assert.match(p.hint, /Nothing about you/);
+  assert.ok(PRF.STATE_PREFIXES.includes("ll.updateDismissed"));
+});
+
 // ------------------------------------------- waveform viewer data fidelity
 // The SAME golden VCD (a real Icarus dump of the 4-bit counter bench, see
 // goldens/sim_run/) that test_wave_fidelity.py holds the python parsers to.

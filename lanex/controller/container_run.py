@@ -91,52 +91,136 @@ def _canonical_image_ref(image: str, digest: str = "") -> str:
     return f"{image}@{digest}"
 
 
+def installed_librelane_version() -> str:
+    """``librelane.__version__`` of the installed package, "" when unknown."""
+    try:
+        import librelane  # type: ignore
+
+        return str(getattr(librelane, "__version__", "") or "")
+    except Exception:  # pragma: no cover - librelane missing
+        return ""
+
+
+# ``ghcr.io/librelane/librelane:3.0.4@sha256:…`` -> "3.0.4". Only a tag that
+# looks like a release version counts; "latest" or a custom tag says nothing.
+_TAG_VERSION_RX = re.compile(r":(v?\d+\.\d+\.\d+[0-9A-Za-z.+\-]*)$")
+
+
+def _ref_tag_version(ref: str) -> str:
+    name = str(ref or "").split("@", 1)[0]
+    m = _TAG_VERSION_RX.search(name)
+    return m.group(1).lstrip("v") if m else ""
+
+
+def _record_version(data: Dict[str, Any], *, ref_key: str = "image") -> str:
+    """The LibreLane version a runtime.json / image.lock record was made for.
+
+    New locks store it (``librelane_version``); older ones only carry it in the
+    image tag."""
+    v = str(data.get("librelane_version") or "").strip()
+    if v:
+        return v
+    return _ref_tag_version(data.get("imageRef") or data.get(ref_key) or "")
+
+
+def _record_ref(data: Dict[str, Any]) -> str:
+    if data.get("imageRef"):
+        return str(data["imageRef"])
+    return _canonical_image_ref(data.get("image", ""), data.get("digest", ""))
+
+
+def _record_is_stale(data: Dict[str, Any], installed: str) -> bool:
+    """True when a pinned-image record belongs to a different LibreLane.
+
+    After an upgrade the record still names the old image; running the new
+    LibreLane inside it gives the wrong tools (audit G15). A record that names
+    no version is stale only when this LibreLane has a tested digest and the
+    record pins another one; otherwise there is nothing to compare and it is
+    kept."""
+    if not installed:
+        return False
+    recorded = _record_version(data)
+    if recorded:
+        return recorded != installed
+    tested = _KNOWN_IMAGE_DIGESTS.get(installed, "")
+    ref = _record_ref(data)
+    if tested and "@" in ref:
+        return tested not in ref
+    return False
+
+
+def image_record_state() -> Dict[str, Any]:
+    """What the pinned-image records say, and whether they still apply.
+
+    Returns ``{"source", "ref", "version", "stale", "librelane_version"}``:
+    *source* is ``"runtime.json"``, ``"image.lock"`` or ``""`` (no record),
+    *ref* the image that record pins, *version* the LibreLane it was made for.
+    A stale record is ignored by :func:`image_ref`; the Tools page offers
+    "Update image" for it."""
+    installed = installed_librelane_version()
+    out: Dict[str, Any] = {"source": "", "ref": "", "version": "", "stale": False,
+                           "librelane_version": installed, "ignored": []}
+    try:
+        from . import platform_env
+
+        home = platform_env.home()
+    except Exception:
+        return out
+    for name in ("runtime.json", "image.lock"):
+        path = home / name
+        try:
+            if not path.is_file():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        ref = _record_ref(data)
+        if not ref:
+            continue
+        stale = _record_is_stale(data, installed)
+        if stale:
+            out["ignored"].append({"source": name, "ref": ref, "version": _record_version(data)})
+            continue
+        out.update(source=name, ref=ref, version=_record_version(data), stale=False)
+        return out
+    if out["ignored"]:
+        first = out["ignored"][0]
+        out.update(source=first["source"], ref=first["ref"], version=first["version"], stale=True)
+    return out
+
+
+def default_image_ref(version: Optional[str] = None) -> str:
+    """The image for *version* (the installed LibreLane by default)."""
+    ver = version if version is not None else installed_librelane_version()
+    ver = ver or "latest"
+    ref = f"ghcr.io/librelane/librelane:{ver}"
+    # Installs without runtime.json / image.lock (pip, install.sh) still get the
+    # exact image the release was tested with, not whatever the tag points at.
+    return _canonical_image_ref(ref, _KNOWN_IMAGE_DIGESTS.get(ver, ""))
+
+
 def image_ref() -> str:
     """The image LibreLane's own ``--dockerized`` path would use.
 
     Honours ``LIBRELANE_IMAGE_OVERRIDE`` and otherwise pins the tag to the
     installed ``librelane.__version__`` so tool versions always match the host
     package. Setup-installed appliances consume the verified digest from
-    ``runtime.json`` or ``image.lock``.
+    ``runtime.json`` or ``image.lock``, but only while that record was made for
+    the installed LibreLane: after an upgrade the old record is ignored and the
+    image matching the new LibreLane is used (audit G15).
     """
     override = os.environ.get("LIBRELANE_IMAGE_OVERRIDE")
     if override:
         return override
     try:
-        from . import platform_env
-
-        home = platform_env.home()
-        rt_path = home / "runtime.json"
-        if rt_path.is_file():
-            data = json.loads(rt_path.read_text(encoding="utf-8"))
-            if data.get("imageRef"):
-                return str(data["imageRef"])
-            img = data.get("image", "")
-            dig = data.get("digest", "")
-            canon = _canonical_image_ref(img, dig)
-            if canon:
-                return canon
-        lock_path = home / "image.lock"
-        if lock_path.is_file():
-            data = json.loads(lock_path.read_text(encoding="utf-8"))
-            img = data.get("image", "")
-            dig = data.get("digest", "")
-            canon = _canonical_image_ref(img, dig)
-            if canon:
-                return canon
+        rec = image_record_state()
+        if rec["ref"] and not rec["stale"]:
+            return rec["ref"]
     except Exception:
         pass
-    ver = "latest"
-    try:
-        import librelane  # type: ignore
-
-        ver = getattr(librelane, "__version__", "") or "latest"
-    except Exception:  # pragma: no cover - librelane missing
-        ver = "latest"
-    ref = f"ghcr.io/librelane/librelane:{ver}"
-    # Installs without runtime.json / image.lock (pip, install.sh) still get the
-    # exact image the release was tested with, not whatever the tag points at.
-    return _canonical_image_ref(ref, _KNOWN_IMAGE_DIGESTS.get(ver, ""))
+    return default_image_ref()
 
 
 # Multi-arch index digests (amd64 + arm64) of the images LanEx releases are
@@ -156,13 +240,7 @@ def image_provenance() -> Dict[str, Any]:
     digest, None when there is nothing to compare against.
     """
     ref = image_ref()
-    ver = ""
-    try:
-        import librelane  # type: ignore
-
-        ver = getattr(librelane, "__version__", "") or ""
-    except Exception:
-        ver = ""
+    ver = installed_librelane_version()
     tested = _KNOWN_IMAGE_DIGESTS.get(ver, "")
     override = bool(os.environ.get("LIBRELANE_IMAGE_OVERRIDE"))
     if override:
@@ -171,11 +249,28 @@ def image_provenance() -> Dict[str, Any]:
         custom = tested not in ref
     else:
         custom = None
-    return {
+    out: Dict[str, Any] = {
         "image_tested_digest": tested,
         "image_custom": custom,
         "librelane_version": ver,
+        # An image record made for another LibreLane (an upgrade happened):
+        # it is ignored, and the Tools page offers "Update image".
+        "image_stale_record": None,
     }
+    if not override:
+        try:
+            rec = image_record_state()
+            # Only when no current record is in use: a stale runtime.json next
+            # to a fresh image.lock (pulled after the upgrade) is fine.
+            if rec.get("stale"):
+                out["image_stale_record"] = {
+                    "source": rec.get("source"),
+                    "image": rec.get("ref"),
+                    "librelane_version": rec.get("version"),
+                }
+        except Exception:
+            pass
+    return out
 
 
 def pull_argv(engine: str) -> List[str]:

@@ -697,7 +697,7 @@ def test_no_creds_docker_env_strips_credstore(monkeypatch, tmp_path):
 def test_pull_retries_without_credential_helper(monkeypatch):
     calls = []
 
-    def fake_run_argv(argv, *, label="", key="", timeout_s=None, env_extra=None):
+    def fake_run_argv(argv, *, label="", key="", timeout_s=None, env_extra=None, **_kw):
         calls.append({"argv": list(argv), "env_extra": env_extra})
         if len(calls) == 1:
             return {"ok": False, "rc": 1, "output": [
@@ -743,15 +743,27 @@ def test_pull_retries_without_credential_helper(monkeypatch):
 
 # ------------------------------------------------ arch-specific asset URLs --
 
-def test_official_installer_urls_track_cpu(monkeypatch):
-    monkeypatch.setattr(installer.platform, "machine", lambda: "arm64")
-    assert installer._mac_arch() == "arm64"
-    assert installer._podman_pkg_url().endswith("podman-installer-macos-arm64.pkg")
-    assert installer._docker_dmg_url() == "https://desktop.docker.com/mac/main/arm64/Docker.dmg"
-    monkeypatch.setattr(installer.platform, "machine", lambda: "x86_64")
-    assert installer._mac_arch() == "amd64"
-    assert installer._podman_pkg_url().endswith("podman-installer-macos-amd64.pkg")
-    assert installer._docker_dmg_url() == "https://desktop.docker.com/mac/main/amd64/Docker.dmg"
+def test_without_brew_macos_engines_go_to_the_vendor_page(monkeypatch):
+    # Audit G24: LanEx no longer downloads Docker.dmg or the podman .pkg and
+    # installs it unchecked, and never runs Docker's installer with
+    # --accept-license. Without Homebrew the person gets the vendor's page.
+    ran = []
+    monkeypatch.setattr(installer, "_macos_version", lambda: (14, 5))
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: ran.append(list(argv)) or {"ok": True, "rc": 0})
+    monkeypatch.setattr(installer, "_emit", lambda *a, **k: None)
+    d = installer._install_docker_dmg_darwin("docker")
+    p = installer._install_podman_pkg_darwin("podman")
+    assert ran == []                       # nothing downloaded or installed
+    assert d["ok"] is False and d["manual"] is True
+    assert d["url"].startswith("https://docs.docker.com/")
+    assert d["terms_url"].startswith("https://www.docker.com/legal/")
+    assert "accept" in d["guidance"] and "yourself" not in d["url"]
+    assert p["ok"] is False and p["manual"] is True and p["url"].startswith("https://podman.io/")
+    assert installer._docker_dmg_url() == d["url"] and installer._podman_pkg_url() == p["url"]
+    src = Path(installer.__file__).read_text(encoding="utf-8")
+    assert '"--accept-license"' not in src
+    assert "curl -fsSL https://get.docker.com" not in src
 
 
 # ------------------------------------------- sudo -A escalation on macOS ----
@@ -1050,7 +1062,6 @@ def test_mac_arch_trusts_the_chip_over_a_rosetta_python(monkeypatch):
     monkeypatch.setattr(installer.subprocess, "run",
                         lambda argv, **kw: _Sysctl("1\n"))
     assert installer._mac_arch() == "arm64"
-    assert installer._docker_dmg_url().endswith("/arm64/Docker.dmg")
 
 
 def test_mac_arch_intel_falls_back_to_machine(monkeypatch):

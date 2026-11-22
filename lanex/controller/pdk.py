@@ -43,6 +43,36 @@ _NON_PDK_DIRS = {
 }
 
 
+# installer.install_pdk_sync writes ``<…>/versions/<hash>.lanex-incomplete``
+# before ciel fetches a version and removes it once ciel has unpacked and
+# enabled it. While it is there the version is a half-unpacked tree, which
+# must never read as an installed PDK.
+INCOMPLETE_SUFFIX = ".lanex-incomplete"
+
+
+def version_dir_incomplete(version_dir: Path) -> bool:
+    """True when the ciel version directory *version_dir* never finished."""
+    try:
+        return Path(str(version_dir).rstrip("/\\") + INCOMPLETE_SUFFIX).exists()
+    except Exception:
+        return False
+
+
+def variant_incomplete(variant_dir: Path) -> bool:
+    """True when ``<root>/<variant>`` points into a version that never finished.
+
+    ciel enables a variant as ``<root>/<variant>`` ->
+    ``<root>/ciel/<family>/versions/<hash>/<variant>``."""
+    try:
+        target = Path(variant_dir).resolve()
+    except Exception:
+        return False
+    vdir = target.parent
+    if vdir.parent.name != "versions":
+        return False
+    return version_dir_incomplete(vdir)
+
+
 def _candidate_pdk_roots() -> List[Path]:
     """Discover PDK roots in priority order.
 
@@ -126,6 +156,9 @@ def list_pdks() -> List[Dict[str, Any]]:
                 # A real (enabled) PDK has a libs.ref directory. Without one this
                 # is almost certainly noise, so don't surface it as a PDK.
                 if not (child / "libs.ref").is_dir():
+                    continue
+                if variant_incomplete(child):
+                    # A cut-off download: not offered until it is repaired.
                     continue
                 out.append(
                     to_json(
@@ -367,6 +400,9 @@ def _check_local_ready(variant: str, scl: str, roots: List[Path]) -> Dict[str, A
         scl_dir = root / variant / "libs.ref" / scl
         if scl_dir.is_dir():
             missing: List[str] = []
+            if variant_incomplete(root / variant):
+                missing.append(f"a complete '{variant}' download (the last install stopped "
+                               "while unpacking; reinstall it from Tools)")
             if not _scl_has_libs(scl_dir):
                 missing.append(".lib timing files")
             tech_hits = list(scl_dir.rglob("*.lef")) + list(scl_dir.rglob("*.gds"))
@@ -445,6 +481,8 @@ def _check_container_ready(
             present = ver.is_installed(home)
         except Exception:
             present = False
+        if present and version_dir_incomplete(Path(ver.get_dir(home))):
+            present = False   # half-unpacked: ciel would call it installed
         if present:
             ver_dir = Path(ver.get_dir(home))
             scl_dir = ver_dir / variant / "libs.ref" / scl
@@ -527,6 +565,91 @@ def check_pdk_ready(
     return _check_local_ready(variant, scl, roots)
 
 
+# ---------------------------------------------------------------- layer names
+# RT_MAX_LAYER / RT_MIN_LAYER take a routing layer's exact name from the PDK's
+# technology LEF, and the case matters: sky130 is met1…met5, gf180mcu
+# Metal1…Metal5 (gf180mcuA has three, B four), IHP Metal1…Metal5 then
+# TopMetal1 and TopMetal2 (audit G17: LanEx wrote "metal4", which OpenROAD
+# does not know). So the names are read from the tech LEF of the installed PDK.
+
+_LEF_LAYER_RX = None
+_layer_cache: Dict[str, Tuple[float, List[str]]] = {}
+
+
+def _tech_lef_candidates(variant_dir: Path, scl: Optional[str]) -> List[Path]:
+    libs = variant_dir / "libs.ref"
+    out: List[Path] = []
+    scls: List[Path] = []
+    if scl:
+        scls.append(libs / scl)
+    try:
+        # The foundry's own libraries first (sky130_fd_sc_hd, gf180mcu_fd_sc_…):
+        # their tech LEF follows the variant's metal count, which a
+        # third-party library's (gf180mcu_as_sc_…: five metals on gf180mcuA
+        # too) does not.
+        rest = [p for p in libs.iterdir() if p.is_dir() and p not in scls]
+        scls += sorted(rest, key=lambda p: ("_fd_sc_" not in p.name and p.name != "sg13g2_stdcell", p.name))
+    except OSError:
+        pass
+    for d in scls:
+        for pat in ("techlef/*__nom.tlef", "techlef/*.tlef", "lef/*tech*.lef"):
+            try:
+                hits = sorted(d.glob(pat))
+            except OSError:
+                hits = []
+            if hits:
+                out.append(hits[0])
+                break
+    return out
+
+
+def lef_routing_layers(lef: Path) -> List[str]:
+    """Routing layer names in the order a tech LEF defines them."""
+    import re
+
+    global _LEF_LAYER_RX
+    if _LEF_LAYER_RX is None:
+        _LEF_LAYER_RX = re.compile(r"^\s*LAYER\s+(\S+)\s*$|^\s*TYPE\s+(\w+)\s*;", re.M)
+    try:
+        st = lef.stat()
+        hit = _layer_cache.get(str(lef))
+        if hit and hit[0] == st.st_mtime:
+            return list(hit[1])
+        text = lef.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    layers: List[str] = []
+    current: Optional[str] = None
+    for m in _LEF_LAYER_RX.finditer(text):
+        if m.group(1):
+            current = m.group(1)
+        elif current and m.group(2).upper() == "ROUTING" and current not in layers:
+            layers.append(current)
+            current = None
+        else:
+            current = None
+    _layer_cache[str(lef)] = (st.st_mtime, layers)
+    return list(layers)
+
+
+def routing_layers(pdk: str, scl: Optional[str] = None) -> Dict[str, Any]:
+    """``{"layers": [...], "source": <tech LEF>}`` for an installed variant.
+
+    ``layers`` is empty when the PDK isn't installed here (the frontend then
+    uses its own table, pdkinfo.js, which carries the same names)."""
+    _family, variant = _resolve_family(pdk)
+    variant = variant or pdk
+    for root in _candidate_pdk_roots():
+        vdir = root / variant
+        if not (vdir / "libs.ref").is_dir() or variant_incomplete(vdir):
+            continue
+        for lef in _tech_lef_candidates(vdir, scl):
+            layers = lef_routing_layers(lef)
+            if layers:
+                return {"pdk": variant, "layers": layers, "source": str(lef)}
+    return {"pdk": variant, "layers": [], "source": ""}
+
+
 def check_pdk_library_ready(pdk: str, library: str, *,
                             required_version: Optional[str] = None) -> Dict[str, Any]:
     """Read-only exact-version presence check for any Ciel library.
@@ -555,7 +678,7 @@ def check_pdk_library_ready(pdk: str, library: str, *,
             # A fetch that was cut off while unpacking leaves library folders
             # that are not empty but not whole; install_pdk_sync marks the
             # version until ciel has finished.
-            if Path(str(ver.get_dir(home)).rstrip("/") + ".lanex-incomplete").exists():
+            if version_dir_incomplete(Path(ver.get_dir(home))):
                 continue
             if ver.is_installed(home) and libdir.is_dir() and any(libdir.rglob("*")):
                 return {"ready": True, "required_version": version,

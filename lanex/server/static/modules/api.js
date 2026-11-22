@@ -225,6 +225,13 @@ export const api = {
   reportsLvs: (path) => _fetch("/api/reports/lvs?path=" + encodeURIComponent(path)),
   getPdkRoot: () => _fetch("/api/settings/pdk-root"),
   setPdkRoot: (pdk_root) => _fetch("/api/settings/pdk-root", { method: "POST", body: JSON.stringify({ pdk_root }) }),
+  // Routing layer names from the PDK's tech LEF (RT_MAX_LAYER needs the exact name).
+  pdkLayers: (pdk, scl) => _fetch("/api/pdk-layers?pdk=" + encodeURIComponent(pdk || "") +
+    (scl ? "&scl=" + encodeURIComponent(scl) : "")),
+  about: () => _fetch("/api/about"),
+  // The release check: status reads what is known; check may go online (once a day, or force).
+  updateStatus: () => _fetch("/api/update-check"),
+  updateCheck: (force) => _fetch("/api/update-check", { method: "POST", body: JSON.stringify({ force: !!force }), timeout: 20000 }),
   reproducible: (step_id) => _fetch("/api/reproducible", { method: "POST", body: JSON.stringify({ step_id }) }),
 
   // ---------- manual / advanced (allow-listed console + CLI reveal)

@@ -253,6 +253,10 @@
       </div>
     </nav>
 
+  <!-- A newer LanEx release (modules/updatebanner.js); shown only while the
+       "Check for updates" setting is on and a newer release exists. -->
+  <aside id="update-banner" class="ub" role="status" aria-live="polite" aria-label="LanEx update" hidden></aside>
+
   <!-- Main work area -->
   <main class="work">
     <!-- SETUP -->
@@ -716,7 +720,7 @@
               <input type="text" id="pdk-root-input" class="grow" placeholder="e.g. /home/user/.ciel" />
               <button id="btn-save-pdk-root" class="btn btn-sm btn-primary">Save</button>
             </div>
-            <p class="hint">Where PDKs live. Point it at a bigger drive if you run out of space; LanEx and the flow both read it from here.</p>
+            <p class="hint">Where PDKs live. Point it at a bigger drive if you run out of space; LanEx and the flow both read it from here, and LanEx keeps your choice for every start. Leave it empty for the default.</p>
           </div>
           <div class="tl-fams" id="pdk-store-row">
             <div class="tl-fam tl-skel"><i></i><i></i><i></i></div>
