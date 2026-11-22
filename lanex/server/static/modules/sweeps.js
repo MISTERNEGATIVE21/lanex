@@ -855,7 +855,7 @@ async function addValues(sw) {
     return { p, nv };
   };
   const v = await customDialog({
-    title: esc("Add values to the sweep of " + ax.var),
+    title: "Add values to the sweep of " + ax.var,
     bodyHtml: "<label class='dlg-label' for='sw-add-in'>More values of <code>" + esc(ax.var) + "</code>. It has tried " + esc([...have].join(", ")) + ".</label>" +
       "<input class='dlg-input' id='sw-add-in' type='text' spellcheck='false' autocomplete='off' placeholder='e.g. 7, 6.5'/>" +
       "<p class='sw-add-out' id='sw-add-out' aria-live='polite'></p>",
@@ -884,6 +884,42 @@ async function addValues(sw) {
 }
 
 // ------------------------------------------------------------------ use a point's settings
+
+// A value as the setting's own type (`kind` as LanEx reads LibreLane's
+// variables), for writing into a config file: a sweep's values are text, and
+// "6" written as text is a quoted string in YAML or JSON. A value that does
+// not read as its kind stays as it is. Pure (tested).
+export function typedValue(v, kind) {
+  if (typeof v !== "string") return v;
+  const s = v.trim();
+  if (kind === "int" || kind === "number") {
+    const n = Number(s);
+    return s !== "" && Number.isFinite(n) ? n : v;
+  }
+  if (kind === "bool") {
+    if (/^(true|yes|on|1)$/i.test(s)) return true;
+    if (/^(false|no|off|0)$/i.test(s)) return false;
+    return v;
+  }
+  if (kind === "numbers") {
+    const parts = s.replace(/^[[(]\s*|\s*[\])]$/g, "").split(/[\s,]+/).filter(Boolean);
+    const ns = parts.map(Number);
+    return parts.length && ns.every(Number.isFinite) ? ns : v;
+  }
+  return v;
+}
+
+// The keys of `set` that the config file, after the write, still sets to
+// another value for this PDK (`effective`, as /api/config/set answers it).
+// Pure (tested).
+export function stillWins(set, effective, same) {
+  const out = [];
+  for (const k of Object.keys(set || {})) {
+    const e = (effective || {})[k];
+    if (e && !same(e.value, set[k])) out.push(k);
+  }
+  return out;
+}
 // Write what a point ran with into the design's config: the sweep's one-off
 // settings plus the point's values, only where they differ from the config,
 // shown as a diff first. A setting that a pdk:: section of the config sets for
@@ -904,8 +940,10 @@ async function useConfig(p, sw) {
     cfg = (plan && plan.config) || cfg;
   } catch (ex) { toast.show("Couldn't read the config: " + (ex.message || ex), "error"); return; }
   const same = (a, b) => { const x = asText(a).trim(), y = asText(b).trim(); return x === y || (x !== "" && y !== "" && Number.isFinite(Number(x)) && Number(x) === Number(y)); };
-  const rows = Object.entries(ran).map(([k, to]) => {
+  const rows = Object.entries(ran).map(([k, raw]) => {
     const e = ctx[k] || {};
+    // A point's values are text ("6"): the config gets the setting's own type.
+    const to = typedValue(raw, e.kind || kindOf(k));
     const scoped = (e.scoped || []).filter((s) => s.applies).pop() || null;
     const from = e.config_source ? e.config : null;
     return { k, to, from, def: e.default, scoped, rider: !(k in p.v), same: e.config_source ? same(e.config, to) : false };
@@ -916,7 +954,7 @@ async function useConfig(p, sw) {
     return;
   }
   const v = await customDialog({
-    title: esc("Use " + p.tag + "'s settings?"),
+    title: "Use " + p.tag + "'s settings?",
     bodyHtml: "<p>This writes what " + esc(p.tag) + " ran with into the config, so a plain Run builds it again:</p>" +
       "<table class='sw-diff'><thead><tr><th>Setting</th><th>Now</th><th></th><th>After</th></tr></thead><tbody>" +
       change.map((r) => "<tr><td><code>" + esc(r.k) + "</code>" + (r.rider ? " <span class='muted'>one-off setting it ran with</span>" : "") +
@@ -945,10 +983,9 @@ async function useConfig(p, sw) {
       if (d.undo && d.undo.backup) undos.push(d.undo);
       said.push(Object.entries(set).map(([k, x]) => k + " = " + asText(x)).join(", "));
       // A section that still sets the key for this PDK, to another value,
-      // wins over what was written.
-      for (const [k, entries] of Object.entries(d.scoped || {})) {
-        if (k in set && (entries || []).some((e) => e.applies && !same(e.value, set[k]))) stuck.push(k);
-      }
+      // wins over what was written. `effective` is the file after the write
+      // (`scoped` is the file before it, so it still has the old value).
+      stuck.push(...stillWins(set, d.effective, same));
     }
   } catch (ex) {
     toast.show("Couldn't save: " + (ex.message || ex), "error", 0);
@@ -970,4 +1007,4 @@ async function useConfig(p, sw) {
   } } : null);
 }
 
-export const _test = { parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, stageLabel: FS.stageLabel };
+export const _test = { parseValues, parseValuesStrict, countRuns, clockValues, dieValues, endReason, sweepPoints, typedValue, stillWins, stageLabel: FS.stageLabel };

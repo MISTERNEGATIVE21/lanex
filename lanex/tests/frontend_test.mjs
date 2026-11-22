@@ -838,6 +838,31 @@ check("sweeps: points in planned order, a missing point and why the sweep ended 
   assert.equal(re.find((p) => p.tag === "c8").superseded, "c8-2");
 });
 
+check("sweeps: Use this configuration writes typed values and warns only when a section still wins", () => {
+  // A point's values are text; the config gets numbers, booleans and lists.
+  assert.equal(SW.typedValue("6", "number"), 6);
+  assert.equal(SW.typedValue("7", "int"), 7);
+  assert.equal(SW.typedValue("true", "bool"), true);
+  assert.deepEqual(SW.typedValue("0 0 100 100", "numbers"), [0, 0, 100, 100]);
+  assert.equal(SW.typedValue("AREA 2", "choice"), "AREA 2");
+  assert.equal(SW.typedValue("abc", "number"), "abc", "a value that isn't its kind stays as it is");
+  assert.equal(SW.typedValue(6, "number"), 6);
+  const same = (a, b) => String(a) === String(b) || Number(a) === Number(b);
+  // The write landed in the pdk:: section: nothing still wins over it.
+  assert.deepEqual(SW.stillWins({ CLOCK_PERIOD: 6 }, { CLOCK_PERIOD: { value: 6, scope: ["pdk::sky130*"] } }, same), []);
+  // A deeper scl:: section still sets another value for this target.
+  assert.deepEqual(SW.stillWins({ CLOCK_PERIOD: 6 }, { CLOCK_PERIOD: { value: 8, scope: ["pdk::sky130*", "scl::x"] } }, same), ["CLOCK_PERIOD"]);
+  assert.deepEqual(SW.stillWins({ CLOCK_PERIOD: 6 }, {}, same), []);
+});
+
+check("dialogs: titles are plain text, never escaped by the caller (dialog.js sets textContent)", () => {
+  const src = (f) => readFileSync(resolve(MOD, f), "utf8");
+  for (const f of ["sweeps.js", "tools.js", "verify.js", "addfiles.js", "ide/main.js", "cells-macros.js"]) {
+    assert.doesNotMatch(src(f), /title: *(esc|fmt\.escape|_esc)\(/, f + " escapes a dialog title: an apostrophe shows as &#39;");
+  }
+  assert.match(src("dialog.js"), /\.dlg-head"\)\.textContent = /);
+});
+
 const RUNS = await import(toUrl(resolve(MOD, "runs.js")));
 check("runs: a sweep row names the values it tried, not a min-max range", () => {
   assert.equal(RUNS.sweepAxesText({ axes: [{ var: "CLOCK_PERIOD", values: ["10", "9", "8"] }] }), "CLOCK_PERIOD 10, 9, 8");
