@@ -3334,17 +3334,6 @@ def _flow_factory(name: str) -> Any:
     return f
 
 
-def _pdk_for_run(design_dir: str, run_tag: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Recover (pdk, scl) from an existing run's config (for a re-run)."""
-    if run_tag:
-        cfg = history._read_config(Path(design_dir) / "runs" / run_tag)
-        pdk = cfg.get("PDK") if isinstance(cfg.get("PDK"), str) else None
-        scl = cfg.get("STD_CELL_LIBRARY") if isinstance(cfg.get("STD_CELL_LIBRARY"), str) else None
-        if pdk:
-            return pdk, scl
-    return None, None
-
-
 def h_verify_rerun(handler: Any) -> None:
     """Re-run a single signoff step of a finished run, as a NEW run resumed
     from it (``reverify.plan_rerun``): the old run's flow, PDK, settings and
