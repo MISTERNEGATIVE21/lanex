@@ -2132,6 +2132,96 @@ check("ide editor: line-cached fold pairs equal the whole-text reading", () => {
   }
 });
 
+// ---------------------------------------------------------------- IDE file safety (audit G3, G4)
+const FSY = await import(toUrl(resolve(MOD, "ide", "filesync.js")));
+const ADF = await import(toUrl(resolve(MOD, "addfiles.js")));
+check("ide sync: a clean tab follows the disk, an edited one is flagged, never overwritten", () => {
+  const clean = { hash: "h1", text: "a", saved: "a" };
+  const dirty = { hash: "h1", text: "a!", saved: "a" };
+  assert.equal(FSY.refreshAction(clean, "h1"), "same");
+  assert.equal(FSY.refreshAction(clean, "h2"), "reload");
+  assert.equal(FSY.refreshAction(dirty, "h2"), "flag", "edits are kept; the next save asks");
+  assert.equal(FSY.refreshAction(dirty, null), "gone");
+  assert.equal(FSY.refreshAction({ text: "a", saved: "a" }, "h2"), "same", "a tab without a hash isn't judged");
+  assert.equal(FSY.conflictKind({ status: 409, body: { conflict: true } }), "changed");
+  assert.equal(FSY.conflictKind({ status: 409, body: { exists: true } }), "exists");
+  assert.equal(FSY.conflictKind({ status: 400, body: { conflict: true } }), null);
+  assert.equal(FSY.conflictKind(new Error("x")), null);
+  assert.ok(FSY.isConfigFile("config.yaml") && FSY.isConfigFile("config.json") && !FSY.isConfigFile("src/config.yaml"));
+});
+check("ide sync: Compare lists only the lines that differ", () => {
+  assert.equal(FSY.lineDiff("a\nb\nc", "a\nb\nc"), null);
+  assert.deepEqual(FSY.lineDiff("CLOCK_PERIOD: 25\nX: 1\n", "CLOCK_PERIOD: 10\nX: 1\n"),
+    [{ op: "-", line: 1, text: "CLOCK_PERIOD: 25" }, { op: "+", line: 1, text: "CLOCK_PERIOD: 10" }]);
+  const d = FSY.lineDiff("a\nb\nc\nd", "a\nc\nd\ne");
+  assert.deepEqual(d, [{ op: "-", line: 2, text: "b" }, { op: "+", line: 4, text: "e" }]);
+  assert.deepEqual(FSY.lineDiff("a\r\nb\r\n", "a\nb\n"), null, "CRLF and LF read the same");
+  const big = FSY.lineDiff("x\n".repeat(50), "y\n".repeat(50), 10);
+  assert.equal(big.length, 100, "too big for the table: one replaced block");
+});
+check("ide editor: a reload changes only the middle that differs", () => {
+  assert.equal(ED.minimalChange("abc", "abc"), null);
+  assert.deepEqual(ED.minimalChange("CLOCK: 10\nX\n", "CLOCK: 25\nX\n"), { from: 7, to: 9, insert: "25" });
+  assert.deepEqual(ED.minimalChange("a\nb", "a\r\nb\r\nc"), { from: 3, to: 3, insert: "\nc" });
+});
+check("add files: where each file goes, and what the same-name dialog says", () => {
+  assert.equal(ADF.targetRel("alu.v"), "src/alu.v");
+  assert.equal(ADF.targetRel("alu_tb.sv"), "verify/alu_tb.sv");
+  assert.equal(ADF.targetRel("defs.vh"), "src/defs.vh");
+  assert.equal(ADF.targetRel("pins.cfg"), "pins.cfg");
+  const one = ADF.existsText([{ rel: "src/top.v", suggested: "src/top_2.v" }]);
+  assert.match(one.title, /top\.v is already in the project/);
+  assert.match(one.body, /Replace overwrites it/);
+  assert.match(one.body, /as top_2\.v/);
+  assert.match(one.body, /modules of the same name clash/, "a Verilog copy in src/ warns about the glob");
+  const two = ADF.existsText([{ rel: "a.md", suggested: "a_2.md" }, { rel: "b.md", suggested: "b_2.md" }]);
+  assert.match(two.title, /^2 files are already/);
+  assert.doesNotMatch(two.body, /clash/);
+});
+check("add files: Setup and the IDE never write a project file without the exists check", () => {
+  const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+  const ide = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+  for (const [name, src] of [["setup.js", setup], ["ide/main.js", ide]]) {
+    assert.match(src, /addProjectFiles\(files/, name + " adds files through addfiles.js");
+    assert.doesNotMatch(src, /api\.fileWrite\(rel, await f\.text\(\)\)/, name + " has no blind write left");
+  }
+  // Every IDE write of a tab names the version it read, or forces after asking.
+  assert.doesNotMatch(ide, /api\.fileWrite\(t\.rel, t\.text\)/);
+  assert.match(ide, /base_hash: t\.hash/);
+});
+check("ide: lint and simulation ask for the config's files; the Run gate counts only built files", () => {
+  const ide = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+  assert.match(ide, /api\.lintStart\(\{[^}]*from_config: true/);
+  assert.match(ide, /from_config: true, extra_sources: helpers, testbenches: \[\.\.\.benches\]/);
+  assert.match(ide, /design_errors: real\.filter\(\(d\) => d\.severity === "error" && inFlow\(d\)\)/);
+  assert.match(ide, /timeout: limit/, "the simulation sends the Settings time limit");
+});
+check("settings: the simulation time limit is a preference", () => {
+  const p = PREFS_MOD.pref("simTimeLimit");
+  assert.ok(p && p.group === "Editor" && p.type === "choice");
+  assert.equal(p.def, "120");
+  assert.ok(p.options.some(([v]) => v === "600"));
+});
+check("guide: tied to its own project, names from the template, a free name", () => {
+  const tpl = { sources: ["src/blinky.v"], testbench: "verify/blinky_tb.v", top: "blinky" };
+  assert.equal(GS.isGuideProject("/home/u/LanEx-Projects/blinky-2", { name: "blinky-2" }, null, tpl), true);
+  assert.equal(GS.isGuideProject("/home/u/other", { name: "blinky-2" }, ["src/top.v"], tpl), false, "any other project doesn't count");
+  assert.equal(GS.isGuideProject("/home/u/myblink", null, ["config.json", "src/blinky.v", "verify/blinky_tb.v"], tpl), true,
+    "a folder with the template's files does");
+  assert.equal(GS.isGuideProject("", { name: "x" }, null, tpl), false);
+  assert.equal(GS.onGuideProject({ project: "/p/blinky" }, "/p/blinky/"), true);
+  assert.equal(GS.onGuideProject({ project: "/p/blinky" }, "/p/spm"), false, "a sim in another project doesn't move it on");
+  assert.equal(GS.onGuideProject({ project: "" }, "/p/spm"), true, "before the project is made, nothing to compare");
+  assert.equal(GS.freeName("blinky", []), "blinky");
+  assert.equal(GS.freeName("blinky", ["blinky", "Blinky-2", "spm"]), "blinky-3");
+  assert.deepEqual(GS.guideFiles({ sources: ["src/x.v"], testbench: "verify/x_tb.v", top: "x" }),
+    { source: "src/x.v", sourceName: "x.v", testbench: "verify/x_tb.v", top: "x", title: "Blinky" });
+  assert.equal(GS.guideFiles(null).testbench, "verify/blinky_tb.v");
+  assert.deepEqual(GS.normState({ active: true, beat: 1, expect: { name: "blinky-2" } }).expect, { name: "blinky-2" });
+  const g = readFileSync(resolve(MOD, "guide.js"), "utf8");
+  assert.doesNotMatch(g, /verify\/blinky_tb\.v|"src\/blinky\.v"|turned blinky\.v/, "no hard-coded Blinky file names left");
+});
+
 // ---------------------------------------------------------------- perf pass: shell, boot, Run
 const LD = await import(toUrl(resolve(MOD, "loading.js")));
 const PF = await import(toUrl(resolve(MOD, "preflight.js")));
