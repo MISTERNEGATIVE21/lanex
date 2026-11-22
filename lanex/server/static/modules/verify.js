@@ -970,7 +970,7 @@ async function rerun(stepId) {
       "<datalist id='vf-rr-vars'>" + names.map((n) => "<option value='" + esc(n) + "'>").join("") + "</datalist>";
   let root = null;
   const go = await customDialog({
-    title: esc("Re-run " + stepId + " of " + tag), bodyHtml: body,
+    title: "Re-run " + stepId + " of " + tag, bodyHtml: body,
     buttons: plan.blocked ? [{ label: "Close", value: null, cls: "btn-ghost" }]
       : [{ label: "Cancel", value: null, cls: "btn-ghost" }, { label: "Re-run in a new run", value: "go", cls: "btn-primary" }],
     onMount: (back) => {

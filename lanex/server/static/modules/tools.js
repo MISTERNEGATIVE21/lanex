@@ -240,7 +240,7 @@ function manualStepsDialog(key, r) {
     r.terms_url ? "<a class='btn btn-sm btn-ghost' href='" + esc(r.terms_url) + "' target='_blank' rel='noopener'>Read the terms ↗</a>" : "",
   ].join("");
   return customDialog({
-    title: esc("Install " + key + " yourself"),
+    title: "Install " + key + " yourself",
     bodyHtml: "<p>" + esc(r.guidance || r.reason || "") + "</p>" + cmds +
       (links ? "<div class='tl-fix-acts'>" + links + "</div>" : "") +
       (r.log_path ? "<p class='hint'>Install log: <code>" + esc(r.log_path) + "</code></p>" : ""),
@@ -1901,7 +1901,7 @@ async function installByKey(key) {
 // overlay stack, like every other one).
 function showInstallModal(key, recipe) {
   return customDialog({
-    title: esc("Install " + key),
+    title: "Install " + key,
     bodyHtml: "<p>LanEx can't install this tool on this system with one click. These are the steps for your platform:</p>" +
       "<pre class='code'>" + esc(recipe) + "</pre>",
     buttons: [{ label: "Close", value: "close", cls: "btn-ghost" }],
