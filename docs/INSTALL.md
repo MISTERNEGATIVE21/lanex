@@ -376,7 +376,7 @@ LibreLane image if Docker or Podman is already there.
 
 | Variable | Effect |
 |---|---|
-| `LANEX_REF=<branch, tag or SHA>` | install that version of LanEx (default `main`) |
+| `LANEX_REF=<branch, tag or SHA>` | install that version of LanEx (default: the release the installer belongs to; `LANEX_REF=main` for the newest unreleased code) |
 | `LANEX_REPO=<owner/name>` | install from a fork |
 | `LANEX_UNPINNED=1` | newest compatible Python packages instead of the tested pins (librelane and ciel stay exact) |
 | `LANEX_NO_UI=1` | plain output even in a terminal |

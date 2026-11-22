@@ -36,7 +36,8 @@ shopt -s extglob 2>/dev/null || true
 #                     GitHub tarball of main (works before the PyPI release and
 #                     cannot be name-squatted). After the PyPI release, pypi.
 #   LANEX_REF=<ref>   GitHub branch, tag, or commit SHA for the default source
-#                     (default: main)
+#                     (default: LANEX_RELEASE_REF below, the release this
+#                     installer belongs to)
 #   LANEX_REPO=<owner/name>  GitHub repository for LANEX_REF (default:
 #                     AkshatIsWired/lanex; useful for fork candidates)
 #   LANEX_PIP_CONSTRAINT=<path>  pip constraints file (versions only). Default:
@@ -67,8 +68,15 @@ shopt -s extglob 2>/dev/null || true
 #   NO_COLOR=1        interactive installer without colour
 set -u -o pipefail
 
+# The LanEx release this installer installs. scripts/stamp_release_ref.py
+# writes it when a release is cut (and the test suite refuses a tagged build
+# whose stamp is not its own tag), so the one-liner installs that release, not
+# whatever main holds that day. It reads "main" only on the development line
+# before the first stamped release. LANEX_REF still overrides it.
+LANEX_RELEASE_REF="main"
+
 REPO="${LANEX_REPO:-AkshatIsWired/lanex}"
-REF="${LANEX_REF:-main}"
+REF="${LANEX_REF:-$LANEX_RELEASE_REF}"
 # codeload's ref-aware endpoint resolves branches, tags, and full commit SHAs.
 # The old branch-qualified archive URL silently made tags and SHAs impossible.
 TARBALL="https://codeload.github.com/${REPO}/tar.gz/${REF}"
@@ -155,6 +163,10 @@ net_check() {
             5|6) die "DNS could not resolve the LanEx source host.
    ${detail}
    Preserve WSL's generated resolver/DNS tunneling; check VPN or company DNS, then re-run." ;;
+            22) die "GitHub has no LanEx version '${REF}' in ${REPO} (or refused it).
+   ${detail}
+   Check LANEX_REF / LANEX_REPO if you set them; otherwise re-run in a minute.
+   Releases: https://github.com/${REPO}/releases" ;;
             7) die "The source host resolved, but no connection route was available.
    ${detail}
    Check VPN, firewall and IPv4/IPv6 routing, then re-run." ;;
@@ -280,8 +292,18 @@ brew_stage() {
             fi
             case "$ans" in
                 n*|N*) note "Skipping Homebrew. If 'python3 --version' is >= 3.10 the install can still proceed." ;;
-                *)  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-                        || warn "Homebrew install failed — continuing; the venv fallback still works if python3 >= 3.10 exists."
+                *)  # Into a file first: run as an inline bash -c argument, a failed
+                    # download ran an empty script and "succeeded".
+                    local brew_sh
+                    brew_sh="$(mktemp 2>/dev/null || mktemp -t lanex-brew)" || brew_sh=""
+                    if [ -n "$brew_sh" ] && fetch_url "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" "$brew_sh" \
+                            && [ -s "$brew_sh" ]; then
+                        /bin/bash "$brew_sh" \
+                            || warn "Homebrew install failed — continuing; the venv fallback still works if python3 >= 3.10 exists."
+                    else
+                        warn "Could not download the Homebrew installer (check the connection) — continuing; the venv fallback still works if python3 >= 3.10 exists."
+                    fi
+                    [ -n "$brew_sh" ] && rm -f "$brew_sh"
                     [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
                     [ -x /usr/local/bin/brew ]    && eval "$(/usr/local/bin/brew shellenv)"
                     ;;
@@ -544,7 +566,20 @@ expose_on_path() {
     # Fresh Apple-Silicon macOS can lack /usr/local/bin entirely; creating it
     # is safe (it's on every default PATH once it exists).
     $SUDO mkdir -p /usr/local/bin 2>/dev/null || true
-    if $SUDO ln -sf "$LAUNCHER" /usr/local/bin/lanex 2>/dev/null; then
+    local link=/usr/local/bin/lanex
+    # Never replace a /usr/local/bin/lanex this installer did not make: it can
+    # be another user's install, a developer checkout's launcher or something
+    # else called lanex. Point the user at ours instead.
+    if { [ -e "$link" ] || [ -L "$link" ]; } && ! lanex_link_is_ours "$link"; then
+        warn "$link already exists and is not this installer's link, so it was left alone."
+        note "It is: $(readlink "$link" 2>/dev/null || echo 'a file, not a link')"
+        note "Start this LanEx with:  $LAUNCHER"
+        note "New terminals find this LanEx first (PATH line added). To use the plain"
+        note "'lanex' command here too, remove or rename $link, then re-run this installer."
+        add_path_line "$(dirname "$LAUNCHER")"
+        return 0
+    fi
+    if $SUDO ln -sfn "$LAUNCHER" "$link" 2>/dev/null; then
         hash -r 2>/dev/null || true
         note "'lanex' is ready in this terminal now."
         return 0
@@ -552,16 +587,41 @@ expose_on_path() {
     warn "Could not write /usr/local/bin (no sudo?). Two other ways:"
     note "open a NEW terminal and run:  lanex        (PATH set up for future shells)"
     note "or launch right now with:     $LAUNCHER"
-    # Make future shells work even without the symlink. This script always runs
-    # under bash (curl | bash), so pick the rc file by the user's LOGIN shell —
-    # $ZSH_VERSION would never be set here even for zsh users (macOS default).
+    # Make future shells work even without the symlink.
     case ":${PATH}:" in *":$(dirname "$LAUNCHER"):"*) : ;; *)
-        local rc="$HOME/.bashrc"
-        case "${SHELL:-}" in */zsh) rc="$HOME/.zshrc" ;; esac
-        # $PATH is intentionally literal so the user's shell expands it later.
-        # shellcheck disable=SC2016
-        printf '\nexport PATH="%s:$PATH"\n' "$(dirname "$LAUNCHER")" >> "$rc" 2>/dev/null || true
+        add_path_line "$(dirname "$LAUNCHER")"
     esac
+}
+
+lanex_link_is_ours() {  # path -> 0 when it is a link a LanEx install of THIS user made
+    local t
+    [ -L "$1" ] || return 1
+    t="$(readlink "$1" 2>/dev/null)" || return 1
+    [ -n "$LAUNCHER" ] && [ "$t" = "$LAUNCHER" ] && return 0
+    # Earlier runs of this installer: the pipx bin link, pipx's venv (both
+    # layouts) or the ~/.lanex/venv fallback, all in this user's home.
+    case "$t" in
+        "$HOME/.local/bin/lanex"|"$HOME/.local/share/pipx/venvs/lanex/bin/lanex"|\
+        "$HOME/.local/pipx/venvs/lanex/bin/lanex"|"$HOME/.lanex/venv/bin/lanex") return 0 ;;
+    esac
+    return 1
+}
+
+add_path_line() {  # dir -> one PATH line in the login shell's rc file, never two
+    # This script always runs under bash (curl | bash), so pick the rc file by
+    # the user's LOGIN shell: $ZSH_VERSION would never be set here even for
+    # zsh users (macOS default).
+    local rc="$HOME/.bashrc" line
+    case "${SHELL:-}" in */zsh) rc="$HOME/.zshrc" ;; esac
+    # $PATH is intentionally literal so the user's shell expands it later.
+    # shellcheck disable=SC2016
+    line="export PATH=\"$1:\$PATH\""
+    # A re-run (same terminal, or the symlink failing again) must not add a
+    # second copy; earlier versions wrote the same line without the comment.
+    if [ -f "$rc" ] && grep -qxF "$line" "$rc" 2>/dev/null; then
+        return 0
+    fi
+    printf '\n# Added by the LanEx installer\n%s\n' "$line" >> "$rc" 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------ verify --
@@ -2754,6 +2814,33 @@ ui_run() {
 }
 
 # -------------------------------------------------------------------- main --
+# The one-liner fetches this script from main, which carries the stamp of the
+# latest release but may be newer than it. A piped run hands over to the
+# release's own install.sh, so the installer and the LanEx it installs come
+# from the same commit. Skipped when the user chose a ref or a source, when
+# this is already the hand-over, when nothing is stamped yet, and when the
+# script runs from a file (a checkout, Windows Setup): that file is the
+# installer the user meant.
+run_release_installer() {
+    [ -z "${LANEX_REF:-}" ] && [ -z "${LANEX_FROM:-}" ] || return 0
+    [ "${LANEX_BOOTSTRAPPED:-0}" != "1" ] || return 0
+    [ "$LANEX_RELEASE_REF" != "main" ] || return 0
+    if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" = "$0" ] && [ -f "$0" ]; then
+        return 0
+    fi
+    local url="https://raw.githubusercontent.com/${REPO}/${LANEX_RELEASE_REF}/scripts/install.sh" tmp rc
+    tmp="$(mktemp 2>/dev/null || mktemp -t lanex-install)" || return 0
+    # Only a complete download runs: the last line of a whole install.sh is main "$@".
+    if fetch_url "$url" "$tmp" && [ -s "$tmp" ] && tail -n 1 "$tmp" | grep -q '^main "\$@"'; then
+        LANEX_BOOTSTRAPPED=1 LANEX_REF="$LANEX_RELEASE_REF" bash "$tmp" "$@"
+        rc=$?
+        rm -f "$tmp"
+        exit "$rc"
+    fi
+    rm -f "$tmp"
+    warn "Could not fetch the installer of LanEx ${LANEX_RELEASE_REF}; this copy installs that release instead."
+}
+
 usage() {
     cat << 'EOFUSAGE'
 LanEx installer
@@ -2778,6 +2865,7 @@ main() {
         resolve_source
         return 0
     fi
+    run_release_installer "$@"
     local profile="${LANEX_PROFILE:-}" choices="${LANEX_CHOICES:-}"
     while [ $# -gt 0 ]; do
         case "$1" in
