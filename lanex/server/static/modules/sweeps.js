@@ -455,7 +455,7 @@ async function start() {
     const base = collectRunPayload();
     const axes = S.axes.map((a) => ({ var: a.var, values: parseValuesStrict(a.values, kindOf(a.var), choicesOf(a.var)).values }));
     const r = await api.dseStart({
-      axes, mode: S.axes.length > 1 ? S.mode : "grid", run_mode: state.runMode, flow_name: base.flow || state.flowName || "Classic",
+      axes, mode: S.axes.length > 1 ? S.mode : "grid", run_mode: state.runMode, flow_name: base.flow || null,
       base_overrides: base.overrides, sources: base.sources, extras: base.extras,
       stop_when_good: S.goal !== "clock" && S.stop, goal: S.goal,
     });

@@ -3623,7 +3623,7 @@ def _sweep_point_meta(design_dir: str, config_file: Path, flow_name: str, run_mo
 def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                           run_mode: str, base_overrides: Dict[str, Any],
                           dse_body: Optional[Dict[str, Any]] = None,
-                          sweep_id: Optional[str] = None):
+                          sweep_id: Optional[str] = None, flowsel: Optional[Dict[str, Any]] = None):
     """Return a ``start_one(tag, overrides)`` closure for the DSE queue that
     starts a run through the shared runner and blocks until it finishes.
 
@@ -3667,7 +3667,7 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
         gui_meta = _sweep_point_meta(design_dir, config_file, flow_name, run_mode, tag, pdk, scl,
                                      pdk_root, asm, sweep_id, overrides)
         res = r.start(
-            flow_factory=_flow_factory(flow_name),
+            flow_factory=(flowsel or {}).get("cls") or _flow_factory(flow_name),
             config_files=[str(config_file)],
             design_dir=design_dir,
             pdk=pdk, scl=scl, pdk_root=pdk_root,
@@ -3676,7 +3676,7 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
             extra_sources=asm["extra_sources"],
             extra_extras=asm["extra_extras"],
             extra_config_files=asm["extra_config_files"],
-            run_mode=run_mode, flow_name=flow_name,
+            run_mode=run_mode, flow_name=(flowsel or {}).get("cli") if flowsel else flow_name,
             gui_meta=gui_meta,
         )
         if not res.get("ok"):
@@ -3776,7 +3776,15 @@ def h_dse_start(handler: Any) -> None:
         _respond(handler, mismatch["message"], 409)
         return
     run_mode = "container" if body.get("run_mode") == "container" else "local"
-    flow_name = body.get("flow_name") or "Classic"
+    # The flow every point runs: the config's meta.flow (with its substituted
+    # steps), else Classic; a flow the request names wins; an unknown name is
+    # refused, as for a plain Run (audit G12).
+    from ..controller import configcheck
+    flowsel = configcheck.resolve_flow([str(config_file)], body.get("flow_name") or None)
+    if flowsel["error"]:
+        _respond(handler, flowsel["error"], 400)
+        return
+    flow_name = flowsel["name"]
     base_tag = body.get("base_tag") or Path(design_dir).name
     # Don't clobber a prior sweep: bump the base until the target run dirs are
     # free (unless the caller explicitly opts into replacing them).
@@ -3785,7 +3793,7 @@ def h_dse_start(handler: Any) -> None:
     tags = dse.sweep_run_tags(design_dir, overrides_list, taken=(prior or {}).get("tags") or ())
     sweep_id = prior.get("id") if prior else dse.new_sweep_id(design_dir)
     start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body,
-                                      sweep_id=sweep_id)
+                                      sweep_id=sweep_id, flowsel=flowsel)
     if dse.job.active:
         _respond(handler, "a sweep is already running", 400)
         return
@@ -5233,7 +5241,7 @@ _POST_ROUTES = {
     "/api/project/new", "/api/project/design-info", "/api/project/new-file",
     "/api/config/set", "/api/config/sources", "/api/project/forget", "/api/project/delete",
     "/api/fs/native-pick", "/api/verify/rerun", "/api/compare", "/api/fix/plan",
-    "/api/fix/apply", "/api/config/undo", "/api/dse/start", "/api/dse/cancel",
+    "/api/fix/apply", "/api/config/undo", "/api/dse/start", "/api/dse/cancel", "/api/dse/plan",
     "/api/file/write", "/api/file/delete", "/api/file/rename", "/api/lint",
     "/api/sim/start", "/api/sim/cancel", "/api/ide/open-wave", "/api/celllib/view",
     "/api/celllib/view/close", "/api/macros/add", "/api/macros/settings",
