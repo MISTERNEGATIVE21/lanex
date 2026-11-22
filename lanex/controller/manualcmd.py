@@ -529,12 +529,66 @@ def _threads_record(res: Any) -> Optional[Dict[str, Any]]:
             "source": _comment(res.get("source") or "")} if vals else None
 
 
+_HOME_RX = re.compile(r"^(/home/[^/]+|/Users/[^/]+|/root)(?=/|$)")
+
+
+def _home_relative(path: str) -> str:
+    """*path* as shell words for an unquoted ``${VAR:-…}`` default, with the
+    recording user's home folder as ``$HOME`` (so it fits whoever runs the
+    script). Control characters become ``?`` (see :func:`_comment`)."""
+    path = _comment(path)
+    m = _HOME_RX.match(path)
+    if not m:
+        return shlex.quote(path)
+    rest = path[m.end():]
+    return '"$HOME"' + (shlex.quote(rest) if rest else "")
+
+
+def _portable_argv(line: str, cwd: Optional[str], thread_keys: Sequence[str]) -> Dict[str, Any]:
+    """A recorded command split into what travels and what was this PC's:
+    ``{argv, pdk_root, threads}``. ``--pdk-root`` comes out (LibreLane reads
+    ``PDK_ROOT`` instead), the thread counts LanEx sized come out (the script
+    adds them back, capped to the machine it runs on), and paths inside the
+    project folder become relative to it."""
+    argv = shlex.split(line, posix=True)
+    out: List[str] = []
+    pdk_root: Optional[str] = None
+    threads: List[tuple] = []
+    base = (cwd or "").rstrip("/")
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--pdk-root" and i + 1 < len(argv):
+            pdk_root = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith("--pdk-root="):
+            pdk_root = a.split("=", 1)[1]
+            i += 1
+            continue
+        if a == "-c" and i + 1 < len(argv):
+            k, _, v = argv[i + 1].partition("=")
+            if k in thread_keys and v.isdigit():
+                threads.append((k, int(v)))
+                i += 2
+                continue
+        if base and a.startswith(base + "/"):
+            a = a[len(base) + 1:]
+        out.append(a)
+        i += 1
+    return {"argv": out, "pdk_root": pdk_root, "threads": threads}
+
+
 def reproduce_script(info: Dict[str, Any]) -> str:
     """A bash script that reruns *info*'s command headless, outside LanEx.
 
     The image is pinned the way LanEx's runner pins it (``LIBRELANE_IMAGE_OVERRIDE``
     with the digest); the PDK version and config hash are written as checks the
-    reader can see, not silently assumed."""
+    reader can see, not silently assumed. What belonged to the PC the run was
+    made on travels as a default the reader can change: the project folder
+    (``PROJECT_DIR``), the PDK store (``PDK_ROOT``, home-relative) and the
+    thread counts (capped to this machine's cores, ``THREADS=auto`` drops
+    them). The config check works with ``sha256sum`` or macOS's ``shasum``."""
     q, c = shlex.quote, _comment
     out = ["#!/usr/bin/env bash",
            f"# Reproduce LanEx run {c(info.get('tag') or '?')} without LanEx.",
@@ -552,17 +606,45 @@ def reproduce_script(info: Dict[str, Any]) -> str:
             out.append(f"#   to get exactly this PDK: ciel enable --pdk-family {fam} {c(pv)}")
     if info.get("resolved_config"):
         out.append(f"# Every setting the run used: {c(info['resolved_config'])}")
-    if info.get("cwd"):
-        out.append(f"cd {q(info['cwd'])}")
+    cwd = info.get("cwd") or None
+    if cwd:
+        out.append("# Run from the project folder (set PROJECT_DIR if it lives somewhere else here).")
+        out.append(f"PROJECT_DIR=${{PROJECT_DIR:-{q(c(cwd))}}}")
+        out.append('cd "$PROJECT_DIR"')
     if info.get("config_hash") and info.get("config_file"):
+        cfg = c(info["config_file"])
+        if cwd and cfg.startswith(c(cwd).rstrip("/") + "/"):
+            cfg = cfg[len(c(cwd).rstrip("/")) + 1:]
         out.append(f"# The config the run read had sha256 {c(info['config_hash'])}:")
-        out.append(f"echo {q(info['config_hash'] + '  ' + info['config_file'])} | sha256sum -c - "
-                   "|| echo 'Note: the config changed since this run.' >&2")
+        out.append(f"sum=$( (sha256sum {q(cfg)} 2>/dev/null || shasum -a 256 {q(cfg)} 2>/dev/null) | cut -d' ' -f1 ) || true")
+        out.append(f'[ "$sum" = {q(info["config_hash"])} ] '
+                   f"|| echo {q('Note: ' + cfg + ' changed since this run (or is missing).')} >&2")
     if info.get("image"):
         out.append(f"export LIBRELANE_IMAGE_OVERRIDE={q(info['image'])}")
     line = _safe_librelane_line(info.get("command"))
     if line:
-        out.append(line)
+        rec = info.get("threads") or {}
+        keys = [k for k in (rec.get("values") or {}) if re.fullmatch(r"[A-Z0-9_]+", k)]
+        p = _portable_argv(line, cwd, keys)
+        if p["pdk_root"]:
+            out.append(f"# The run used the PDK store {c(p['pdk_root'])}; LibreLane reads PDK_ROOT.")
+            out.append(f"export PDK_ROOT=${{PDK_ROOT:-{_home_relative(p['pdk_root'])}}}")
+        tail = ""
+        if p["threads"]:
+            out.append("# Thread counts LanEx sized to the PC the run started on"
+                       + (f" ({rec.get('reason')})" if rec.get("reason") else "") + ".")
+            out.append("# They are capped to this machine's cores; THREADS=auto lets LibreLane choose.")
+            out.append("cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)")
+            out.append("threads=()")
+            out.append('if [ "${THREADS:-recorded}" != auto ]; then')
+            out.append("  for kv in " + " ".join(f"{k}={v}" for k, v in p["threads"]) + "; do")
+            out.append('    v=${kv#*=}; if [ "$v" -gt "$cores" ]; then v=$cores; fi')
+            out.append('    threads+=(-c "${kv%%=*}=$v")')
+            out.append("  done")
+            out.append("fi")
+            # bash 3.2 (macOS) treats an empty "${a[@]}" as unset under set -u.
+            tail = ' ${threads[@]+"${threads[@]}"}'
+        out.append(" ".join(q(a) for a in p["argv"]) + tail)
     elif info.get("command"):
         out.append("# The recorded command is not a librelane command, so it is left out.")
     else:
