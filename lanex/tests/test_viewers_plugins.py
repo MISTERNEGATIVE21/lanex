@@ -31,9 +31,10 @@ END sky130_fd_sc_hd__inv_1
 
 
 def test_classify_cell():
-    assert cells.classify_cell("sky130_fd_sc_hd__dfxtp_1") == "sequential"
+    # The Cells tab's categories (one taxonomy; test_cells_tab has every PDK).
+    assert cells.classify_cell("sky130_fd_sc_hd__dfxtp_1") == "flipflop"
     assert cells.classify_cell("sky130_fd_sc_hd__inv_2") == "inverter"
-    assert cells.classify_cell("sky130_fd_sc_hd__nand2_1") == "combinational"
+    assert cells.classify_cell("sky130_fd_sc_hd__nand2_1") == "logic"
     assert cells.classify_cell("sky130_fd_sc_hd__decap_3") == "physical"
 
 

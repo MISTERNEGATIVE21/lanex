@@ -508,6 +508,8 @@ class _Session:
         self.notes: List[str] = []
         # A cell session has no run folder to find its PDK from later (3D).
         self.cfg: Optional[Dict[str, Any]] = cfg if top else None
+        # The run's PDK and library: the census uses the Cells tab's taxonomy.
+        self.lib = ((cfg or {}).get("PDK"), (cfg or {}).get("STD_CELL_LIBRARY")) if isinstance(cfg, dict) else (None, None)
         tech = _tech_files(cfg)
         v = klay.LayoutView()
         if kind == "def":
@@ -661,16 +663,18 @@ class _Session:
         for inst in self.top.each_inst():
             n = inst.size() if inst.is_regular_array() else 1
             counts[inst.cell_index] = counts.get(inst.cell_index, 0) + n
+        names = [self.layout.cell(ci).name for ci in counts]
         try:
-            from .cells import classify_cell
+            from .cells import census
+            kinds = census(names, *getattr(self, "lib", (None, None)))
         except Exception:  # pragma: no cover - cells module always ships
-            def classify_cell(_n: str) -> str:
-                return "other"
+            kinds = {}
         out = []
         for ci, n in counts.items():
             c = self.layout.cell(ci)
             bb = c.dbbox()
-            out.append({"name": c.name, "count": n, "kind": classify_cell(c.name),
+            k = kinds.get(c.name) or {"kind": "other", "label": "Other", "desc": ""}
+            out.append({"name": c.name, "count": n, "kind": k["kind"], "kind_label": k["label"], "desc": k["desc"],
                         "w": round(bb.width(), 4), "h": round(bb.height(), 4),
                         "area": round(bb.width() * bb.height() * n, 3),
                         "children": c.child_cells()})

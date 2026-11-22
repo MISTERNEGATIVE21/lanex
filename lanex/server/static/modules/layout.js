@@ -26,19 +26,30 @@ import { LayoutCanvas, fmtUm, niceLength } from "./layoutcanvas.js";
 import { Layout3D, fmtHeight, fmtSpread } from "./layout3d.js";
 import { setRunFilesTag } from "./runfiles.js";
 import { toolRoutes, launchTool } from "./layouttools.js";
+import { CATEGORY_ORDER, CATEGORY_TIPS } from "./cells-model.js";
 
 const BG = { dark: "#06080d", light: "#ffffff" };
+// The census uses the Cells tab's categories (one taxonomy: the server's
+// cells.census, from the Liberty file): its keys, its order, its tips; the
+// label comes with each row (kind_label). Only the colours are Layout's own.
 const KINDS = {
-  sequential: { label: "Flip-flops and latches", hint: "store your design's state, one bit each", color: "#4da3ff" },
-  combinational: { label: "Logic gates", hint: "AND, OR, XOR and friends: the logic itself", color: "#e879c9" },
-  inverter: { label: "Inverters", hint: "flip a signal; also strengthen it", color: "#d6446f" },
-  buffer: { label: "Buffers and delays", hint: "drive long wires and the clock tree, or fix hold timing", color: "#f2c14e" },
-  mux: { label: "Multiplexers", hint: "pick one of several inputs", color: "#38d6c8" },
-  arithmetic: { label: "Adders", hint: "full and half adders", color: "#ff7a45" },
-  physical: { label: "Fill, taps and decaps", hint: "no logic: they fill gaps, tie the wells to power and steady the supply", color: "#6d7d94" },
-  other: { label: "Other cells and macros", hint: "", color: "#8ea6c4" },
+  logic: { label: "Logic gates", color: "#e879c9" },
+  inverter: { label: "Inverters", color: "#d6446f" },
+  buffer: { label: "Buffers", color: "#f2c14e" },
+  flipflop: { label: "Flip-flops", color: "#4da3ff" },
+  latch: { label: "Latches", color: "#7cc4ff" },
+  mux: { label: "Multiplexers", color: "#38d6c8" },
+  arith: { label: "Adders", color: "#ff7a45" },
+  clock: { label: "Clock", color: "#a78bfa" },
+  delay: { label: "Delay", color: "#d9a441" },
+  tristate: { label: "Tri-state", color: "#c084fc" },
+  tie: { label: "Tie cells", color: "#9fbf6a" },
+  power: { label: "Power / isolation", color: "#5fbf8f" },
+  physical: { label: "Physical only", color: "#6d7d94" },
+  other: { label: "Other", color: "#8ea6c4" },
 };
-const KIND_ORDER = ["sequential", "combinational", "inverter", "buffer", "mux", "arithmetic", "other", "physical"];
+const KIND_ORDER = CATEGORY_ORDER.filter((k) => KINDS[k]);
+const kindOf = (c) => (KINDS[c.kind] ? c.kind : "other");
 
 const S = {
   wired: false,
@@ -769,10 +780,15 @@ function applyPreset(p) {
 }
 
 // ------------------------------------------------------------------ cells pane
-function shortCell(n) { const i = n.indexOf("__"); return i >= 0 ? n.slice(i + 2) : n; }
-function libOf(n) { const i = n.indexOf("__"); return i >= 0 ? n.slice(0, i) : ""; }
+// IHP's cells have one underscore after the library (sg13g2_inv_1), the
+// others two (sky130_fd_sc_hd__inv_1).
+function shortCell(n) { const i = n.indexOf("__"); return i >= 0 ? n.slice(i + 2) : n.replace(/^sg13g2_/, ""); }
+function libOf(n) { const i = n.indexOf("__"); return i >= 0 ? n.slice(0, i) : /^sg13g2_/.test(n) ? "sg13g2" : ""; }
 
-// Plain words for a standard-cell name (sky130/gf180/ihp share most stems).
+// Plain words for a standard-cell name (sky130/gf180/ihp share most stems;
+// the IHP and gf180 ones follow their own Verilog's "// type:" lines and the
+// Liberty functions: dlhq is a latch open while the enable is high, lgcp a
+// clock gate, sighold a bus keeper).
 export function describeCell(name) {
   const s = shortCell(name).toLowerCase();
   const m = s.match(/^(.*?)(?:_(\d+))?$/);
@@ -780,8 +796,14 @@ export function describeCell(name) {
   const D = [
     [/^dfrtp/, "D flip-flop with reset"], [/^dfrtn/, "D flip-flop (falling edge) with reset"], [/^dfstp/, "D flip-flop with set"],
     [/^dfbbp|^dfbbn/, "D flip-flop with set and reset"], [/^dfxtp|^dfxbp/, "D flip-flop"], [/^edf/, "D flip-flop with enable"],
-    [/^sdf|^sedf/, "scan flip-flop (testable)"], [/^df/, "D flip-flop"], [/^dlx|^dlr|^dlatch|^dlclkp|^sdlclkp/, /clkp/.test(base) ? "clock gate" : "latch"],
-    [/^clkinv/, "clock inverter"], [/^inv/, "inverter"], [/^clkbuf/, "clock buffer"], [/^clkdlybuf|^dlygate|^dlymetal|^clkdly/, "delay cell (fixes hold timing)"],
+    [/^dfrbp/, "D flip-flop with reset"], [/^dffr|^dffnr/, "D flip-flop with reset"], [/^dffs|^dffns/, "D flip-flop with set"],
+    [/^sdf|^sedf/, "scan flip-flop (testable)"], [/^df/, "D flip-flop"],
+    [/^s?dlclkp|^s?lgcp|^icgt/, "clock gate"], [/^dlh/, "latch, open while the enable is high"], [/^dll/, "latch, open while the enable is low"],
+    [/^dlx|^dlr|^dlatch|^lat/, "latch"],
+    [/^ebuf|^bufz/, "tri-state buffer"], [/^einv|^invz/, "tri-state inverter"],
+    [/^clkinv/, "clock inverter"], [/^inv/, "inverter"], [/^clkbuf/, "clock buffer"], [/^clkdlybuf|^dlygate|^dlymetal|^clkdly|^dly/, "delay cell (fixes hold timing)"],
+    [/^tiehi|^tieh$/, "constant 1"], [/^tielo|^tiel$/, "constant 0"], [/^sighold|^hold$/, "bus keeper: holds the last value"],
+    [/^addf/, "full adder"], [/^addh/, "half adder"], [/^antenna/, "antenna diode: protects gates during manufacturing"],
     [/^buf/, "buffer"], [/^xnor(\d)/, "$1-input XNOR"], [/^xor(\d)/, "$1-input XOR"], [/^nand(\d)/, "$1-input NAND"], [/^nor(\d)/, "$1-input NOR"],
     [/^and(\d)/, "$1-input AND"], [/^or(\d)/, "$1-input OR"], [/^a(\d+)oi/, "AND-OR-invert ($1)"], [/^o(\d+)ai/, "OR-AND-invert ($1)"],
     [/^a(\d+)o/, "AND-OR ($1)"], [/^o(\d+)a/, "OR-AND ($1)"], [/^mux(\d)/, "$1-to-1 multiplexer"], [/^fah|^fa/, "full adder"], [/^ha/, "half adder"],
@@ -803,11 +825,13 @@ function renderCells(filter) {
   const q = (filter ?? host.querySelector("#lx-cell-q")?.value ?? "").trim().toLowerCase();
   const total = cells.reduce((a, c) => a + c.count, 0);
   const byKind = {};
-  for (const c of cells) (byKind[c.kind] = byKind[c.kind] || []).push(c);
+  for (const c of cells) (byKind[kindOf(c)] = byKind[kindOf(c)] || []).push(c);
+  const label = (k) => (byKind[k] && byKind[k][0].kind_label) || KINDS[k].label;
+  const words = (c) => describeCell(c.name) || c.desc || "";
   const logic = total - (byKind.physical || []).reduce((a, c) => a + c.count, 0);
   const bar = KIND_ORDER.filter((k) => byKind[k]).map((k) => {
     const n = byKind[k].reduce((a, c) => a + c.count, 0);
-    return "<i style='flex:" + n + ";background:" + KINDS[k].color + "' title='" + esc(KINDS[k].label + ": " + n) + "'></i>";
+    return "<i style='flex:" + n + ";background:" + KINDS[k].color + "' title='" + esc(label(k) + ": " + n) + "'></i>";
   }).join("");
   const keepQ = host.querySelector("#lx-cell-q")?.value || "";
   host.innerHTML =
@@ -817,15 +841,16 @@ function renderCells(filter) {
     "<div class='lx-find'><input type='search' id='lx-cell-q' placeholder='Filter cells' value='" + esc(keepQ) + "' aria-label='Filter cells' spellcheck='false'/></div>" +
     (S.hl ? "<div class='lx-hl'><span>Highlighting <b>" + S.hl.total + "</b> × " + esc(shortCell(S.hl.cell)) + "</span><button class='btn btn-ghost btn-sm' data-hl-clear>Clear</button></div>" : "") +
     KIND_ORDER.filter((k) => byKind[k]).map((k) => {
-      const list = byKind[k].filter((c) => !q || c.name.toLowerCase().includes(q) || describeCell(c.name).toLowerCase().includes(q));
+      const list = byKind[k].filter((c) => !q || c.name.toLowerCase().includes(q) || words(c).toLowerCase().includes(q));
       if (!list.length) return "";
       const n = list.reduce((a, c) => a + c.count, 0);
+      const hint = k === "other" ? "Cells this library doesn't sort, and macros." : CATEGORY_TIPS[k] || "";
       return "<details class='lx-kind'" + (q || k !== "physical" ? " open" : "") + "><summary><i style='background:" + KINDS[k].color + "'></i>" +
-        "<b>" + esc(KINDS[k].label) + "</b><span class='lx-n'>" + n.toLocaleString() + "</span></summary>" +
-        (KINDS[k].hint ? "<p class='lx-kind-hint'>" + esc(KINDS[k].hint) + "</p>" : "") +
+        "<b>" + esc(label(k)) + "</b><span class='lx-n'>" + n.toLocaleString() + "</span></summary>" +
+        (hint ? "<p class='lx-kind-hint'>" + esc(hint) + "</p>" : "") +
         list.map((c) => "<button class='lx-cell" + (S.hl && S.hl.cell === c.name ? " is-on" : "") + "' data-cell='" + esc(c.name) + "' title='" +
-          esc(c.name + (describeCell(c.name) ? " — " + describeCell(c.name) : "") + ". " + c.w + " × " + c.h + " µm. Click to highlight every one.") + "'>" +
-          "<span class='lx-cell-n'>" + esc(shortCell(c.name)) + "</span><span class='lx-cell-d'>" + esc(describeCell(c.name)) + "</span>" +
+          esc(c.name + (words(c) ? " — " + words(c) : "") + ". " + c.w + " × " + c.h + " µm. Click to highlight every one.") + "'>" +
+          "<span class='lx-cell-n'>" + esc(shortCell(c.name)) + "</span><span class='lx-cell-d'>" + esc(words(c)) + "</span>" +
           "<span class='lx-n'>" + c.count + "</span></button>").join("") +
         "</details>";
     }).join("");

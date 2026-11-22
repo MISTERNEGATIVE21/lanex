@@ -324,3 +324,51 @@ def test_cell_sessions_have_their_own_cap(tmp_path, monkeypatch):
     layoutview._evict()
     # the oldest cell session goes; runs are untouched by cell browsing
     assert list(sessions) == ["/r1::final", "/r2::final", "cell::b", "cell::c"]
+
+
+# --- One taxonomy: the census in Layout and the Cells tab ---------------------
+# Real cell names with the category the Cells tab gave them from each PDK's
+# own Liberty file (installed sky130A, gf180mcuD and ihp-sg13g2, 2026-11-22).
+# The audit found the old census put the AOI/OAI shapes, clock inverters,
+# latches, adders and tie cells under "Other".
+REAL = {
+    "sky130_fd_sc_hd__a2111oi_0": "logic", "sky130_fd_sc_hd__o21ai_1": "logic", "sky130_fd_sc_hd__a21oi_1": "logic",
+    "sky130_fd_sc_hd__clkinv_1": "clock", "sky130_fd_sc_hd__clkbuf_1": "clock", "sky130_fd_sc_hd__dlclkp_1": "clock",
+    "sky130_fd_sc_hd__dlrtn_1": "latch", "sky130_fd_sc_hd__dlxtp_1": "latch", "sky130_fd_sc_hd__dfrbp_1": "flipflop",
+    "sky130_fd_sc_hd__fa_1": "arith", "sky130_fd_sc_hd__maj3_1": "arith", "sky130_fd_sc_hd__conb_1": "tie",
+    "sky130_fd_sc_hd__macro_sparecell": "tie", "sky130_fd_sc_hd__ebufn_1": "tristate", "sky130_fd_sc_hd__einvn_0": "tristate",
+    "sky130_fd_sc_hd__clkdlybuf4s15_1": "delay", "sky130_fd_sc_hd__dlygate4sd3_1": "delay", "sky130_fd_sc_hd__bufinv_8": "inverter",
+    "sky130_fd_sc_hd__lpflow_clkinvkapwr_1": "power", "sky130_fd_sc_hd__lpflow_inputiso0n_1": "power",
+    "sky130_fd_sc_hd__lpflow_decapkapwr_3": "physical", "sky130_fd_sc_hd__lpflow_lsbuf_lh_isowell_tap_1": "physical",
+    "sky130_fd_sc_hd__lpflow_inputisolatch_1": "latch", "sky130_fd_sc_hd__probe_p_8": "buffer",
+    "sky130_ef_sc_hd__decap_12": "physical", "sky130_fd_sc_hd__tapvpwrvgnd_1": "physical",
+    "gf180mcu_fd_sc_mcu7t5v0__aoi211_1": "logic", "gf180mcu_fd_sc_mcu7t5v0__latq_1": "latch",
+    "gf180mcu_fd_sc_mcu7t5v0__latrnq_1": "latch", "gf180mcu_fd_sc_mcu7t5v0__addf_1": "arith",
+    "gf180mcu_fd_sc_mcu7t5v0__addh_1": "arith", "gf180mcu_fd_sc_mcu7t5v0__tieh": "tie", "gf180mcu_fd_sc_mcu7t5v0__tiel": "tie",
+    "gf180mcu_fd_sc_mcu7t5v0__clkinv_1": "clock", "gf180mcu_fd_sc_mcu7t5v0__dlya_1": "delay",
+    "gf180mcu_fd_sc_mcu7t5v0__bufz_1": "tristate", "gf180mcu_fd_sc_mcu7t5v0__invz_1": "tristate",
+    "gf180mcu_fd_sc_mcu7t5v0__dffrnq_1": "flipflop", "gf180mcu_fd_sc_mcu7t5v0__hold": "physical",
+    "gf180mcu_fd_sc_mcu7t5v0__icgtp_1": "clock",
+    "sg13g2_a21oi_1": "logic", "sg13g2_a221oi_1": "logic", "sg13g2_dlhq_1": "latch", "sg13g2_dllr_1": "latch",
+    "sg13g2_dfrbp_1": "flipflop", "sg13g2_sdfbbp_1": "flipflop", "sg13g2_lgcp_1": "clock", "sg13g2_slgcp_1": "clock",
+    "sg13g2_tiehi": "tie", "sg13g2_tielo": "tie", "sg13g2_ebufn_2": "tristate", "sg13g2_einvn_2": "tristate",
+    "sg13g2_dlygate4sd3_1": "delay", "sg13g2_sighold": "physical", "sg13g2_antennanp": "physical",
+    "sg13g2_decap_4": "physical", "sg13g2_mux2_1": "mux", "sg13g2_inv_1": "inverter", "sg13g2_buf_1": "buffer",
+}
+
+
+def test_census_names_match_the_cells_tabs_liberty_categories():
+    from lanex.controller import cells
+    wrong = {n: (k, cells.classify_cell(n)) for n, k in REAL.items() if cells.classify_cell(n) != k}
+    assert not wrong
+    assert set(REAL.values()) <= set(celllib.CATEGORY_LABELS)
+
+
+def test_census_takes_the_libraries_own_category_and_words(monkeypatch):
+    from lanex.controller import cells
+    monkeypatch.setattr(celllib, "library", lambda pdk, scl, design_dir=None: {"ok": True, "cells": [
+        {"cell": "x__a21oi_1", "category": "logic", "desc": "2-input AND into first input of 2-input NOR.", "has_lib": True}]})
+    got = cells.census(["x__a21oi_1", "my_sram_macro", "sky130_fd_sc_hd__conb_1"], "sky130A", "sky130_fd_sc_hd")
+    assert got["x__a21oi_1"] == {"kind": "logic", "label": "Logic gates", "desc": "2-input AND into first input of 2-input NOR."}
+    assert got["my_sram_macro"]["kind"] == "other"           # a macro, not in the library
+    assert got["sky130_fd_sc_hd__conb_1"]["kind"] == "tie"   # a standard cell by its name
