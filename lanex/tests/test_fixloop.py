@@ -502,11 +502,102 @@ def test_every_check_that_can_fail_lands_on_an_action(tmp_path, monkeypatch, cid
     assert p["plain"], cid
 
 
-def test_slow_corner_slew_suggests_a_lower_fanout_limit_first(tmp_path, monkeypatch):
+# The max slew section of OpenSTA's checks.rpt, as STAPostPNR wrote it on an
+# 8-bit ALU (sky130A, ss corner, LibreLane 3.0.4): fanout46/X and the ten pins
+# it drives, all at 0.939 ns, then two pins of another net.
+SLEW_RPT = """report_check_types -max_slew -max_cap -max_fanout -violators
+============================================================================
+======================= max_ss_100C_1v60 Corner ===================================
+
+max slew
+
+Pin                                        Limit        Slew       Slack
+------------------------------------------------------------------------
+_516_/A1                                0.750000    0.939435   -0.189435 (VIOLATED)
+_477_/A                                 0.750000    0.939433   -0.189433 (VIOLATED)
+_478_/A                                 0.750000    0.939432   -0.189432 (VIOLATED)
+_761_/A1                                0.750000    0.939422   -0.189422 (VIOLATED)
+_712_/A                                 0.750000    0.939421   -0.189421 (VIOLATED)
+_762_/B1                                0.750000    0.939417   -0.189417 (VIOLATED)
+_763_/A1                                0.750000    0.939416   -0.189416 (VIOLATED)
+_838_/A1                                0.750000    0.939402   -0.189403 (VIOLATED)
+_806_/A                                 0.750000    0.939402   -0.189402 (VIOLATED)
+_841_/A                                 0.750000    0.939401   -0.189401 (VIOLATED)
+fanout46/X                              0.750000    0.939401   -0.189401 (VIOLATED)
+_672_/A1                                0.750000    0.872270   -0.122270 (VIOLATED)
+_671_/A                                 0.750000    0.872270   -0.122270 (VIOLATED)
+
+"""
+
+
+def _slew_run(tmp_path, rpt):
+    d = tmp_path / "55-openroad-stapostpnr" / "max_ss_100C_1v60"
+    d.mkdir(parents=True)
+    (d / "checks.rpt").write_text(rpt)
+
+
+def test_slew_on_one_net_with_many_loads_lowers_the_fanout_limit_first(tmp_path, monkeypatch):
     # Seen on the counter template (sky130A): 11 slew violations in the ss
     # corners stayed at DESIGN_REPAIR_MAX_SLEW_PCT 30 and went to 0 at
     # MAX_FANOUT_CONSTRAINT 6.
     monkeypatch.setattr(problems, "_cfg", lambda run_dir: {"MAX_FANOUT_CONSTRAINT": 10, "DESIGN_REPAIR_MAX_SLEW_PCT": 20})
-    p = problems.check_problems(tmp_path, {"checks": [{"id": "slew", "name": "Max slew", "status": "warn", "value": 11}]}, set())[0]
+    _slew_run(tmp_path, SLEW_RPT)
+    p = problems.check_problems(tmp_path, {"checks": [{"id": "slew", "name": "Max slew", "status": "warn", "value": 13}]}, set())[0]
     sets = [(f["var"], f["to"]) for f in p["fixes"] if f["kind"] == "setting"]
     assert sets == [("MAX_FANOUT_CONSTRAINT", "6"), ("DESIGN_REPAIR_MAX_SLEW_PCT", "30")]
+    assert "11 of the 13 pins" in p["notes"][0] and "fanout46/X" in p["notes"][0]
+
+
+def test_slew_on_scattered_pins_leaves_the_fanout_limit_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {"MAX_FANOUT_CONSTRAINT": 10, "DESIGN_REPAIR_MAX_SLEW_PCT": 20})
+    rows = "\n".join("_%d_/A                                 0.750000    0.%d   -0.1 (VIOLATED)" % (i, 800000 + 7000 * i)
+                     for i in range(5))
+    _slew_run(tmp_path, "max slew\n\nPin   Limit  Slew  Slack\n-----\n" + rows + "\n\n")
+    p = problems.check_problems(tmp_path, {"checks": [{"id": "slew", "name": "Max slew", "status": "warn", "value": 5}]}, set())[0]
+    assert [(f["var"], f["to"]) for f in p["fixes"] if f["kind"] == "setting"] == [("DESIGN_REPAIR_MAX_SLEW_PCT", "30")]
+    assert "different nets" in p["notes"][0]
+
+
+def test_slew_without_a_report_does_not_guess_fanout_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {"MAX_FANOUT_CONSTRAINT": 10, "DESIGN_REPAIR_MAX_SLEW_PCT": 20})
+    p = problems.check_problems(tmp_path, {"checks": [{"id": "slew", "name": "Max slew", "status": "warn", "value": 11}]}, set())[0]
+    assert [f["var"] for f in p["fixes"] if f["kind"] == "setting"][0] == "DESIGN_REPAIR_MAX_SLEW_PCT"
+
+
+def _antenna_rep(nets):
+    return {"checks": [{"id": "antenna", "name": "Antenna", "status": "fail", "value": len(nets)}],
+            "details": {"antenna": {"rows": [{"net": n, "pin": "_1_/A", "layer": "met1", "ratio": "500"} for n in nets]}}}
+
+
+def test_antenna_diodes_on_ports_only_when_a_port_violates(tmp_path, monkeypatch):
+    src = tmp_path / "top.v"
+    src.write_text("module top(input clk, input [7:0] a, output y);\nendmodule\n")
+    cfg = {"DESIGN_NAME": "top", "VERILOG_FILES": [str(src)], "GRT_ANTENNA_REPAIR_ITERS": 3,
+           "GRT_ANTENNA_REPAIR_MARGIN": 10, "DIODE_ON_PORTS": "none"}
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: cfg)
+    p = problems.check_problems(tmp_path, _antenna_rep(["a[3]", "net12"]), set())[0]
+    s = {f["var"]: f for f in p["fixes"] if f["kind"] == "setting"}
+    assert s["DIODE_ON_PORTS"]["to"] == "in" and "a[3]" in s["DIODE_ON_PORTS"]["why"]
+    # Internal nets only: no port diodes, and the card says why.
+    p2 = problems.check_problems(tmp_path, _antenna_rep(["net12", "_05_"]), set())[0]
+    assert "DIODE_ON_PORTS" not in {f.get("var") for f in p2["fixes"]}
+    assert "None of the violating nets is a top-level port" in p2["notes"][0]
+
+
+def test_antenna_repair_turned_off_is_named_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {"GRT_REPAIR_ANTENNAS": False, "GRT_ANTENNA_REPAIR_ITERS": 3})
+    p = problems.check_problems(tmp_path, _antenna_rep(["net1"]), set())[0]
+    assert p["fixes"][0]["var"] == "GRT_REPAIR_ANTENNAS"
+
+
+def test_xor_outline_layers_come_from_each_pdks_layer_file(monkeypatch):
+    from lanex.controller import celllib
+    lyp = {"gf180mcuD": [{"layer": 0, "dt": 0, "name": "PR_bndry"}, {"layer": 34, "dt": 0, "name": "Metal1"}],
+           "ihp-sg13g2": [{"layer": 189, "dt": 0, "name": "prBoundary.drawing"}, {"layer": 189, "dt": 4, "name": "prBoundary.boundary"},
+                          {"layer": 8, "dt": 4, "name": "Metal1.boundary"}]}
+    monkeypatch.setattr(celllib, "_lyp", lambda pdk: lyp.get(pdk, []))
+    assert set(problems.boundary_layers("gf180mcuD")) == {"0/0"}
+    assert set(problems.boundary_layers("ihp-sg13g2")) == {"189/0", "189/4"}
+    # No layer file readable: sky130 keeps its known outline, any other PDK gets none.
+    assert set(problems.boundary_layers("sky130A")) == {"235/4"}
+    assert problems.boundary_layers("unknownpdk") == {}
