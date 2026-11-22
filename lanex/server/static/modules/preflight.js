@@ -86,6 +86,29 @@ function row(state, label, detail, actionHtml) {
   );
 }
 
+// The "Config check" row for a config_check result, or null when there is
+// nothing to add (no project yet, or not checked because the PDK isn't there:
+// the PDK row says that). Pure (tested).
+export function configCheckRow(chk, configName = "") {
+  if (!chk) return null;
+  const esc = fmt.escape;
+  const open = configName
+    ? "<button class='btn btn-sm pf-act' data-act='edit' data-rel='" + esc(configName) + "'>Open " + esc(configName) + "</button>" : "";
+  const probs = chk.problems || [];
+  if (probs.length) {
+    const p = probs[0];
+    const more = probs.length > 1 ? " (and " + (probs.length - 1) + " more)" : "";
+    return { state: "bad", detail: esc(p.message) + (p.fix ? " " + esc(p.fix) : "") + more, action: p.code === "flow" || p.code === "config" || p.code === "top" || p.code === "clock" ? open : "" };
+  }
+  if (!chk.checked) {
+    if (/PDK is installed/.test(chk.note || "")) return null;
+    return { state: "warn", detail: esc("Not checked by LibreLane: " + (chk.note || "the check didn't run") + ". The run checks it as it starts."), action: "" };
+  }
+  const top = typeof chk.design_name === "string" ? " · top <code>" + esc(chk.design_name) + "</code>" : "";
+  const clk = chk.clock_port ? " · clock <code>" + esc(Array.isArray(chk.clock_port) ? chk.clock_port.join(", ") : chk.clock_port) + "</code>" : "";
+  return { state: "ok", detail: "LibreLane loads it" + top + clk, action: "" };
+}
+
 function plural(n, word) {
   return n + " " + word + (n === 1 ? "" : "s");
 }
@@ -116,11 +139,12 @@ async function paintPreflight(key) {
   // first time, show the three checkpoints waiting.
   if (!root.querySelector(".pf-node")) {
     root.innerHTML = "<div class='pf-nodes'>" + row("wait", "Design + config", "") +
-      row("wait", "PDK + standard cells", "") + row("wait", "Engine", "") + "</div>";
+      row("wait", "Config check", "") + row("wait", "PDK + standard cells", "") + row("wait", "Engine", "") + "</div>";
   }
   root.classList.add("is-checking");
   verdict("Checking…", "");
   const gen = _gen;
+  const dir = state.designDir;
   let pf;
   try {
     pf = await api.preflight(state.selectedPdk, state.selectedScl, state.runMode);
@@ -134,6 +158,12 @@ async function paintPreflight(key) {
   _last = pf;
   // Kept as fresh only if nothing it read changed while it was on its way.
   if (gen === _gen) { _lastAt = Date.now(); _lastKey = key; }
+  // The flow this project's runs use (its config's meta.flow, else Classic):
+  // the Run payload, "Run up to" and the Run menu read it (setup.js).
+  if (pf.flow && dir === state.designDir) {
+    state.flowInfo = Object.assign({}, pf.flow, { dir });
+    if (typeof document !== "undefined") document.dispatchEvent(new CustomEvent("g:flow_known", { detail: state.flowInfo }));
+  }
 
   const d = pf.design || {};
   const p = pf.pdk || {};
@@ -156,7 +186,8 @@ async function paintPreflight(key) {
       ? "<code>" + fmt.escape(empty.module) + "</code> has no logic yet, so there's nothing to place. Write it in " +
         fmt.escape(empty.rel) + " first." + cfgNote
       : d.ok
-      ? (d.config_file || "config") + " · " + plural(d.source_count || 0, "source file") + cfgNote
+      ? (d.config_file || "config") + " · " + plural(d.source_count || 0, "source file") +
+        (pf.flow && pf.flow.name && !pf.flow.error ? " · " + fmt.escape(pf.flow.name) + " flow" : "") + cfgNote
       : !d.dir ? "No project open."
         : !d.config_file ? "No config file in the project."
         : (d.missing_sources || []).length ? "The config lists files that don't exist: " + fmt.escape(d.missing_sources.join(", "))
@@ -166,6 +197,10 @@ async function paintPreflight(key) {
       : d.config_file && !(d.missing_sources || []).length ? "<button class='btn btn-sm pf-act' data-act='new-file'>New file</button>"
       : "<button class='btn btn-sm pf-act' data-act='sources'>Open Sources</button>",
   );
+  // The config as LibreLane's own loader reads it, the top module and the
+  // clock port (configcheck.py). Shown once the design row is fine.
+  const cc = configCheckRow(d.ok ? pf.config_check : null, d.config_file || "");
+  if (cc) html += row(cc.state, "Config check", cc.detail, cc.action);
   // A PDK that LibreLane can fetch on its own (online, just not local yet) is a
   // warning, not a blocker — so don't show a hard ✗ while the banner says "All set".
   const pdkWillDownload = !p.ready && p.note;
@@ -222,7 +257,7 @@ async function paintPreflight(key) {
       "<button class='btn btn-sm pf-act' data-act='mem'>What to do</button>");
   }
 
-  const heads = (empty ? 1 : 0) + (mem.warn ? 1 : 0);
+  const heads = (empty ? 1 : 0) + (mem.warn ? 1 : 0) + (cc && cc.state === "warn" ? 1 : 0);
   if (pf.ready && heads) verdict(heads + " heads-up" + (heads === 1 ? "" : "s"), "bad");
   else if (pf.ready) verdict("All set", "ok");
   else verdict(pf.blockers.length + (pf.blockers.length === 1 ? " thing" : " things") + " to fix", "bad");

@@ -2219,6 +2219,79 @@ check("boot: index.html preloads exactly app.js's static imports, and no blockin
   for (const page of ["flow.js", "runs.js", "tools.js", "analytics.js"]) assert.ok(!seen.has("modules/" + page), page + " loads on demand");
 });
 
+// ------------------------------------------------ run safety (audit G5/G6/G12/1c, 4.2)
+{
+  const SU3 = await import(toUrl(resolve(MOD, "setup.js")));
+  check("stop: a run older than 30 s asks first; a run just started stops at once", () => {
+    const now = 1_000_000;
+    assert.equal(SU3.STOP_CONFIRM_AFTER_MS, 30000);
+    assert.equal(SU3.stopNeedsConfirm(now - 5000, now), false);
+    assert.equal(SU3.stopNeedsConfirm(now - 30000, now), true);
+    assert.equal(SU3.stopNeedsConfirm(0, now), true, "an unknown start time counts as old");
+  });
+  check("stop: no bare key stops a run, and every Stop goes through requestStop", () => {
+    const hk = readFileSync(resolve(MOD, "hotkeys.js"), "utf8");
+    assert.ok(!/e\.key === "s"/.test(hk), "a bare 's' still stops the run");
+    assert.ok(!HK.SHORTCUTS.some((s) => s.keys === "s"), "the help sheet still lists 's'");
+    const pal = readFileSync(resolve(MOD, "palette.js"), "utf8");
+    assert.match(pal, /A\("stop", "Stop the run", "Run", "stop", \(\) => click\("btn-cancel"\)\)/);
+    const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+    assert.match(setup, /getElementById\("btn-cancel"\)\?\.addEventListener\("click", \(\) => requestStop\(\)\)/);
+    assert.equal((setup.match(/api\.cancelRun\(\)/g) || []).length, 2, "cancelRun is called only from requestStop and a start stopped mid-way");
+    const fl = readFileSync(resolve(MOD, "flow.js"), "utf8");
+    assert.ok(!/act === "stop"\) api\.cancelRun/.test(fl), "Flow's Stop skips the confirm");
+    assert.match(fl, /m\.requestStop\(\)/);
+  });
+  check("run start: the check runs before the start request, never beside it", () => {
+    const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+    const body = setup.slice(setup.indexOf("async function onRunClick"), setup.indexOf("async function offerPdkFix"));
+    assert.ok(body.indexOf("await preflightNow()") > 0 && body.indexOf("await preflightNow()") < body.indexOf("api.startRun(payload)"));
+    assert.ok(!/offerStopFor|checkP/.test(setup), "the check that ran beside the start is back");
+    assert.deepEqual(SU3.hardBlockers({ config_check: { problems: [
+      { code: "config", message: "LibreLane can't load config.yaml: x", fix: "Fix it.", hard: true },
+      { code: "top", message: "top", fix: "", hard: false }] } }), ["LibreLane can't load config.yaml: x Fix it."]);
+    assert.deepEqual(SU3.hardBlockers(null), []);
+  });
+  check("flow: the run sends the config's flow and the Run menu names it", () => {
+    assert.match(SU3.flowNoteText({ name: "Chip", source: "config", config: "config.yaml" }), /^Chip, from config\.yaml \(meta\.flow\)/);
+    assert.match(SU3.flowNoteText({ name: "Classic", source: "default" }), /^Classic \(the config names no other flow\)/);
+    assert.match(SU3.flowNoteText(null), /^Classic, until/);
+    const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+    assert.match(setup, /flow: \(flowOf\(\) \|\| \{\}\)\.name \|\| null/, "the run payload has no flow");
+    const cn = readFileSync(resolve(MOD, "console.js"), "utf8");
+    assert.ok(!/flow: "Classic"/.test(cn), "the Console's next-run command hard-codes Classic");
+  });
+  check("preflight: the config-check row says what LibreLane said", () => {
+    assert.equal(PF.configCheckRow(null), null);
+    const ok = PF.configCheckRow({ checked: true, problems: [], design_name: "spm", clock_port: "clk" });
+    assert.equal(ok.state, "ok");
+    assert.match(ok.detail, /LibreLane loads it · top <code>spm<\/code> · clock <code>clk<\/code>/);
+    const bad = PF.configCheckRow({ checked: true, problems: [{ code: "clock", message: "No <port>.", fix: "Set it.", hard: false }] }, "config.yaml");
+    assert.equal(bad.state, "bad");
+    assert.ok(bad.detail.includes("No &lt;port&gt;. Set it.") && bad.action.includes("data-rel='config.yaml'"));
+    assert.equal(PF.configCheckRow({ checked: false, problems: [], note: "the config is checked once the PDK is installed" }), null,
+      "the PDK row already says the PDK is missing");
+    assert.equal(PF.configCheckRow({ checked: false, problems: [], note: "no usable Docker or Podman" }).state, "warn");
+  });
+}
+{
+  const RE = await import(toUrl(resolve(MOD, "runend.js")));
+  check("notify: 'Tell me when a run finishes' is on unless turned off", () => {
+    assert.equal(RE.notifyPref(null), true);
+    assert.equal(RE.notifyPref("1"), true);
+    assert.equal(RE.notifyPref("0"), false, "an earlier explicit off is kept");
+    assert.equal(PREFS_MOD.pref("notify").def, "1");
+    const re = readFileSync(resolve(MOD, "runend.js"), "utf8");
+    // The browser is asked only from a Run click, never at load.
+    assert.match(readFileSync(resolve(MOD, "setup.js"), "utf8"), /askNotifyOnRun\(\);/);
+    assert.equal((re.match(/requestPermission\(/g) || []).length, 2, "permission is asked only in askNotifyOnRun and enableNotifications");
+  });
+  check("toasts sit above the status bar (the sign-off notice and progress stay readable)", () => {
+    const css = readFileSync(resolve(MOD, "..", "features.css"), "utf8");
+    assert.match(css, /\.toast-host \{[^}]*bottom: calc\(var\(--status-h, 30px\) \+ var\(--s-3\)\)/);
+  });
+}
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

@@ -18,7 +18,6 @@ export const SHORTCUTS = [
   { keys: "Ctrl Enter", desc: "Start a run, from any page" },
   { keys: "r", desc: "Start a run (on Setup and Flow)" },
   { keys: "Ctrl `", desc: "Open or close the Console: log, command, journal, command line" },
-  { keys: "s", desc: "Stop the running flow" },
   { keys: "/", desc: "Filter the step log on Flow" },
   { keys: "t", desc: "Switch light or dark" },
   { keys: "d", desc: "Compact spacing on or off" },
@@ -77,9 +76,11 @@ export function setupHotkeys() {
     // Single-key shortcuts can be turned off in Settings (WCAG 2.1.4).
     if (!singleKeysOn()) return;
     // In the RTL IDE (its explorer, tabs, panels) a press meant for the code
-    // easily lands on a button instead; there r and s must not start or stop
-    // the RTL-to-GDS run.
-    if ((e.key === "r" || e.key === "s") && e.target && e.target.closest && e.target.closest(".ide-embed")) return;
+    // easily lands on a button instead; there r must not start the run.
+    // (There is no single key for Stop: one stray press used to end a long
+    // run. Stop is the top-bar button, Flow's Stop or the palette, and asks
+    // first once the run has been going a while.)
+    if (e.key === "r" && e.target && e.target.closest && e.target.closest(".ide-embed")) return;
     if (e.key === "?") {
       import("./shell.js").then((m) => m.openHelp("keys"));
       e.preventDefault();
@@ -91,7 +92,6 @@ export function setupHotkeys() {
     if (page) go(page[1], {}, { link: false });
     // The top bar's Run: it starts the flow without leaving this page.
     if (e.key === "r" && runKeyAllowed("r", { tab: currentTab() }) && !(state.status && state.status.running)) document.getElementById("btn-run-global")?.click();
-    if (e.key === "s") document.getElementById("btn-cancel")?.click();
     if (e.key === "/") {
       // Flow: filter the log of the step on screen.
       const s = document.querySelector("#sec-pipeline.section-active .fl-insp .lv-q input");

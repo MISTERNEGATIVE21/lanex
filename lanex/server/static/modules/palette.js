@@ -62,7 +62,7 @@ function actions() {
     goTo("tools", "Tools", "tools"),
     goTo("settings", "Settings", "gear"),
     A("run", "Run the flow", "Run", "play", () => click("btn-run-global"), "Ctrl Enter"),
-    A("stop", "Stop the run", "Run", "stop", () => click("btn-cancel"), "s"),
+    A("stop", "Stop the run", "Run", "stop", () => click("btn-cancel")),
     A("resume", "Resume / next step", "Run", "play", () => click("btn-resume")),
     A("preflight", "Check my setup (preflight)", "Setup", "check", () => click("btn-preflight")),
     A("runmode", "Switch run engine (Container / Local tools)", "Run menu", "refresh", () => toggleRunMode()),
