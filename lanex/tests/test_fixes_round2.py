@@ -140,12 +140,7 @@ def test_fail_metrics_use_real_drc_key():
 
 
 # --- M7: re-verify continues the prior run's state ---------------------------
-
-def test_reverify_kwargs_continues_run():
-    from lanex.controller import reverify
-
-    kw = reverify.reverify_kwargs("/x/runs/TAG", "Magic.DRC")
-    assert kw["last_run"] is True and kw["frm"] == "Magic.DRC"
+# (now a new run from the old run's last saved state: test_dse_reverify.py)
 
 
 # --- L8: VHDL is editable ----------------------------------------------------

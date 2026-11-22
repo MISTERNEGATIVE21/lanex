@@ -33,7 +33,12 @@ from typing import Any, Dict, List, Optional
 from . import flowstages, problems, verify
 
 _CODE_RX = re.compile(r"\[(?:ERROR |WARNING )?([A-Z]{2,5}-\d{4})\]")
-_ERR_RX = re.compile(r"\[ERROR(?: [A-Z]{2,5}-\d{4})?\]|^ERROR\b|\bError:")
+# OpenROAD "[ERROR DPL-0036]", Yosys "ERROR:" (also "f.v:67: ERROR: …"), Tcl "Error:".
+_ERR_RX = re.compile(r"\[ERROR(?: [A-Z]{2,5}-\d{4})?\]|^ERROR\b|\bError:|\bERROR: ")
+# A Tcl script that died (Netgen, Magic) prints its error, then "while executing".
+_TCL_TRACE = re.compile(r"^\s+while executing$")
+# error.log lines LibreLane adds around a tool's own (step.py run_subprocess).
+_BOILER = re.compile(r"^(Subprocess had a non-zero exit\.|Last \d+ line\(s\):|Full log file: .*|\s*)$")
 
 
 def _read(p: Path, limit: int = 2_000_000) -> str:
@@ -64,13 +69,86 @@ def _first_error(log: Optional[Path]) -> Optional[Dict[str, Any]]:
     """Line number (1-based) and text of the first error in a step log."""
     if log is None:
         return None
-    for i, ln in enumerate(_read(log).splitlines(), 1):
+    lines = _read(log).splitlines()
+    for i, ln in enumerate(lines, 1):
         if _ERR_RX.search(ln):
             return {"line": i, "text": ln.strip()[:400]}
+    for i, ln in enumerate(lines[1:], 2):
+        if _TCL_TRACE.match(ln) and lines[i - 2].strip():
+            return {"line": i - 1, "text": lines[i - 2].strip()[:400]}
     return None
 
 
-def _warnings(run_dir: Path, base_dir: Optional[Path]) -> Dict[str, Any]:
+def _log_tail(log: Optional[Path], n: int = 80) -> str:
+    if log is None:
+        return ""
+    try:
+        with log.open("rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 200_000))
+            text = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.splitlines()[-n:])
+
+
+def _tool_of(step_id: str) -> str:
+    head = problems.slug(step_id).split("-", 1)[0]
+    return {"openroad": "OpenROAD", "odb": "OpenROAD", "yosys": "Yosys", "verilator": "Verilator", "magic": "Magic",
+            "klayout": "KLayout", "netgen": "Netgen", "checker": "LibreLane's checker",
+            "misc": "LibreLane"}.get(head, "The tool")
+
+
+def _versions(run: "verify._Run") -> Dict[str, Any]:
+    """What a helper needs to know: the versions that made this run."""
+    tc = (run.gui.get("toolchain") or {}) if isinstance(run.gui, dict) else {}
+    cfg = run.cfg or {}
+    meta = cfg.get("meta") if isinstance(cfg.get("meta"), dict) else {}
+    m = re.search(r"/versions/([0-9a-f]{7,40})", str(cfg.get("PDK_ROOT") or ""))
+    try:
+        from .. import _version
+        lanex_v = _version.get_version()
+    except Exception:
+        lanex_v = "unknown"
+    return {"lanex": tc.get("lanex_version") or lanex_v, "lanex_now": lanex_v,
+            "librelane": tc.get("librelane_version") or (meta or {}).get("librelane_version") or "unknown",
+            "image": tc.get("image"), "run_mode": tc.get("run_mode") or run.gui.get("run_mode"),
+            "pdk": cfg.get("PDK"), "pdk_version": m.group(1) if m else None, "scl": cfg.get("STD_CELL_LIBRARY"),
+            "flow": run.gui.get("flow") or (meta or {}).get("flow") or "Classic"}
+
+
+_HELP_KEYS = ("DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD", "FP_SIZING", "DIE_AREA", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT")
+
+
+def help_text(run: "verify._Run", out: Dict[str, Any], card: Dict[str, Any], tail: str) -> str:
+    """"Copy for help": a short plain-text block with the versions, the step,
+    the error and the log's last lines, paths shown relative to the project."""
+    v = _versions(run)
+    cfg = run.cfg or {}
+    design = str(cfg.get("DESIGN_DIR") or "").rstrip("/")
+    step = out.get("step") or {}
+    at = out.get("at") or {}
+    err = (card.get("evidence") or [None])[0] or at.get("text") or next(
+        (e for e in out.get("errors") or [] if not _BOILER.match(e)), "") or "(no error message)"
+    lines = [
+        "LanEx run report: " + str(out.get("tag")),
+        "Stopped at step %s %s (%s)%s" % (step.get("n") or "?", step.get("id") or step.get("dir") or "?",
+                                          out.get("stage") or "?", ", " + card["title"] if card.get("title") else ""),
+        "Error: " + err,
+        "LanEx %s · LibreLane %s · %s%s" % (v["lanex"], v["librelane"], v["run_mode"] or "local",
+                                          (" · image " + v["image"]) if v.get("image") else ""),
+        "PDK %s%s · library %s · flow %s" % (v["pdk"] or "?", (" (open_pdks " + v["pdk_version"][:12] + ")") if v["pdk_version"] else "",
+                                            v["scl"] or "?", v["flow"]),
+        "Config: " + " ".join("%s=%s" % (k, problems.fmt(cfg[k])) for k in _HELP_KEYS if cfg.get(k) not in (None, "")),
+    ]
+    if tail:
+        lines += ["", "Last lines of " + (at.get("path") or step.get("dir") or "the step's log") + ":"]
+        lines += ["  " + ln for ln in tail.splitlines()[-15:]]
+    text = "\n".join(lines)
+    return text.replace(design + "/", "") if design else text
+
+
+def _warnings(run_dir: Path, base_dir: Optional[Path], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     lines = _lines(run_dir / "warning.log")
     base_codes = None
     if base_dir is not None:
@@ -87,7 +165,7 @@ def _warnings(run_dir: Path, base_dir: Optional[Path]) -> Dict[str, Any]:
     # The full GPL-0302 text spans two lines in the step log; read it there.
     for code, g in groups.items():
         if code in problems.WARNING_NOTES:
-            g["note"] = problems.WARNING_NOTES[code](_grep_step_logs(run_dir, code) or g["sample"])
+            g["note"] = problems.WARNING_NOTES[code](_grep_step_logs(run_dir, code) or g["sample"], cfg or {})
         if base_codes is not None:
             g["new"] = code not in base_codes
     ordered = sorted(groups.values(), key=lambda g: (not g.get("note"), not g.get("new", False), -g["count"]))
@@ -219,7 +297,7 @@ def explain_run(run_dir: str | Path, base_dir: Optional[str | Path] = None) -> D
         "raised_checkers": fs.get("raised_checkers") or [],
         "steps_done": fs.get("steps_done"), "steps_total": fs.get("steps_total"),
         "card": None, "at": None,
-        "warnings": _warnings(run_dir, base if base and base.is_dir() else None),
+        "warnings": _warnings(run_dir, base if base and base.is_dir() else None, cfg),
     }
     if step:
         # Unlisted steps inherit the stage before them, so walk the run in order.
@@ -228,31 +306,70 @@ def explain_run(run_dir: str | Path, base_dir: Optional[str | Path] = None) -> D
         hit = next((i for i, s in enumerate(run.steps) if s["dir"] == step.get("dir")), None)
         out["stage"] = stages[hit] if hit is not None else flowstages.stages_of([step.get("id") or step.get("dir")])[0]
     if kind == "halted" and step:
-        log = _step_log(run_dir, step["dir"])
-        first = _first_error(log)
-        if first and log is not None:
-            out["at"] = {"path": step["dir"] + "/" + log.name, **first}
-        text = "\n".join(out["errors"]) or (first or {}).get("text", "")
-        card = problems.explain_error(text, cfg)
-        ck = _checker_of(step)
-        if ck and not card.get("title"):
-            key, title, tool = ck
-            card["title"] = title
-            card["plain"] = problems._CHECK_PLAIN.get(key) or card.get("plain")
-            if key in problems._CHECK_OPEN:
-                label, go, why = problems._CHECK_OPEN[key]
-                card["fixes"] = list(card.get("fixes") or []) + [problems._open(label, go, why)]
-            dd = None
-            try:
-                dd = run_dir.parent.parent if run_dir.parent.name == "runs" else None
-            except Exception:
-                dd = None
-            ev = _checker_evidence(run, tool, dd)
-            if ev:
-                card["evidence"] = ev["lines"]
-                out["at"] = ev["at"]
-        card["fixes"] = problems.finish(card.get("fixes", []), (cfg.get("meta") or {}).get("flow") or "Classic")
-        out["card"] = card
+        out["card"] = _halted_card(run, run_dir, step, out, cfg)
     # A run resumed from another one: where it started, and what changed.
     out["branched_from"] = run.branch
     return out
+
+
+def _halted_card(run: "verify._Run", run_dir: Path, step: Dict[str, Any], out: Dict[str, Any],
+                 cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """The failure card of a step that raised: the knowledge base's
+    (problems.KB) when it knows the error, an LVS crash, a step that stopped
+    with no message (disk, memory), else the generic card. Every card carries
+    "Copy for help" text."""
+    log = _step_log(run_dir, step["dir"])
+    first = _first_error(log)
+    if first and log is not None:
+        out["at"] = {"path": step["dir"] + "/" + log.name, **first}
+    tail = _log_tail(log)
+    errors = [e for e in out["errors"] if not _BOILER.match(e)]
+    text = "\n".join(out["errors"]) or (first or {}).get("text", "")
+    outcome = ""
+    try:
+        oc = run.gui.get("outcome") if isinstance(run.gui, dict) else None
+        outcome = str((oc or {}).get("error") or "") if isinstance(oc, dict) else ""
+    except Exception:
+        outcome = ""
+    sid = step.get("id") or step["dir"]
+    ck = _checker_of(step)
+    ev = None
+    if ck:
+        # A checker that raised names only a count: the tool step's own lines
+        # (Verilator's "%Error: f.v:67:13: syntax error") are the evidence.
+        dd = run_dir.parent.parent if run_dir.parent.name == "runs" else None
+        ev = _checker_evidence(run, ck[2], dd)
+        if ev:
+            out["at"] = ev["at"]
+    card = problems.explain_error(text, cfg, step=sid, outcome=outcome, run_dir=run_dir,
+                                  log="\n".join((ev or {}).get("lines") or []) + "\n" + tail)
+    if ck and not card.get("title"):
+        key, title, _tool = ck
+        card["title"] = title
+        card["plain"] = problems._CHECK_PLAIN.get(key) or card.get("plain")
+        if key in problems._CHECK_OPEN:
+            label, go, why = problems._CHECK_OPEN[key]
+            card["fixes"] = list(card.get("fixes") or []) + [problems._open(label, go, why)]
+    if ev and not card.get("evidence"):
+        card["evidence"] = ev["lines"]
+    if not card.get("title") and (sid == "Netgen.LVS" or step["dir"].split("-", 1)[-1] == "netgen-lvs"):
+        card.update(problems.lvs_crash((first or {}).get("text") or ""))
+    if not card.get("title") and not errors and not first:
+        card.update(problems.explain_silent(run_dir, step, outcome))
+    if not card.get("title"):
+        # Generic: the tool's first error, where, and a way to ask for help.
+        tool = _tool_of(sid)
+        card["generic"] = True
+        card["plain"] = ("%s stopped the run at %s with the error below. LanEx has no explanation for this one yet. The "
+                         "step's log has the lines around it; Copy for help puts the versions, the step, the error and "
+                         "the log's last lines on the clipboard, for a forum post or an issue." % (tool, sid or step["dir"]))
+        lead = (first or {}).get("text") or (errors[0] if errors else "")
+        if lead:
+            card["evidence"] = [lead] + [e for e in errors if e != lead][:2]
+    if not card.get("evidence") and errors and len(errors) < len(out["errors"]):
+        # error.log wrapped the tool's line in LibreLane's own: show the tool's.
+        hit = [e for e in errors if problems._CODE_RX.search(e) or "ERROR" in e or "Error" in e]
+        card["evidence"] = (hit or errors)[:3]
+    card["fixes"] = problems.finish(card.get("fixes", []), (cfg.get("meta") or {}).get("flow") or "Classic")
+    card["help"] = help_text(run, out, card, tail)
+    return card

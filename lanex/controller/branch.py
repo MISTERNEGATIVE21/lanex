@@ -374,6 +374,76 @@ def progress(lineage: List[Dict[str, Any]], step_ids: List[str]) -> Dict[str, An
     return {"done": done, "stopped": min(after) if after else None}
 
 
+# ------------------------------------------------------------------ versions
+
+def _short(v: Any) -> str:
+    s = str(v or "")
+    return s[:12] if re.fullmatch(r"[0-9a-f]{13,64}", s) else s
+
+
+def _digest(ref: Any) -> str:
+    m = re.search(r"sha256:([0-9a-f]{12,64})", str(ref or ""))
+    return m.group(1) if m else str(ref or "")
+
+
+def versions_now() -> Dict[str, Any]:
+    """The LibreLane, image and PDK pins a run started now would use."""
+    out: Dict[str, Any] = {"librelane": None, "image": None}
+    try:
+        from . import compat
+        v = compat.get_version()
+        out["librelane"] = v if v and v != "unknown" else None
+    except Exception:
+        pass
+    try:
+        from . import container_run
+        out["image"] = container_run.image_ref() or None
+    except Exception:
+        pass
+    return out
+
+
+def _pdk_pin(pdk: Optional[str]) -> Optional[str]:
+    """The PDK commit LibreLane pins for *pdk*'s family (pdk_hashes.yaml)."""
+    if not pdk:
+        return None
+    try:
+        from . import pdk as pdk_mod
+        fam, _variant = pdk_mod._resolve_family(str(pdk))
+        return pdk_mod.required_pdk_version(fam or str(pdk))
+    except Exception:
+        return None
+
+
+def version_drift(info: Dict[str, Any], now: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """What the old run was made with that a run started now would not be:
+    ``[{what, was, now, label}]`` for LibreLane, the container image (a
+    container run) and the PDK. A value LanEx can't read on either side is
+    not compared (runs from before LanEx stamped them)."""
+    gui = info.get("gui") or {}
+    tc = gui.get("toolchain") if isinstance(gui.get("toolchain"), dict) else {}
+    resolved = info.get("resolved") or {}
+    meta = resolved.get("meta") if isinstance(resolved.get("meta"), dict) else {}
+    now = now if now is not None else dict(versions_now(), pdk=_pdk_pin(info.get("pdk")))
+    out: List[Dict[str, Any]] = []
+    was_ll = tc.get("librelane_version") or (meta or {}).get("librelane_version")
+    if was_ll and was_ll != "unknown" and now.get("librelane") and str(was_ll) != str(now["librelane"]):
+        out.append({"what": "librelane", "label": "LibreLane", "was": str(was_ll), "now": str(now["librelane"])})
+    was_img = tc.get("image") if (tc.get("run_mode") or gui.get("run_mode")) == "container" else None
+    if was_img and was_img != "unknown" and now.get("image") and _digest(was_img) != _digest(now["image"]):
+        out.append({"what": "image", "label": "the LibreLane image", "was": str(was_img), "now": str(now["image"])})
+    m = re.search(r"/versions/([0-9a-f]{7,64})", str(resolved.get("PDK_ROOT") or ""))
+    if m and now.get("pdk") and m.group(1) != str(now["pdk"]):
+        out.append({"what": "pdk", "label": "the %s PDK" % (info.get("pdk") or ""), "was": m.group(1), "now": str(now["pdk"])})
+    return out
+
+
+def drift_text(tag: str, drift: List[Dict[str, Any]]) -> str:
+    parts = ["%s %s then, %s now" % (d["label"], _short(d["was"]), _short(d["now"])) for d in drift]
+    return ("%s was made with other tools than a run started now would use (%s). Resuming reuses its steps, so one run "
+            "would mix the two: run the whole flow instead." % (tag, "; ".join(parts)))
+
+
 # ------------------------------------------------------------------ the plan
 
 def _new_tag(runs_dir: Path, parent: str) -> str:
@@ -500,6 +570,11 @@ def plan(design_dir: str | Path, tag: str, sets: Optional[Dict[str, Any]] = None
         gone = missing_paths(state["path"])
         if gone:
             blocked = ("Files " + tag + " needs to resume from are gone (" + gone[0] + "). Run the whole flow instead.")
+    # A resumed run stands on the old run's steps: refuse when they were made
+    # with another LibreLane, image or PDK than the new steps would be.
+    vdrift = version_drift(info)
+    if idx > 0 and vdrift and blocked is None:
+        blocked = drift_text(tag, vdrift)
     resume = None
     if idx > 0:
         resume = {"index": idx, "n": idx + 1, "step": steps[idx], "stage": stages[idx],
@@ -521,7 +596,7 @@ def plan(design_dir: str | Path, tag: str, sets: Optional[Dict[str, Any]] = None
         if st not in seen:
             seen.add(st)
             stage_starts.append({"stage": st, "index": i, "step": steps[i], "n": i + 1,
-                                 "ok": 0 < i <= limit and (need_i is None or i <= need_i)})
+                                 "ok": 0 < i <= limit and (need_i is None or i <= need_i) and not vdrift})
     return {
         "ok": blocked is None and cfg_error is None,
         "blocked": blocked, "config_error": cfg_error,
@@ -532,7 +607,7 @@ def plan(design_dir: str | Path, tag: str, sets: Optional[Dict[str, Any]] = None
         "unchanged": same_as_now,
         "config": {"name": cfg_info.get("name"), "editable": bool(cfg_info.get("editable")),
                    "reason": cfg_info.get("reason"), "diff": cfg_diff, "edited_since": cfg_edited},
-        "drift": {"settings": drift, "files": files, "unplaced": unplaced},
+        "drift": {"settings": drift, "files": files, "unplaced": unplaced, "versions": vdrift},
         "resume": resume, "stages": stage_starts, "steps_total": len(steps),
         "overrides": overrides,
         "sources": list(info["gui"].get("sources") or []), "extras": list(info["gui"].get("extras") or []),

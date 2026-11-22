@@ -1296,7 +1296,7 @@ async function fillResume() {
   const opts = (p.stages || []).filter((s) => s.index > 0).map((s) => {
     const st = FS.stage(s.stage);
     const why = s.ok ? "" : s.index > (p.parent.stopped != null ? p.parent.stopped : p.parent.done + 1)
-      ? " (" + tag + " didn't get there)" : " (something it reads changed)";
+      ? " (" + tag + " didn't get there)" : ((p.drift || {}).versions || []).length ? " (made with other tool versions)" : " (something it reads changed)";
     return "<option value='" + fmt.escape(s.step) + "' data-stage='" + fmt.escape(s.stage) + "'" + (s.ok ? "" : " disabled") + ">" +
       (FS.STAGES.indexOf(st) + 1) + ". " + fmt.escape(st ? st.label : s.stage) + why + "</option>";
   });
@@ -1305,7 +1305,8 @@ async function fillResume() {
   sel.dataset.tag = tag;
   const d = p.drift || {};
   const changed = (d.settings || []).map((x) => x.var).concat((d.files || []).map((f) => f.path));
-  if (note) note.textContent = "Reuses " + tag + "'s results up to that stage." + (changed.length ? " Changed since: " + changed.slice(0, 3).join(", ") + "." : "");
+  if (note) note.textContent = (d.versions || []).length && p.blocked ? p.blocked
+    : "Reuses " + tag + "'s results up to that stage." + (changed.length ? " Changed since: " + changed.slice(0, 3).join(", ") + "." : "");
   paintRunLabel();
 }
 

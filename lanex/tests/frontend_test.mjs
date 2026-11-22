@@ -1677,6 +1677,23 @@ check("layout: standard cells are named in plain words", () => {
   assert.equal(LX.describeCell("sky130_fd_sc_hd__clkbuf_16"), "clock buffer, drive strength 16");
   assert.equal(LX.describeCell("sky130_fd_sc_hd__dlygate4sd3_1"), "delay cell (fixes hold timing), drive strength 1");
   assert.equal(LX.describeCell("my_macro"), "");
+  // IHP names have one underscore after the library; gf180 has its own stems.
+  assert.equal(LX.describeCell("sg13g2_a21oi_1"), "AND-OR-invert (21), drive strength 1");
+  assert.equal(LX.describeCell("sg13g2_dlhq_1"), "latch, open while the enable is high, drive strength 1");
+  assert.equal(LX.describeCell("sg13g2_slgcp_1"), "clock gate, drive strength 1");
+  assert.equal(LX.describeCell("sg13g2_tiehi"), "constant 1");
+  assert.equal(LX.describeCell("gf180mcu_fd_sc_mcu7t5v0__latq_1"), "latch, drive strength 1");
+  assert.equal(LX.describeCell("gf180mcu_fd_sc_mcu7t5v0__addf_1"), "full adder, drive strength 1");
+  assert.equal(LX.describeCell("gf180mcu_fd_sc_mcu7t5v0__invz_2"), "tri-state inverter, drive strength 2");
+});
+
+check("layout: the cell census uses the Cells tab's categories", () => {
+  const src = readFileSync(resolve(MOD, "layout.js"), "utf8");
+  assert.ok(/import \{ CATEGORY_ORDER, CATEGORY_TIPS \} from "\.\/cells-model\.js"/.test(src), "one order and one set of tips");
+  assert.ok(/kind_label/.test(src), "the label comes with each census row");
+  for (const k of ["logic", "flipflop", "latch", "clock", "delay", "tristate", "tie", "power", "arith"]) {
+    assert.ok(new RegExp("\\b" + k + ": \\{ label").test(src), "a colour for " + k);
+  }
 });
 
 check("layout: one Layout tab; Preview is gone everywhere", () => {

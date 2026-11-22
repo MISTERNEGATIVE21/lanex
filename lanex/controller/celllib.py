@@ -912,7 +912,10 @@ def _category(name: str, fam: str, s: Optional[Dict[str, Any]], lef_class: str) 
     if re.search(r"(^|_)(fill|decap|tap|endcap|diode|antenna|fakediode|filler|corner)", f) or lef_class.upper().startswith(("ENDCAP", "CORE WELLTAP", "CORE ANTENNACELL", "CORE SPACER")):
         return "physical"
     if s is None:
-        return "other"
+        # No Liberty for this cell (sky130_fd_sc_hvl, gf180mcu 9t): the census's
+        # name rules, so the Cells tab and Layout still say the same.
+        from .cells import classify_cell
+        return classify_cell(name)
     outs = [p for p in s["pins"] if p["dir"] == "output"]
     if s.get("is_clock_gate") or re.search(r"(^|_)s?dlclkp|icg", f):
         return "clock"

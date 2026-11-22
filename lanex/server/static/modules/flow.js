@@ -605,6 +605,8 @@ function failHtml(rx, stages) {
     // The recommended fix is the primary action; the log is for reading.
     (rx.at ? "<button class='btn " + (fixes ? "btn-ghost" : "btn-primary") + " btn-sm' data-fl='at-error'>" + icon("file", { size: 13 }) + " Show it in the log</button>" : "") +
     (layoutSrc ? "<button class='btn btn-ghost btn-sm' data-go='layout' data-go-source='" + esc(layoutSrc.source) + "' title='The last picture before it stopped'>" + icon("grid", { size: 13 }) + " Layout at " + esc(layoutSrc.label) + "</button>" : "") +
+    // The versions, step, error and last log lines, ready to paste where you ask for help.
+    (c.help ? "<button class='btn btn-ghost btn-sm' data-fl='copy-help' title='Copies the LanEx, LibreLane and PDK versions, the step, the error and the last lines of the log'>" + icon("file", { size: 13 }) + " Copy for help</button>" : "") +
     "<button class='btn btn-ghost btn-sm' data-fl='run'>" + icon("play", { size: 13 }) + " Run again</button></div></div>";
 }
 
@@ -1121,6 +1123,10 @@ function wireOnce() {
         scrollListTo(F.rows.get(st.id), true);
         $("fl-body")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       }
+    } else if (act === "copy-help") {
+      const text = (F.rx && F.rx.card && F.rx.card.help) || "";
+      if (text) navigator.clipboard?.writeText(text).then(() => toast.show("Copied the run report: paste it where you ask for help", "success", 3000))
+        .catch(() => toast.show(text, "info", 0));
     } else if (act === "copy-id") {
       navigator.clipboard?.writeText(a.dataset.id).then(() => toast.show("Copied " + a.dataset.id, "success", 1800)).catch(() => {});
     } else if (act === "openroad") {
