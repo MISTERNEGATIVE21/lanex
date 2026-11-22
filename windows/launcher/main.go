@@ -107,8 +107,21 @@ func main() {
 	}
 	if !present {
 		// Only reachable if the appliance was removed behind Setup's back
-		// (`wsl --unregister lanex`). Reinstalling is genuinely the fix: the
-		// distro is where LanEx itself lives.
+		// (`wsl --unregister` on LanEx's recorded distro). Setup's Repair
+		// re-imports it under the recorded name and folder, so the cached Setup
+		// is offered first; the download page only when that copy is gone.
+		if setup := cachedSetupPath(); fileExists(setup) {
+			if askYesNo("LanEx's environment is missing: Windows no longer lists it.\n\n" +
+				"Repair LanEx sets it up again. Projects in your LanEx-Projects folder are " +
+				"untouched.\n\nDetails are in:\n" + logPath() + "\n\nRun Repair now?") {
+				if err := exec.Command(setup, "/REPAIR=1").Start(); err != nil {
+					logf("could not start Repair: %v", err)
+					showError("LanEx could not start Repair.\n\n" + err.Error() +
+						"\n\nRun Repair LanEx from the Start menu, or install LanEx again from:\n" + releasesURL)
+				}
+			}
+			os.Exit(1)
+		}
 		if askYesNo("LanEx's environment is missing: Windows no longer lists it.\n\n" +
 			"Install LanEx again to restore it. Projects in your LanEx-Projects folder are " +
 			"untouched.\n\nDetails are in:\n" + logPath() + "\n\nOpen the download page now?") {
@@ -206,6 +219,17 @@ func msgbox(text string, flags uint32) int32 {
 
 func showInfo(text string)  { msgbox(text, mbOK|mbIconInfo) }
 func showError(text string) { msgbox(text, mbOK|mbIconError) }
+// cachedSetupPath is the copy of LanEx-Setup.exe that Setup keeps for Repair
+// (the Start menu's "Repair LanEx" entry runs the same file with /REPAIR=1).
+func cachedSetupPath() string {
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), installDir, "installer-cache", "LanEx-Setup.exe")
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
 func askYesNo(text string) bool {
 	return msgbox(text, mbYesNo|mbIconError) == idYes
 }

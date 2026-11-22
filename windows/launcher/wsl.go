@@ -356,8 +356,26 @@ func openShell() (*exec.Cmd, error) {
 // Small feature, large trust payoff: it proves the projects are real files on
 // their own PC, not something locked inside a black box. \\wsl.localhost is the
 // modern share name (\\wsl$ is the pre-2021 alias).
+//
+// It opens the folder where New project saves, by the same rule as Setup's
+// Start-menu "LanEx Project Files" entry (lanex.iss DistroProjectPath) and the
+// server's platform_env.projects_dir: %USERPROFILE%\LanEx-Projects, or
+// ~/lanex-projects inside the distro when the Windows profile path has a space.
 func openProjectFiles() {
-	path := filepath.Join(`\\wsl.localhost\`+distroName, "home", appUser)
 	// explorer.exe exits non-zero even on success, so its error is not a signal.
-	_ = hiddenCmd("explorer.exe", path).Run()
+	_ = hiddenCmd("explorer.exe", projectFilesPath()).Run()
+}
+
+func projectFilesPath() string {
+	if home := os.Getenv("USERPROFILE"); home != "" && !strings.ContainsAny(home, " \t") {
+		dir := filepath.Join(home, "LanEx-Projects")
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			return dir
+		}
+	}
+	linuxHome := filepath.Join(`\\wsl.localhost\`+distroName, "home", appUser)
+	if st, err := os.Stat(filepath.Join(linuxHome, "lanex-projects")); err == nil && st.IsDir() {
+		return filepath.Join(linuxHome, "lanex-projects")
+	}
+	return linuxHome
 }
