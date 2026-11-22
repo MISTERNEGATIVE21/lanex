@@ -13,7 +13,7 @@ import { toast } from "./toast.js";
 import * as FS from "./flowstages.js";
 import { runSummary, fmtDur } from "./reportcard.js";
 
-const BASE_TITLE = document.title || "LanEx";
+const BASE_TITLE = (typeof document !== "undefined" && document.title) || "LanEx";
 let _result = null;          // the last run's result line, kept in the title until seen
 let _resultTimer = 0;
 
@@ -23,7 +23,9 @@ const designName = () => {
 };
 
 export const prefs = {
-  notify: () => safeStorage.get("ll.notifyRuns") === "1",
+  // On unless turned off (a 5 to 60 minute run should say when it is done);
+  // an earlier explicit "off" ("0") is kept.
+  notify: () => notifyPref(safeStorage.get("ll.notifyRuns")),
   chime: () => safeStorage.get("ll.runChime") === "1",
   // On unless turned off in the Run menu: pressing Run shows the run.
   showFlow: () => safeStorage.get("ll.showFlowOnRun") !== "0",
@@ -262,6 +264,38 @@ function notify(sum, kind) {
       n.close();
     };
   } catch (_e) { /* a browser without page notifications */ }
+}
+
+// The stored "Tell me when a run finishes" value as on/off: unset is on.
+// Pure (tested).
+export function notifyPref(stored) {
+  return stored !== "0";
+}
+
+// Pressing Run with notifications on and the browser not asked yet: ask now,
+// inside the click (browsers allow the question only on a user gesture, and
+// LanEx never asks unprompted). Asked once per browser profile; a "Block" is
+// the person's answer and turns the setting off.
+export function askNotifyOnRun() {
+  try {
+    if (!prefs.notify() || typeof Notification === "undefined") return;
+    if (Notification.permission !== "default" || safeStorage.get("ll.notifyAsked") === "1") return;
+    safeStorage.set("ll.notifyAsked", "1");
+    const p = Notification.requestPermission();
+    if (p && p.then) p.then((r) => { if (r === "denied") safeStorage.set("ll.notifyRuns", "0"); syncNotifyBox(); }).catch(() => {});
+  } catch (_e) { /* a browser without page notifications */ }
+}
+
+// The Run menu's checkbox shows what will happen: on, unless turned off or
+// blocked in the browser.
+export function notifyShownOn() {
+  const blocked = typeof Notification !== "undefined" && Notification.permission === "denied";
+  return prefs.notify() && !blocked;
+}
+
+function syncNotifyBox() {
+  const box = typeof document !== "undefined" && document.getElementById("run-pref-notify");
+  if (box) box.checked = notifyShownOn();
 }
 
 // Turn notifications on (from the Run menu: a click, so the browser may ask).

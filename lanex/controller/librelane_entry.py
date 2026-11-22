@@ -37,8 +37,32 @@ def _patch_librelane_container() -> None:
         pass
 
 
+def _name_the_container() -> None:
+    """Give LibreLane's container the name LanEx chose (``LANEX_CONTAINER_NAME``).
+
+    ``run_in_container`` names it ``str(uuid.uuid4())`` and prints the command
+    only to a buffered stdout that ``os.execlp`` throws away, so the name was
+    never known and Stop had to guess which container was the flow's. With the
+    name set here, Stop removes exactly this container (runner._kill_container).
+    """
+    import os
+    import re
+    import types
+
+    name = os.environ.get("LANEX_CONTAINER_NAME") or ""
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", name):
+        return
+    try:
+        import librelane.container
+
+        librelane.container.uuid = types.SimpleNamespace(uuid4=lambda: name)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def main() -> int:
     _patch_librelane_container()
+    _name_the_container()
     from librelane.__main__ import cli
     try:
         cli()

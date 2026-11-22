@@ -13,6 +13,7 @@ import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
 import * as FS from "./flowstages.js";
+import { askNotifyOnRun } from "./runend.js";
 
 const RECENT_KEY = "ll.recentDesigns";
 
@@ -178,13 +179,12 @@ export function setupSetup() {
 
   // Setup's own Run flow shows the run; the top-bar Run leaves you where you are.
   document.getElementById("btn-run")?.addEventListener("click", () => onRunClick({ show: true }));
-  document.getElementById("btn-cancel")?.addEventListener("click", () => api.cancelRun().catch(() => {}));
+  document.getElementById("btn-cancel")?.addEventListener("click", () => requestStop());
   // Global topbar Run/Stop: start the flow, or stop a running one, from any tab —
-  // no need to navigate back to Setup. Reuses the same start/cancel paths.
+  // no need to navigate back to Setup. Reuses the same start/stop paths.
   document.getElementById("btn-run-global")?.addEventListener("click", () => {
-    if (cancelStart()) return;   // a run is starting: stop it as soon as it has
-    if (state.status && state.status.running) { api.cancelRun().catch(() => {}); }
-    else { onRunClick({ show: false }); }
+    if (_start || (state.status && state.status.running)) requestStop();
+    else onRunClick({ show: false });
   });
   document.getElementById("btn-resume")?.addEventListener("click", () => api.resumeRun().catch(() => {}));
   document.getElementById("btn-preflight")?.addEventListener("click", () => renderPreflight());
@@ -819,14 +819,16 @@ export function lastLintErrors(designDir, store = safeStorage) {
 
 // ---------- Run ----------------------------------------------------------------
 //
-// A Run click answers at once: the button turns into Stop, Flow opens in a
-// "Starting the run…" state (unless the Run menu says to stay), and the start
-// request goes out in the same moment. The checks stay: the server refuses a
-// run whose folder is gone, whose path has spaces, whose PDK picker and config
-// disagree, or while another flow runs, and Flow says why with the way back.
-// Setup's "Ready to run?" check is used when it is fresh for these picks (a
-// blocker it found asks first); otherwise it runs beside the start and speaks
-// up only if it finds something.
+// A Run click answers at once: the button turns into Stop and Flow opens in a
+// "Starting the run…" state (unless the Run menu says to stay). Setup's "Ready
+// to run?" check is used when it is fresh for these picks; otherwise it runs
+// first ("Checking the config…"), and the start request goes out only after
+// it: a blocker it finds asks before anything starts, so there is never a run
+// folder and then "Stop the run?" (audit 1c). The server checks again (the
+// config through LibreLane's own loader, the top module, the clock port) and
+// refuses a run whose folder is gone, whose path has spaces, whose PDK picker
+// and config disagree, or while another flow runs; Flow says why with the way
+// back.
 
 // The run being started: { from, show, cancel, error } while the start
 // request is out (state.runStart is what Flow paints from).
@@ -859,6 +861,60 @@ export function cancelStart() {
   const g = document.getElementById("btn-run-global");
   if (g) { g.disabled = true; const s = g.querySelector("span"); if (s) s.textContent = "Stopping…"; }
   document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "stopping" } }));
+  return true;
+}
+
+// Stop pressed before the start request went out (during the check): nothing
+// started, so the page simply goes back to how it was.
+function abandonStart() {
+  _start = null;
+  state.runStart = null;
+  paintRunning(false);
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "cancelled" } }));
+}
+
+// A run older than this asks before it is stopped (audit G6): one stray click
+// on Stop used to throw away a long run. A run that just started stops at
+// once (pressing Run by mistake is undone in one click).
+export const STOP_CONFIRM_AFTER_MS = 30000;
+
+// Pure (tested). An unknown start time (a run started in another window, or
+// before this page was loaded) counts as old.
+export function stopNeedsConfirm(startedAt, now = Date.now()) {
+  if (!startedAt) return true;
+  return now - startedAt >= STOP_CONFIRM_AFTER_MS;
+}
+
+function runAge(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return s + " seconds";
+  const m = Math.round(s / 60);
+  return m < 90 ? m + " minutes" : (Math.round(m / 6) / 10) + " hours";
+}
+
+let _stopAsking = false;
+
+// Every Stop goes through here: the top-bar Stop, Setup's Stop, Flow's Stop
+// and the palette's "Stop the run". Resolves true when a stop was asked for.
+export async function requestStop() {
+  if (cancelStart()) return true;   // still starting: nothing to lose yet
+  if (!(state.status && state.status.running)) return false;
+  if (_stopAsking) return false;
+  if (stopNeedsConfirm(state.runStartedAt)) {
+    _stopAsking = true;
+    let ok = false;
+    try {
+      const { confirmDialog } = await import("./dialog.js");
+      const age = state.runStartedAt ? "It has been running for " + runAge(Date.now() - state.runStartedAt) + ". " : "";
+      ok = await confirmDialog({
+        title: "Stop the run?",
+        body: age + "Stopping ends the step it is on now. What it finished so far stays in the run folder, and you can resume from a finished stage later.",
+        confirmText: "Stop the run", cancelText: "Keep running", danger: true,
+      });
+    } finally { _stopAsking = false; }
+    if (!ok || !(state.status && state.status.running)) return false;
+  }
+  api.cancelRun().catch(() => {});
   return true;
 }
 
@@ -911,35 +967,31 @@ function startAccepted(tag) {
   if (s && s.cancel) api.cancelRun().catch(() => {});
 }
 
-async function confirmBlockers(blockers) {
+async function confirmBlockers(blockers, { quiet = false } = {}) {
   const { confirmDialog } = await import("./dialog.js");
   const ok = await confirmDialog({
     title: "Not everything is ready",
-    body: "Blockers: " + blockers.join("; ") +
+    body: "Blockers: " + blockers.join("; ").replace(/\.\s*$/, "") +
       ". Run anyway? The flow will likely stop at the first missing piece.",
     confirmText: "Run anyway", danger: true,
   });
-  if (!ok) toast.show("Run cancelled. Review the 'Ready to run?' checklist for details.", "warn");
+  if (!ok && !quiet) toast.show("Run cancelled. Review the 'Ready to run?' checklist for details.", "warn");
   return ok;
 }
 
-// The check that ran beside the start found blockers: the run is already
-// going, so ask whether to stop it.
-async function offerStopFor(blockers, tag) {
-  const live = () => state.status && state.status.running && (!tag || state.liveTag === tag);
-  if (!live()) return;
-  const { choiceDialog } = await import("./dialog.js");
-  const pick = await choiceDialog({
-    title: "Not everything is ready",
-    body: "The check that ran as the run started found: " + blockers.join("; ") +
-      ". The flow will likely stop at the first missing piece.",
-    choices: [{ label: "Stop the run", value: "stop", danger: true }, { label: "Let it run", value: "keep" }],
-  });
-  if (pick === "stop" && live()) api.cancelRun().catch(() => {});
+// A blocker LibreLane's own config loader found can't be run anyway: the run
+// would stop in its first second. Pure (tested).
+export function hardBlockers(pf) {
+  const chk = pf && pf.config_check;
+  return ((chk && chk.problems) || []).filter((p) => p.hard)
+    .map((p) => (p.message + (p.fix ? " " + p.fix : "")).trim());
 }
 
-async function onRunClick({ show = false, fixed = false } = {}) {
+async function onRunClick({ show = false, fixed = false, ack = false } = {}) {
   if (_start) return;   // one is already starting (the button is Stop)
+  // "Tell me when a run finishes" is on unless turned off: the browser asks
+  // for permission once, here, while the click still counts as the person's.
+  askNotifyOnRun();
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
     return;
@@ -963,13 +1015,20 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     if (pick === "show") { (await import("./nav.js")).go("ide"); return; }
     if (pick !== "run") return;
   }
-  // Preflight: catch missing tools / PDK before a long run fails half-way.
-  // A fresh result for these picks is used as is: a blocker it already knows
-  // asks before anything starts. Without one, the check runs beside the start.
+  // Preflight: catch missing tools / PDK / a config LibreLane refuses before a
+  // long run fails half-way. A fresh result for these picks is used as is: a
+  // blocker it already knows asks before anything starts. Without one, the
+  // check runs first (below), still before the start request.
   const fresh = freshPreflight();
   const known = runBlocker(fresh);
   if (known && known.kind === "mismatch" && !fixed) { await offerPdkFix(known.mismatch, show); return; }
-  if (known && known.kind === "blockers" && !(await confirmBlockers(known.blockers))) return;
+  let acked = ack;
+  if (known && known.kind === "blockers" && !ack) {
+    const hard = hardBlockers(fresh);
+    if (hard.length) { toast.show("Run not started: " + hard.join(" "), "error"); return; }
+    if (!(await confirmBlockers(known.blockers))) return;
+    acked = true;
+  }
   const payload = collectRunPayload();
   const rsel = document.getElementById("run-resume-from");
   if (rsel && rsel.value && rsel.dataset.tag) {
@@ -987,14 +1046,53 @@ async function onRunClick({ show = false, fixed = false } = {}) {
   const from = currentTab();
   if (showFlow) go("pipeline", {}, { link: false });
   beginStart(from, showFlow);
-  const checkP = fresh ? null : preflightNow();
-  if (checkP) checkP.catch(() => {});
+  if (!fresh) {
+    // No fresh check: run it now, before the start request (it reads the
+    // config through LibreLane, a second or two). Stop meanwhile starts nothing.
+    const s = _start;
+    s.checking = true;
+    document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "checking" } }));
+    let pf = null;
+    try { pf = await preflightNow(); } catch (_e) { pf = null; }
+    s.checking = false;
+    if (_start !== s) return;
+    if (s.cancel) { abandonStart(); return; }
+    const b = runBlocker(pf);
+    if (b && b.kind === "mismatch" && !fixed) {
+      startRefused("The PDK picker and the config disagree.", { mismatch: true });
+      await offerPdkFix(b.mismatch, show);
+      return;
+    }
+    if (b && b.kind === "blockers" && !acked) {
+      const hard = hardBlockers(pf);
+      if (hard.length) { startRefused(hard.join(" ")); return; }
+      const ok = await confirmBlockers(b.blockers, { quiet: showFlow });
+      if (_start !== s) return;
+      if (s.cancel) { abandonStart(); return; }
+      if (!ok) { startRefused("Not started. " + b.blockers.join(" ")); return; }
+      acked = true;
+    }
+    // The flow the config names is known now.
+    payload.flow = (flowOf() || {}).name || null;
+    document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "starting" } }));
+  }
+  if (acked) payload.checks_ack = true;
   try {
     const res = await api.startRun(payload);
     if (!res.ok || res.started === false) {
       if (res.pdk_mismatch && !fixed) {
         startRefused(res.reason || "The PDK picker and the config disagree.", { mismatch: true });
         await offerPdkFix(res.pdk_mismatch, show);
+        return;
+      }
+      // The server's own check found something the page's check had not seen
+      // (a one-off setting, a file changed since): a hard finding stops here,
+      // a top-module or clock finding asks, like the page's check does.
+      const chk = res.config_check;
+      if (chk && !chk.blocking && (chk.problems || []).length && !acked) {
+        const lines = chk.problems.map((p) => (p.message + (p.fix ? " " + p.fix : "")).trim());
+        startRefused(res.reason || lines.join(" "));
+        if (await confirmBlockers(lines, { quiet: true })) onRunClick({ show, fixed, ack: true });
         return;
       }
       startRefused(res.reason || res.error || "unknown");
@@ -1025,13 +1123,6 @@ async function onRunClick({ show = false, fixed = false } = {}) {
       toast.show((payload.tag ? "Run " + payload.tag + " started" : "The run started") +
         ". It keeps going in the background; the status bar shows how far it is.", "info", 7000,
         { label: "Watch it", run: () => go("pipeline") });
-    }
-    // The check that ran beside the start: say so only if it found something.
-    if (checkP) {
-      checkP.then((pf) => {
-        const b = runBlocker(pf);
-        if (b && b.kind === "blockers" && b.blockers.length) offerStopFor(b.blockers, tag);
-      }).catch(() => {});
     }
   } catch (ex) {
     // The server refused (folder gone, spaces in the path, another flow
@@ -1090,14 +1181,26 @@ export function collectRunPayload() {
     extras,
     mode: state.mode,
     run_mode: state.runMode,
+    // The flow the config names (meta.flow, else Classic), as the check read
+    // it; the server resolves it the same way and refuses an unknown name.
+    flow: (flowOf() || {}).name || null,
   };
 }
 
-// The last step of a stage in the flow that runs (Classic unless told), for --to.
+// The flow the open project's config names, as the last check read it
+// (preflight.js keeps it per project), or null before that / on an error.
+function flowOf() {
+  const f = state.flowInfo;
+  return f && f.dir === state.designDir && !f.error && f.name ? f : null;
+}
+
+// The last step of a stage in the flow that runs (the config's flow, as the
+// check read it; Classic until then), for --to.
 function lastStepOf(stageId) {
   if (!stageId) return "";
-  const flow = (state.flows || []).find((f) => f.name === (state.flowName || "Classic"));
-  const ids = (flow && flow.steps) || [];
+  const known = flowOf();
+  const flow = (state.flows || []).find((f) => f.name === ((known && known.name) || "Classic"));
+  const ids = (known && known.steps && known.steps.length ? known.steps : null) || (flow && flow.steps) || [];
   const stages = FS.stagesOf(ids.map((id) => ({ id })));
   let last = "";
   stages.forEach((s, i) => { if (s === stageId) last = ids[i]; });
@@ -1139,8 +1242,40 @@ function wireRunMenu() {
     });
   }
   pref("run-pref-show", "ll.showFlowOnRun", null, true);
-  pref("run-pref-notify", "ll.notifyRuns", async (on) => (await import("./runend.js")).enableNotifications(on));
+  // On unless turned off (or blocked in the browser).
+  pref("run-pref-notify", "ll.notifyRuns", async (on) => (await import("./runend.js")).enableNotifications(on), true);
+  const nb = document.getElementById("run-pref-notify");
+  if (nb) import("./runend.js").then((m) => { nb.checked = m.notifyShownOn(); }).catch(() => {});
   pref("run-pref-chime", "ll.runChime");
+  // Which flow a run uses: one small line in the menu, above "Run up to".
+  const lane = sel && sel.closest(".menu-field")?.previousElementSibling;
+  if (lane && !document.getElementById("run-flow-note")) {
+    const note = document.createElement("p");
+    note.className = "menu-note";
+    note.id = "run-flow-note";
+    lane.before(note);
+    const hdr = document.createElement("div");
+    hdr.className = "menu-lane";
+    hdr.textContent = "Flow";
+    note.before(hdr);
+  }
+  paintFlowNote();
+  document.addEventListener("g:flow_known", () => { paintFlowNote(); paintRunLabel(); });
+}
+
+// "Classic (the config names no flow)" or "Chip, from config.yaml (meta.flow)".
+export function flowNoteText(flow) {
+  if (!flow || !flow.name) return "Classic, until the project's config is read.";
+  if (flow.error) return flow.error;
+  if (flow.source === "config") return flow.name + ", from " + (flow.config || "the config") + " (meta.flow).";
+  if (flow.source === "request") return flow.name + ".";
+  return flow.name + " (the config names no other flow).";
+}
+
+function paintFlowNote() {
+  const el = document.getElementById("run-flow-note");
+  const f = state.flowInfo;
+  if (el) el.textContent = flowNoteText(f && f.dir === state.designDir ? f : null);
 }
 
 let _resumeTok = 0;
@@ -1201,7 +1336,8 @@ function paintRunLabel() {
   const span = g.querySelector("span");
   if (span) span.textContent = rst ? "Resume from " + rst.label + (st ? " to " + st.label : "") : st ? "Run to " + st.label : "Run";
   g.classList.toggle("is-partial", !!(st || rst));
-  g.dataset.tip = rst ? "A new run that reuses " + rsel.dataset.tag + "'s results up to " + rst.label + " (r)" : "Run the flow on this project (r)";
+  g.dataset.tip = rst ? "A new run that reuses " + rsel.dataset.tag + "'s results up to " + rst.label + " (r)"
+    : "Run the " + ((flowOf() || {}).name || "Classic") + " flow on this project (r)";
 }
 
 export function paintRunning(running) {
@@ -1216,7 +1352,7 @@ export function paintRunning(running) {
   if (running) {
     if (b) b.disabled = true;
     if (c) { c.disabled = false; c.hidden = false; }
-    if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); g.dataset.tip = "Stop the run (r)"; }
+    if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); g.dataset.tip = "Stop the run"; }
     pill?.classList.remove("pill-pending");
     pill?.classList.add("pill-running");
     if (pill) pill.textContent = "running";

@@ -968,13 +968,16 @@ def h_preflight(handler: Any) -> None:
     # design-load AND PDK change) isn't a multi-second serial wait. The tools
     # probe is also TTL-cached since it doesn't change between those events.
     from concurrent.futures import ThreadPoolExecutor
-    _pool = ThreadPoolExecutor(max_workers=2)
+    _pool = ThreadPoolExecutor(max_workers=3)
     _pdk_future = _pool.submit(
         (lambda: pdk_mod.check_pdk_ready(pdk, scl or None, run_mode)) if pdk
         else (lambda: {"ready": False, "missing": ["no PDK selected"]})
     )
     _tools_future = _pool.submit(_preflight_container_tools if run_mode == "container"
                                  else _preflight_tools_cached)
+    # The config as LibreLane loads it, the top module and the clock port
+    # (audit 1c). Needs the PDK answer, so it waits on that future.
+    _cfg_future = _pool.submit(_preflight_config, design_dir, pdk, scl, run_mode, _pdk_future)
 
     # 1) Design folder + config + sources.
     design_ok = bool(design_dir) and Path(design_dir).is_dir()
@@ -1080,8 +1083,20 @@ def h_preflight(handler: Any) -> None:
         tools_info = _tools_future.result()
     except Exception:
         tools_info = {}
+    try:
+        cfg_res = _cfg_future.result()
+    except Exception:
+        _log.debug("preflight config check failed", exc_info=True)
+        cfg_res = None
     finally:
         _pool.shutdown(wait=False)
+    if cfg_res and pdk_block.get("mismatch"):
+        # LibreLane would load the config's PDK, not the picked one: the
+        # mismatch row says so; the config is checked once they agree.
+        cfg_res["check"] = None
+    if cfg_res and cfg_res.get("check") and design_block["ok"]:
+        from ..controller import configcheck
+        blockers.extend(configcheck.blockers_text(cfg_res["check"]))
 
     if run_mode == "container":
         engine = tools_info.get("container") or tools_mod.container_engine()
@@ -1151,8 +1166,32 @@ def h_preflight(handler: Any) -> None:
             "pdk": pdk_block,
             "tools": tools_block,
             "resources": resources_block,
+            # The flow the run uses (the config's meta.flow, else Classic) and
+            # what LibreLane's own loader said about the config.
+            "flow": (cfg_res or {}).get("flow"),
+            "config_check": (cfg_res or {}).get("check"),
         },
     )
+
+
+def _preflight_config(design_dir: Optional[str], pdk: Optional[str], scl: Optional[str],
+                      run_mode: str, pdk_future: Any) -> Optional[Dict[str, Any]]:
+    """Preflight's config row: ``{flow, check}`` (configcheck), or None
+    without a project or config."""
+    if not design_dir or not Path(design_dir).is_dir():
+        return None
+    cf = _resolve_config_file(design_dir)
+    if cf is None:
+        return None
+    from ..controller import configcheck
+    flow = configcheck.flow_info([str(cf)])
+    try:
+        pf = pdk_future.result()
+    except Exception:
+        pf = None
+    chk = configcheck.check(design_dir=design_dir, config_files=[str(cf)], pdk=pdk, scl=scl,
+                            pdk_ready=pf, run_mode=run_mode, flow=flow)
+    return {"flow": flow, "check": chk}
 
 
 def h_set_design_dir(handler: Any) -> None:
@@ -1297,7 +1336,7 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
     sized = runresources.plan(
         design_dir=design_dir,
         config_files=([str(_cf)] if _cf else []) + list(extra_config_files),
-        flow_factory=_flow_factory_or_none(body.get("flow") or "Classic"),
+        flow_factory=_run_flow_cls(design_dir, body.get("flow")),
         overrides=overrides, pdk=pdk)
     return {
         "pdk": pdk,
@@ -1315,6 +1354,17 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
 def _flow_factory_or_none(name: str) -> Any:
     try:
         return _flow_factory(name)
+    except Exception:
+        return None
+
+
+def _run_flow_cls(design_dir: str, requested: Optional[str]) -> Any:
+    """The Flow class a run of the project's config uses (its meta.flow, else
+    Classic, or *requested*), or None when that can't be told."""
+    try:
+        from ..controller import configcheck
+        cf = _resolve_config_file(design_dir)
+        return configcheck.resolve_flow([str(cf)] if cf else [], requested)["cls"]
     except Exception:
         return None
 
@@ -1521,16 +1571,18 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     if busy:
         return busy, 409
     try:
-        from librelane.flows import Flow
-        flow_name = body.get("flow") or "Classic"
-        flow_factory = Flow.factory.get(flow_name)
-        if flow_factory is None:
-            flows = list(getattr(Flow.factory, "_FlowFactory__registry", {}).values()) or \
-                    list(getattr(Flow.factory, "_registry", {}).values())
-            if flows:
-                flow_factory = flows[0]
-            else:
-                return f"Flow '{flow_name}' not found", 500
+        from ..controller import configcheck
+        # The flow a terminal run of this config uses: the config's meta.flow
+        # (with its substituted steps), else Classic; a flow the request names
+        # wins. An unknown name is refused with the real names, never swapped
+        # for another flow (audit G12). ``flow_cli`` is the -f to pass on
+        # (None when the config decides, as in a terminal).
+        flowsel = configcheck.resolve_flow([str(config_file)], body.get("flow") or None)
+        if flowsel["error"]:
+            return {"ok": False, "started": False, "reason": flowsel["error"], "flow_error": True}, 200
+        flow_factory = flowsel["cls"]
+        flow_name = flowsel["name"]
+        flow_cli = flowsel["cli"]
         # PDK / SCL are construction-time options, not plain config variables.
         # The SPA folds the picker selection into ``overrides``; pull them back
         # out so they reach the Flow constructor as dedicated kwargs.
@@ -1560,6 +1612,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         # un-downloadable) so the user gets a clear message up front instead of a
         # cryptic network/ciel traceback half-way through the flow.
         pdk_root = os.environ.get("PDK_ROOT") or None
+        pf: Optional[Dict[str, Any]] = None
         if pdk:
             pf = pdk_mod.check_pdk_ready(pdk, scl or None, run_mode)
             pdk_root = pf.get("pdk_root") or pdk_root
@@ -1574,6 +1627,18 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             files=list(body.get("sources") or []) + list(body.get("extras") or []))
         if ws_err:
             return ws_err, 400
+        # Before anything starts (no run folder yet): LibreLane's own loader
+        # reads the config with this run's settings, and the top module and
+        # clock port are looked up in the sources (audit 1c). A config
+        # LibreLane refuses never starts; a top-module or clock finding starts
+        # only when the person chose "Run anyway" (checks_ack).
+        chk = configcheck.check(
+            design_dir=design_dir, config_files=[str(config_file)] + extra_config_files,
+            pdk=pdk, scl=scl, pdk_ready=pf, run_mode=run_mode, overrides=overrides,
+            extra_sources=body.get("sources") or None, flow=flowsel, reuse_failures=False)
+        if chk["blocking"] or (chk["problems"] and not body.get("checks_ack")):
+            return {"ok": False, "started": False, "config_check": chk,
+                    "reason": " ".join(configcheck.blockers_text(chk))}, 200
         state_rel = None
         if initial_state:
             try:
@@ -1619,7 +1684,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             from ..controller import manualcmd
             gui_meta["cli_command"] = manualcmd.cli_command_for(
                 design_dir=design_dir, config_file=str(config_file),
-                flow=flow_name, pdk=pdk, scl=scl, pdk_root=pdk_root,
+                flow=flow_cli, pdk=pdk, scl=scl, pdk_root=pdk_root,
                 run_mode=run_mode, tag=body.get("tag") or None,
                 frm=body.get("frm") or None, to=body.get("to") or None,
                 skip=body.get("skip") or [], overrides=run_overrides,
@@ -1647,7 +1712,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             extra_config_files=extra_config_files or None,
             step_mode=(body.get("mode") == "semi"),
             run_mode=run_mode,
-            flow_name=flow_name,
+            flow_name=flow_cli,
             gui_meta=gui_meta,
             initial_state=str(Path(initial_state).resolve()) if initial_state else None,
         )
@@ -1661,6 +1726,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             result["config_hash"] = gui_meta.get("config_hash")
             result["command"] = gui_meta.get("cli_command")
             result["resources"] = gui_meta.get("resources")
+            result["flow"] = flow_name
         return result, 200
     except Exception as ex:
         _log.exception("run start failed")
@@ -1769,9 +1835,16 @@ def h_cli_command(handler: Any) -> None:
             pdk_root = pf.get("pdk_root") or pdk_root
     except Exception:
         pass
+    # The -f a run would pass: none when the config's own meta.flow decides.
+    try:
+        from ..controller import configcheck
+        _fl = configcheck.flow_info([str(config_file)], body.get("flow") or None)
+        cli_flow = None if _fl["error"] else _fl["cli"]
+    except Exception:
+        cli_flow = None
     cmd = manualcmd.cli_command_for(
         design_dir=design_dir, config_file=str(config_file),
-        flow=body.get("flow") or "Classic", pdk=pdk, scl=scl, pdk_root=pdk_root,
+        flow=cli_flow, pdk=pdk, scl=scl, pdk_root=pdk_root,
         run_mode=run_mode, tag=body.get("tag") or None,
         frm=body.get("frm") or None, to=body.get("to") or None,
         skip=body.get("skip") or [], overrides={**asm["overrides"], **asm["threads"]},
@@ -2788,6 +2861,26 @@ def h_run_gui_meta(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _live_run_meta(tag: Optional[str]) -> Optional[Tuple[Dict[str, Any], str]]:
+    """``(gui_meta, run_dir)`` of the runner's current (or just ended) run
+    when it is *tag*, else None. Any project: the person may have opened
+    another project while the run goes on (the Console journal still asks
+    for the run it started)."""
+    if not tag:
+        return None
+    try:
+        from ..server.app import get_runner
+        r = get_runner()
+        rd = r.run_dir
+        meta = r.gui_meta
+        if not rd or not meta or Path(rd).name != tag:
+            return None
+        meta.setdefault("tag", tag)
+        return meta, str(rd)
+    except Exception:
+        return None
+
+
 def h_run_reproduce(handler: Any) -> None:
     """How to rerun a run headless without LanEx (Console drawer, Command tab):
     the recorded command, config, PDK version, image digest and LibreLane
@@ -2795,16 +2888,35 @@ def h_run_reproduce(handler: Any) -> None:
     from ..controller import manualcmd
     tag = _query_param(handler.path, "tag")
     run_dir = _resolve_run_dir(tag)
-    if run_dir is None:
+    # The run the runner holds right now (or just ended): its record exists
+    # from the start request on. The page hears a container run's name in its
+    # first event, before LibreLane creates the folder, and gui-run.json is
+    # written only when the first step starts; asking in between (the Console
+    # journal and Command tab do) gave a 404 or "not started from LanEx".
+    live = _live_run_meta(tag)
+    if run_dir is None and live is None:
         _respond(handler, "run not found", 404)
         return
+
+    if run_dir is None and live is not None and Path(live[1]).is_dir():
+        run_dir = Path(live[1])   # the live run, in a project not open now
+
     def _load(name: str) -> Optional[Dict[str, Any]]:
+        if run_dir is None:
+            return None
         p = run_dir / name
         try:
             return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
         except Exception:
             return None
-    info = manualcmd.reproduce_info(_load("gui-run.json") or {}, _load("resolved.json"), str(run_dir))
+    meta = _load("gui-run.json")
+    pending = False
+    if meta is None and live is not None:
+        meta, pending = live[0], True
+    info = manualcmd.reproduce_info(meta or {}, _load("resolved.json"),
+                                    str(run_dir) if run_dir is not None else live[1])
+    if pending:
+        info["pending"] = True
     info["script"] = manualcmd.reproduce_script(info)
     _respond(handler, info)
 
@@ -3367,12 +3479,15 @@ def _config_file_for(design_dir: str) -> Optional[Path]:
 
 
 def _flow_factory(name: str) -> Any:
+    """The registered flow called *name*. An unknown name raises with the real
+    names: it used to fall back to the first registered flow (Optimizing),
+    silently running something else (audit G12)."""
     from librelane.flows import Flow
     f = Flow.factory.get(name)
     if f is None:
-        regs = list(getattr(Flow.factory, "_FlowFactory__registry", {}).values()) or \
-               list(getattr(Flow.factory, "_registry", {}).values())
-        f = regs[0] if regs else None
+        from ..controller import configcheck
+        raise ValueError(f"LibreLane has no flow called '{name}'. Its flows are: "
+                         + ", ".join(configcheck.flow_names()) + ".")
     return f
 
 
@@ -4824,6 +4939,10 @@ def _apply_fix(handler: Any, body: Dict[str, Any]) -> None:
         "mode": body.get("mode") or "auto", "tag": p["tag"],
         "overrides": dict(overrides, PDK=p["parent"]["pdk"], STD_CELL_LIBRARY=p["parent"]["scl"]),
         "sources": p["sources"], "extras": p["extras"], "frm": r["step"] if r else None, "to": body.get("to") or None,
+        # A run resumed from a finished stage reuses the parent's synthesis:
+        # the top-module/clock reading doesn't hold it up (a config LibreLane
+        # refuses still does; see _start_run).
+        "checks_ack": bool(r) or bool(body.get("checks_ack")),
     }
     state = str(Path(design_dir) / r["state"]) if r and r.get("state") else None
     data, st = _start_run(run_body, initial_state=state, branched_from=branch.branch_meta(p) if r else None)

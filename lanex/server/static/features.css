@@ -3,8 +3,10 @@
    space, radius, and shadow comes from styles.css :root. No hardcoded hex. */
 
 /* ---- Toasts (bottom-right; class-styled, dismissable) --------------------- */
+/* Above the status bar, never on it: the bar's run progress and the "Not a
+   sign-off tool" notice stay readable while a toast is up (audit 4.2). */
 .toast-host {
-  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
+  position: fixed; right: var(--s-4); bottom: calc(var(--status-h, 30px) + var(--s-3)); z-index: var(--z-toast);
   display: flex; flex-direction: column; gap: var(--s-2);
   max-width: min(380px, calc(92vw / var(--ll-zoom, 1)));
 }

@@ -249,7 +249,7 @@ async function paintCommand() {
   try { payload = (await import("./setup.js")).collectRunPayload(); } catch (_e) {}
   const [next, rep] = await Promise.all([
     api.cliCommand({
-      flow: "Classic", pdk: state.selectedPdk || undefined, scl: state.selectedScl || undefined,
+      flow: payload.flow || undefined, pdk: state.selectedPdk || undefined, scl: state.selectedScl || undefined,
       run_mode: state.runMode, frm: payload.frm || undefined, to: payload.to || undefined,
       skip: payload.skip || [], overrides: payload.overrides || {},
     }).catch((e) => ({ error: e.message })),

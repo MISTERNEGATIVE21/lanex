@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -337,7 +338,8 @@ def test_reproduce_script_from_an_imported_run_cannot_run_extra_commands(tmp_pat
             continue
         words = shlex.split(line)
         # Every command line is one of the script's own, with data only as quoted words.
-        assert words[0] in ("set", "cd", "echo", "export", "librelane"), line
+        assert words[0] in ("set", "cd", "echo", "export", "librelane", "[") or \
+            re.match(r"^(PROJECT_DIR|sum)=", line), line
     run_line = [l for l in script.splitlines() if l.startswith("librelane")]
     assert len(run_line) == 1
     words = shlex.split(run_line[0])
@@ -345,8 +347,14 @@ def test_reproduce_script_from_an_imported_run_cannot_run_extra_commands(tmp_pat
     assert words[:3] == ["librelane", "--dockerized", "config.json;"] and "|" in words
     assert "'config.json;'" in run_line[0] and "'|'" in run_line[0]
     assert "img; id" not in script.replace("'img; id'", "")
-    cd = [l for l in script.splitlines() if l.startswith("cd ")][0]
-    assert shlex.split(cd)[1] == "/home/u/my chip's \"files\" é"
+    assert [l for l in script.splitlines() if l.startswith("cd ")] == ['cd "$PROJECT_DIR"']
+    pd = [l for l in script.splitlines() if l.startswith("PROJECT_DIR=")][0]
+    # The recorded folder is the default, as one single-quoted word.
+    assert shlex.split(pd) == ["PROJECT_DIR=${PROJECT_DIR:-/home/u/my chip's \"files\" é}"]
+    if shutil.which("bash"):
+        got = subprocess.run(["bash", "-c", pd + '\nprintf %s "$PROJECT_DIR"'], capture_output=True, text=True,
+                             env={"PATH": "/usr/bin:/bin"})
+        assert got.stdout == "/home/u/my chip's \"files\" é"
     if shutil.which("bash"):
         assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0
 

@@ -135,57 +135,68 @@ def _relativize_to(paths: Optional[Sequence[str]], base: Path) -> List[str]:
     return out
 
 
-def _containers_mounting(engine: str, design_dir: str) -> List[str]:
-    """IDs of running containers executing a flow on *design_dir*.
+def new_container_name() -> str:
+    """A name for one LibreLane container of a run, unique per invocation.
 
-    The cancel path uses this to find the LibreLane container when its name is
-    unknown (librelane 3.0.4 never echoes the ``--name`` it generates). Two
-    signals identify this run's container, either suffices:
+    LibreLane 3.0.4 names its container with a fresh ``uuid4`` and never
+    prints it (the echo is lost in the buffered stdout before ``exec``), so
+    Stop used to look for "any container that mounts the design folder" and
+    removed viewer and simulation containers of the same project with it.
+    LanEx now picks the name itself (``LANEX_CONTAINER_NAME``, applied by
+    ``librelane_entry``) and Stop removes exactly that container."""
+    import uuid
 
-    - a bind mount whose Source IS the design dir (librelane mounts the design
-      dir itself when it lies outside the home tree, e.g. under /tmp);
-    - the container's ``Config.WorkingDir`` == the design dir. This is the one
-      that fires in the COMMON layout: for a design under the user's home,
-      librelane mounts the whole home directory (Mounts shows ``/home/user``,
-      never the design dir), so a mount-only match silently finds nothing and
-      a "cancelled" flow keeps running — proven live. The workdir is set to
-      the design dir in every ``--dockerized`` invocation and pins exactly
-      this design, so the match stays surgical.
-    """
+    return "lanex-flow-" + uuid.uuid4().hex[:16]
+
+
+# Container names Docker and Podman accept (and nothing a shell would split).
+CONTAINER_NAME_RX = r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}"
+
+
+def _install_subprocess_patch() -> None:
+    """Record every process the in-process flow starts.
+
+    Every EDA tool of a local run is started by LibreLane's
+    ``Step.run_subprocess`` (with a ``_popen_callable``, psutil.Popen by
+    default). Wrapping it lets Stop end exactly the flow's own process trees:
+    the server's other children (KLayout or GTKWave windows, a simulation, a
+    Console command, a Tools install) are never touched."""
+    with _PATCH_LOCK:
+        if "run_subprocess" in _ORIG_PROGRESS:
+            return
+        try:
+            import psutil
+            from librelane.steps.step import Step
+        except Exception:  # pragma: no cover - librelane missing
+            return
+        orig = Step.run_subprocess
+        _ORIG_PROGRESS["run_subprocess"] = orig
+
+        def run_subprocess(self: Any, cmd: Any, *args: Any, **kwargs: Any):
+            r = _ACTIVE_RUNNER
+            if r is None:
+                return orig(self, cmd, *args, **kwargs)
+            base = kwargs.pop("_popen_callable", None) or psutil.Popen
+
+            def tracked(*pa: Any, **pk: Any):
+                p = base(*pa, **pk)
+                r._track_flow_proc(p)
+                return p
+
+            return orig(self, cmd, *args, _popen_callable=tracked, **kwargs)
+
+        Step.run_subprocess = run_subprocess  # type: ignore[assignment]
+
+
+def _process_tree(pid: int) -> List[Any]:
+    """*pid* and every process under it, as psutil objects ([] if gone)."""
     try:
-        ps = subprocess.run(
-            [engine, "ps", "-q"], capture_output=True, text=True, timeout=10
-        )
-        ids = ps.stdout.split()
-    except Exception:  # pragma: no cover - engine/platform dependent
-        return []
-    want = None
-    try:
-        want = Path(design_dir).resolve()
+        import psutil
+
+        p = psutil.Process(pid)
+        return [p] + p.children(recursive=True)
     except Exception:
         return []
-    matches: List[str] = []
-    for cid in ids:
-        try:
-            ins = subprocess.run(
-                [engine, "inspect", "--format",
-                 "{{.Config.WorkingDir}}\t{{json .Mounts}}", cid],
-                capture_output=True, text=True, timeout=10,
-            ).stdout.strip()
-            workdir, _, mounts_json = ins.partition("\t")
-            if workdir and want in (Path(workdir), Path(workdir).resolve()):
-                matches.append(cid)
-                continue
-            import json as _json
-            mounts = _json.loads(mounts_json) if mounts_json else []
-            for m in mounts or []:
-                src = str((m or {}).get("Source", ""))
-                if src and Path(src).resolve() == want:
-                    matches.append(cid)
-                    break
-        except Exception:
-            continue
-    return matches
 
 
 def _install_progress_patch() -> None:
@@ -267,7 +278,15 @@ class FlowRunner:
         self._run_mode = "local"
         self._flow_name: Optional[str] = None
         self._container_proc: Optional[subprocess.Popen] = None
+        # The name LanEx gave this run's current container (new_container_name),
+        # and how to reach the engine that runs it (path + sg wrap).
         self._container_name: Optional[str] = None
+        self._container_engine: Optional[str] = None
+        self._container_sg = False
+        # Local mode: the processes LibreLane started for this flow
+        # (_install_subprocess_patch). Stop ends these and nothing else.
+        self._flow_procs: List[Any] = []
+        self._flow_procs_lock = threading.Lock()
         # container step-by-step bookkeeping: one `--only <step>` container
         # invocation per step, resuming the same run tag. ``_cstep`` holds the
         # ordered step ids + the saved invocation args; ``_awaiting_next`` is set
@@ -309,6 +328,12 @@ class FlowRunner:
         return self._run_dir
 
     @property
+    def gui_meta(self) -> Optional[Dict[str, Any]]:
+        """What LanEx recorded about how this run was started (the future
+        ``gui-run.json``), available before the run folder exists."""
+        return dict(self._gui_meta) if self._gui_meta else None
+
+    @property
     def step_statuses(self) -> Dict[str, str]:
         return dict(self._step_statuses)
 
@@ -326,7 +351,7 @@ class FlowRunner:
         # The running step is killed below (its process and the container), so
         # the run ends now, not after the step.
         self._emit(EventType.INFO, {"message": "stop requested: ending the current step now"})
-        self._kill_child_processes()
+        self._kill_flow_processes()
         self._kill_container()
         # Container step-by-step paused between steps: no live process to kill, so
         # finalize the run here (otherwise it'd hang "running" forever).
@@ -337,57 +362,42 @@ class FlowRunner:
             self._emit(EventType.FLOW_DONE, {"tag": self._run_dir or "", "cancelled": True})
 
     def _kill_container(self) -> None:
-        """Force-remove this run's LibreLane container, if one is running.
+        """Force-remove this run's LibreLane container, and no other.
 
         Killing the host-side processes is NOT enough: terminating the
         ``docker run`` client does not stop the container, and the in-container
         librelane runs as PID 1, which ignores an unhandled SIGTERM — so a
         "cancelled" containerized flow kept executing to completion (proven
-        live). Two removal paths, both best-effort and cross-engine:
-
-        - By NAME, when the log parser captured librelane's ``docker run --rm
-          --name <uuid>`` echo. LibreLane 3.0.4 does not print that line (its
-          stdout shows only "Running containerized command:"), so the name is
-          usually unknown.
-        - By MOUNT DISCOVERY otherwise: list running containers and force-remove
-          any that bind-mount this run's design directory. Matching on the
-          design-dir mount keeps this surgical — a container belonging to a
-          different design (or a different tool entirely) can never match.
+        live). The container carries the name LanEx gave it
+        (:func:`new_container_name`), so it is removed by that name. Containers
+        of the same project that are not this flow (a KLayout or GTKWave
+        viewer, a simulation) are never matched: an earlier version removed
+        every container mounting the design folder, viewers included.
         """
-        proc = self._container_proc
-        if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-        engines = [e for e in (shutil.which("docker"), shutil.which("podman")) if e]
-        if not engines:
-            return
         name = self._container_name
+        if not name:
+            return
+        if self._container_engine:
+            engines = [self._container_engine]
+        else:
+            engines = [e for e in (shutil.which("docker"), shutil.which("podman")) if e]
         for engine in engines:
-            if name:
+            argv = [engine, "rm", "-f", name]
+            if self._container_sg:
                 try:
-                    subprocess.run(
-                        [engine, "rm", "-f", name],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=10,
-                    )
-                except Exception:  # pragma: no cover - engine/platform dependent
+                    from . import tools
+                    argv = tools.sg_wrap_argv(argv)
+                except Exception:
                     pass
-            design_dir = self._design_dir_of_run()
-            if not design_dir:
-                continue
-            for cid in _containers_mounting(engine, design_dir):
-                try:
-                    subprocess.run(
-                        [engine, "rm", "-f", cid],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=10,
-                    )
-                except Exception:  # pragma: no cover - engine/platform dependent
-                    pass
+            try:
+                subprocess.run(
+                    argv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+            except Exception:  # pragma: no cover - engine/platform dependent
+                pass
 
     def _design_dir_of_run(self) -> Optional[str]:
         """The design dir this run mounts (parent of ``runs/<tag>``), resolved.
@@ -403,22 +413,63 @@ class FlowRunner:
         except Exception:
             return None
 
-    def _kill_child_processes(self) -> None:
-        """Best-effort, cross-platform termination of EDA subprocesses."""
+    def _track_flow_proc(self, proc: Any) -> None:
+        """Remember a process the in-process flow started (finished ones are
+        dropped as new ones come, so the list stays short)."""
+        with self._flow_procs_lock:
+            alive = []
+            for p in self._flow_procs:
+                try:
+                    if p.is_running():
+                        alive.append(p)
+                except Exception:
+                    pass
+            alive.append(proc)
+            self._flow_procs = alive
+
+    def _flow_process_targets(self) -> List[Any]:
+        """This flow's own processes and everything under them: the tools a
+        local run started, or the container client (with the ``librelane
+        --dockerized`` entry and an ``sg`` wrapper) of a container run. Never
+        the server's other children."""
+        seen: Dict[int, Any] = {}
+        with self._flow_procs_lock:
+            roots = list(self._flow_procs)
+        pids = []
+        for p in roots:
+            try:
+                if p.is_running():
+                    pids.append(p.pid)
+            except Exception:
+                pass
+        proc = self._container_proc
+        if proc is not None and proc.poll() is None:
+            pids.append(proc.pid)
+        for pid in pids:
+            for q in _process_tree(pid):
+                seen.setdefault(q.pid, q)
+        return list(seen.values())
+
+    def _kill_flow_processes(self) -> None:
+        """End the flow's own process trees (SIGTERM, then SIGKILL after 3 s).
+
+        Only what this run started is touched (see
+        :meth:`_flow_process_targets`). An earlier version killed every child
+        of the server, so a Stop also closed KLayout and GTKWave windows and
+        ended simulations, Console commands and Tools installs."""
         try:
             import psutil  # librelane depends on psutil, so this is always present
 
-            me = psutil.Process()
-            children = me.children(recursive=True)
-            for child in children:
+            targets = self._flow_process_targets()
+            for q in targets:
                 try:
-                    child.terminate()
+                    q.terminate()
                 except Exception:
                     pass
-            gone, alive = psutil.wait_procs(children, timeout=3)
-            for child in alive:
+            _gone, alive = psutil.wait_procs(targets, timeout=3)
+            for q in alive:
                 try:
-                    child.kill()
+                    q.kill()
                 except Exception:
                     pass
         except Exception as ex:  # pragma: no cover - platform dependent
@@ -578,6 +629,10 @@ class FlowRunner:
             self._current_step_id = None
             self._container_proc = None
             self._container_name = None
+            self._container_engine = None
+            self._container_sg = False
+            with self._flow_procs_lock:
+                self._flow_procs = []
             self._cstep = {}
             self._awaiting_next = False
             self._gui_meta_written = False
@@ -869,6 +924,7 @@ class FlowRunner:
         global _ACTIVE_RUNNER
         self._setup_log_bridge()
         _install_progress_patch()
+        _install_subprocess_patch()
         _ACTIVE_RUNNER = self
         try:
             self._emit(EventType.INFO, {"message": f"loading flow (config={list(config_files)})"})
@@ -987,11 +1043,46 @@ class FlowRunner:
         "step_failed": StepStatus.FAILED,
     }
 
+    def _container_launch(self, argv: List[str]) -> "tuple[List[str], Dict[str, str]]":
+        """The argv and environment for one ``librelane --dockerized`` call.
+
+        Forces LibreLane to the engine the GUI found usable (so a
+        present-but-unusable Docker can't shadow a working Podman), pins the
+        image, activates the docker group via ``sg`` when that is how Docker
+        was made usable without a re-login, and names the container
+        (``LANEX_CONTAINER_NAME``, read by ``librelane_entry``) so Stop can
+        remove this container and nothing else."""
+        run_env = os.environ.copy()
+        self._container_name = new_container_name()
+        run_env["LANEX_CONTAINER_NAME"] = self._container_name
+        self._container_engine = None
+        self._container_sg = False
+        try:
+            from . import tools, container_run
+
+            resolved = tools.resolve_engine()
+            run_env.update(resolved.get("env") or {})
+            if resolved.get("engine"):
+                run_env["LIBRELANE_CONTAINER_ENGINE"] = resolved["engine"]
+                self._container_engine = shutil.which(resolved["engine"]) or resolved["engine"]
+            img = container_run.image_ref()
+            if img:
+                run_env["LIBRELANE_IMAGE_OVERRIDE"] = img
+            if resolved.get("sg_wrap"):
+                argv = tools.sg_wrap_argv(argv)
+                self._container_sg = True
+        except Exception:
+            pass
+        return argv, run_env
+
     def _dispatch_parsed(self, ev: Dict[str, Any]) -> None:
         """Translate a :class:`ContainerLogParser` event into an SSE emit."""
         t = ev.get("type")
         if t == "container":
-            self._container_name = ev.get("name")
+            # LibreLane echoed its `--name`: with LanEx naming the container it
+            # is the same name; keep LanEx's when the echo is anything else.
+            if not self._container_name and ev.get("name"):
+                self._container_name = ev.get("name")
             return
         if t == "phase":
             self._emit(EventType.PHASE, {"label": ev.get("label", "")})
@@ -1075,25 +1166,7 @@ class FlowRunner:
                 initial_state=initial_state,
                 entry_module="lanex.controller.librelane_entry",
             )
-            # Force LibreLane to the engine the GUI determined is usable (so a
-            # present-but-unusable Docker can't shadow a working Podman), and
-            # activate the docker group via `sg` when that's how we made Docker
-            # usable without a re-login.
-            run_env = os.environ.copy()
-            try:
-                from . import tools, container_run
-
-                resolved = tools.resolve_engine()
-                run_env.update(resolved.get("env") or {})
-                if resolved.get("engine"):
-                    run_env["LIBRELANE_CONTAINER_ENGINE"] = resolved["engine"]
-                img = container_run.image_ref()
-                if img:
-                    run_env["LIBRELANE_IMAGE_OVERRIDE"] = img
-                if resolved.get("sg_wrap"):
-                    argv = tools.sg_wrap_argv(argv)
-            except Exception:
-                pass
+            argv, run_env = self._container_launch(argv)
 
             self._emit(
                 EventType.INFO,
@@ -1313,21 +1386,7 @@ class FlowRunner:
                 initial_state=c.get("initial_state") if idx == 0 else None,
                 entry_module="lanex.controller.librelane_entry",
             )
-            run_env = os.environ.copy()
-            try:
-                from . import tools, container_run
-
-                resolved = tools.resolve_engine()
-                run_env.update(resolved.get("env") or {})
-                if resolved.get("engine"):
-                    run_env["LIBRELANE_CONTAINER_ENGINE"] = resolved["engine"]
-                img = container_run.image_ref()
-                if img:
-                    run_env["LIBRELANE_IMAGE_OVERRIDE"] = img
-                if resolved.get("sg_wrap"):
-                    argv = tools.sg_wrap_argv(argv)
-            except Exception:
-                pass
+            argv, run_env = self._container_launch(argv)
 
             self._emit(
                 EventType.INFO,

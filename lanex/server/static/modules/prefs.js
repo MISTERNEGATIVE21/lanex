@@ -25,7 +25,9 @@ export const PREFS = [
     hint: "Container uses the EDA tools in LibreLane's image. Local tools uses the ones installed on this machine." },
   { id: "showFlow", key: "ll.showFlowOnRun", group: "Runs", label: "Show Flow when a run starts", type: "bool", def: "1", on: "1", off: "0",
     hint: "Otherwise you stay on the page you are on." },
-  { id: "notify", key: "ll.notifyRuns", group: "Runs", label: "Tell me when a run finishes", type: "bool", def: "0", on: "1", off: "0",
+  // On by default: runs take 5 to 60 minutes. The browser asks for permission
+  // the first time Run is pressed (runend.askNotifyOnRun).
+  { id: "notify", key: "ll.notifyRuns", group: "Runs", label: "Tell me when a run finishes", type: "bool", def: "1", on: "1", off: "0",
     hint: "A notification with the result while LanEx is in the background." },
   { id: "chime", key: "ll.runChime", group: "Runs", label: "Play a sound when a run ends", type: "bool", def: "0", on: "1", off: "0" },
 
@@ -49,7 +51,7 @@ export const PREFS = [
 // heights, recent lists, drafts). "Reset every preference" leaves these.
 export const STATE_PREFIXES = ["ll.recentDesigns", "ll.tab", "ll.context", "ll.draft:", "ll.rtl:", "ll.wave:", "ll.simok.",
   "ll.guide.", "ll.paletteRecent", "ll.consoleHistory", "ll.runsBaseline", "ll.userPresets", "ll.ranOnce",
-  "ll.updateDismissed"];
+  "ll.updateDismissed", "ll.notifyAsked"];
 
 const BY_ID = Object.fromEntries(PREFS.map((p) => [p.id, p]));
 

@@ -51,11 +51,92 @@ def test_reproduce_script_pins_image_and_checks_config(tmp_path: Path):
     s = manualcmd.reproduce_script(manualcmd.reproduce_info(META, RESOLVED, str(tmp_path / "r1")))
     lines = [l for l in s.splitlines() if l and not l.startswith("#")]
     assert lines[0] == "set -euo pipefail"
-    assert lines[1] == "cd /home/u/spm"
-    assert "sha256sum -c -" in lines[2]
-    assert lines[3] == "export LIBRELANE_IMAGE_OVERRIDE=ghcr.io/librelane/librelane:3.0.4@sha256:eab07a50"
-    assert lines[4] == META["cli_command"]["container"].replace("--run-tag r1", "--run-tag r1-repro")
+    assert lines[1] == "PROJECT_DIR=${PROJECT_DIR:-/home/u/spm}"
+    assert lines[2] == 'cd "$PROJECT_DIR"'
+    # sha256sum on Linux, shasum on macOS (which has no sha256sum).
+    assert "sha256sum config.yaml" in lines[3] and "shasum -a 256 config.yaml" in lines[3]
+    assert lines[4].startswith('[ "$sum" = 0540eeca')
+    assert lines[5] == "export LIBRELANE_IMAGE_OVERRIDE=ghcr.io/librelane/librelane:3.0.4@sha256:eab07a50"
+    # The PDK store travels as PDK_ROOT, relative to whoever's home runs it.
+    assert lines[6] == 'export PDK_ROOT=${PDK_ROOT:-"$HOME"/.ciel}'
+    assert lines[7] == ("librelane --docker-no-tty --dockerized config.yaml -f Classic -p sky130A "
+                        "-s sky130_fd_sc_hd --run-tag r1-repro")
+    assert "--pdk-root" not in "\n".join(lines)
     assert "ciel enable --pdk-family sky130 8afc8346a57fe1ab7934ba5a6056ea8b43078e71" in s
+
+
+THREADED = json.loads(json.dumps(META))
+THREADED["cli_command"]["container"] += " -c DRT_THREADS=16 -c STA_THREADS=9 -c FP_CORE_UTIL=40"
+THREADED["resources"] = {"values": {"DRT_THREADS": 16, "STA_THREADS": 9}, "reason": "32 cores, 45 GB free"}
+
+
+def test_reproduce_script_threads_are_optional_and_capped(tmp_path: Path):
+    s = manualcmd.reproduce_script(manualcmd.reproduce_info(THREADED, RESOLVED, str(tmp_path / "r1")))
+    run = [l for l in s.splitlines() if l.startswith("librelane")][0]
+    # The user's own -c stays in the command; the PC-sized thread counts move
+    # to a list the script fills (capped to this machine, THREADS=auto drops them).
+    assert "-c FP_CORE_UTIL=40" in run and "DRT_THREADS" not in run
+    assert run.endswith(' ${threads[@]+"${threads[@]}"}')
+    assert "for kv in DRT_THREADS=16 STA_THREADS=9; do" in s
+    assert 'if [ "${THREADS:-recorded}" != auto ]; then' in s
+
+
+def _stub_run(tmp_path: Path, script: str, env_extra: dict, tools: dict) -> str:
+    """Run *script* with stub commands on PATH; returns what the stub librelane saw."""
+    import os
+    import shutil
+    import subprocess
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    for name, body in tools.items():
+        p = bin_dir / name
+        p.write_text("#!/bin/bash\n" + body + "\n")
+        p.chmod(0o755)
+    keep = ["bash", "cut", "getconf", "cat", "dirname", "printf"]
+    for t in keep:
+        w = shutil.which(t)
+        if w and not (bin_dir / t).exists():
+            (bin_dir / t).symlink_to(w)
+    env = {"PATH": str(bin_dir), "HOME": str(tmp_path / "home"), **env_extra}
+    r = subprocess.run([shutil.which("bash"), "-c", script], capture_output=True, text=True, env=env, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stderr
+    return r.stdout + "\nSTDERR:" + r.stderr
+
+
+def test_reproduce_script_runs_on_a_mac_like_machine(tmp_path: Path):
+    """No sha256sum (macOS), another user's home, fewer cores: the script still
+    runs, checks the config with shasum, points PDK_ROOT at this home, and
+    caps the threads."""
+    import hashlib
+    import shutil
+    if not shutil.which("bash"):
+        import pytest
+        pytest.skip("no bash")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "config.yaml").write_text("DESIGN_NAME: spm\n")
+    meta = json.loads(json.dumps(THREADED))
+    meta["config_hash"] = hashlib.sha256(b"DESIGN_NAME: spm\n").hexdigest()
+    info = manualcmd.reproduce_info(meta, RESOLVED, str(tmp_path / "r1"))
+    script = manualcmd.reproduce_script(info)
+    real_sha = shutil.which("sha256sum")
+    out = _stub_run(tmp_path, script, {"PROJECT_DIR": str(proj)}, {
+        "librelane": 'echo "PDK_ROOT=$PDK_ROOT"; echo "ARGS=$*"; echo "PWD=$PWD"',
+        "shasum": f'[ "$1" = -a ] && shift 2; {real_sha} "$@"',
+        "getconf": "echo 4",
+    })
+    assert f"PDK_ROOT={tmp_path / 'home'}/.ciel" in out
+    assert "-c DRT_THREADS=4 -c STA_THREADS=4" in out
+    assert f"PWD={proj}" in out
+    assert "changed since this run" not in out
+    # THREADS=auto: LibreLane picks the thread counts itself.
+    out = _stub_run(tmp_path, script, {"PROJECT_DIR": str(proj), "THREADS": "auto"},
+                    {"librelane": 'echo "ARGS=$*"', "getconf": "echo 4"})
+    assert "DRT_THREADS" not in out and "FP_CORE_UTIL=40" in out
+    # An edited config is said, not fatal.
+    (proj / "config.yaml").write_text("DESIGN_NAME: other\n")
+    out = _stub_run(tmp_path, script, {"PROJECT_DIR": str(proj)}, {"librelane": "true", "getconf": "echo 4"})
+    assert "config.yaml changed since this run" in out
 
 
 def test_local_run_gets_no_image_override(tmp_path: Path):

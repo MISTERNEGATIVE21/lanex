@@ -444,7 +444,8 @@ function startHtml(rs) {
   return "<div class='an-verdict fl-hero is-live'><div class='an-verdict-main'>" +
     "<div class='an-eyebrow'><span class='fl-live-dot'></span>Starting</div>" +
     "<h2 class='an-title'>" + (rs.cancel ? "Stopping the run…" : "Starting the run…") + "</h2>" +
-    "<p class='an-lede'>Asking LibreLane to start. The first start of the container can take a minute.</p>" +
+    "<p class='an-lede'>" + (rs.checking ? "Checking the config with LibreLane before anything starts."
+      : "Asking LibreLane to start. The first start of the container can take a minute.") + "</p>" +
     "<div class='fl-bar' role='progressbar' aria-label='Steps done' aria-valuemin='0' aria-valuemax='100' aria-valuenow='0'><span style='transform:scaleX(0)'></span></div>" +
     "</div><div class='an-verdict-act'>" +
     "<button class='btn btn-warn' data-fl='stop-start'" + (rs.cancel ? " disabled" : "") + ">" + icon("stop", { size: 13 }) + " Stop</button></div></div>";
@@ -1098,8 +1099,10 @@ function wireOnce() {
     if (!a) return;
     const act = a.dataset.fl;
     if (act === "run") document.getElementById("btn-run-global")?.click();
-    else if (act === "stop") api.cancelRun().catch(() => {});
-    else if (act === "stop-start") import("./setup.js").then((m) => { if (!m.cancelStart()) api.cancelRun().catch(() => {}); paint(); });
+    // Both go through setup.js's requestStop: it asks first once a run has
+    // been going a while (audit G6).
+    else if (act === "stop") import("./setup.js").then((m) => m.requestStop());
+    else if (act === "stop-start") import("./setup.js").then(async (m) => { await m.requestStop(); paint(); });
     else if (act === "resume") api.resumeRun().catch(() => {});
     else if (act === "resume-from") {
       import("./setup.js").then((m) => m.resumeFrom(a.dataset.stage))
