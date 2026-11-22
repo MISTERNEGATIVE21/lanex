@@ -54,7 +54,7 @@ export async function addProjectFiles(files, { report = () => {} } = {}) {
   const { title, body } = existsText(conflicts);
   const { customDialog } = await import("./dialog.js");
   const choice = await customDialog({
-    title: fmt.escape(title),
+    title,
     bodyHtml: "<p>" + fmt.escape(body) + "</p>",
     buttons: [
       { label: "Cancel", value: null, cls: "btn-ghost" },

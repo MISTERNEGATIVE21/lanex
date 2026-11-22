@@ -589,8 +589,37 @@ function _wire(es) {
     // sit on stale step states behind a green "connected" chip — even if the
     // browser reconnected without a usable Last-Event-ID. The very first
     // connection (no prior drop) is skipped.
-    if (_wasDisconnected) { _wasDisconnected = false; _resyncRunStatus("reconnect"); }
+    if (_wasDisconnected) { _wasDisconnected = false; _reopenDesign(); _resyncRunStatus("reconnect"); }
   };
+}
+
+// The project this window shows, to open again on a server that has none:
+// LanEx keeps the open project in memory only, so after a restart (an
+// update, a crash, `lanex` run again) the server has no project while the
+// window still shows one, and Run, the run list and every page would answer
+// "No project is open". Never when the server has a project (another window
+// may have opened it) or the window's folder is gone. Pure (tested).
+export function designToReopen(serverDir, shownDir, missing) {
+  if (serverDir || missing || !shownDir) return null;
+  return shownDir;
+}
+
+let _reopening = false;
+function _reopenDesign() {
+  if (_reopening || !state.designDir) return;
+  _reopening = true;
+  api.designDir()
+    .then((d) => {
+      const dir = designToReopen(d && d.design_dir, state.designDir, state.designMissing);
+      if (!dir) return null;
+      return api.setDesignDir(dir).then(() => {
+        // Lists that came back empty while the server had no project load again.
+        document.dispatchEvent(new CustomEvent("g:server_back"));
+        _resyncRunStatus("reopen");
+      });
+    })
+    .catch(() => { /* the next reconnect tries again */ })
+    .finally(() => { _reopening = false; });
 }
 
 // Re-hydrate the live pipeline from /api/run/status after a stream gap. Fetches

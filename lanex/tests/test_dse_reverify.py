@@ -200,3 +200,42 @@ def test_rerun_refuses_a_run_made_with_another_librelane(tmp_path, monkeypatch):
     monkeypatch.setattr(branch, "_pdk_pin", lambda pdk: None)
     p = reverify.plan_rerun(d, "done", "Magic.DRC")
     assert not p["ok"] and "LibreLane 3.0.3 then, 3.0.4 now" in p["blocked"]
+
+
+def test_rerun_route_names_the_new_run_as_the_dialog_said(tmp_path, monkeypatch):
+    """Verify's dialog shows the dry run's name; the started run must get it
+    (it used to get a newer timestamp, so the run named in the dialog never
+    appeared)."""
+    pytest.importorskip("librelane")
+    from lanex.controller import branch
+    from lanex.server import app as server_app
+    from lanex.server import routes
+    d, _steps = _finished(tmp_path)
+    monkeypatch.setattr(branch, "versions_now", lambda: {"librelane": None, "image": None})
+    monkeypatch.setattr(branch, "_pdk_pin", lambda pdk: None)
+    monkeypatch.setattr(routes, "_get_active_design_dir", lambda: str(d))
+    monkeypatch.setattr(routes, "_design_refusal", lambda h, dd: None)
+    monkeypatch.setattr(routes, "_resolve_run_dir", lambda tag: d / "runs" / tag)
+    monkeypatch.setattr(server_app, "get_runner", lambda: type("R", (), {"running": False})())
+    started = {}
+    monkeypatch.setattr(routes, "_start_run", lambda body, **kw: (started.update(body=body) or {"ok": True}, 200))
+    out = {}
+    monkeypatch.setattr(routes, "_respond", lambda h, body, status=200: out.update(body=body, status=status))
+
+    class H:
+        _body = {"step_id": "Magic.DRC", "run_tag": "done", "new_tag": "glui-20261122-194109"}
+
+    routes.h_verify_rerun(H())
+    assert out["status"] == 200, out
+    assert out["body"]["tag"] == "glui-20261122-194109"
+    assert started["body"]["tag"] == "glui-20261122-194109"
+
+    # A name with a path in it is refused before anything is planned.
+    H._body = dict(H._body, new_tag="../escape")
+    routes.h_verify_rerun(H())
+    assert out["status"] == 400
+    # A name already taken is refused in words (the page then asks without one).
+    (d / "runs" / "taken").mkdir()
+    H._body = dict(H._body, new_tag="taken")
+    routes.h_verify_rerun(H())
+    assert out["status"] == 400 and "exists already" in str(out["body"])

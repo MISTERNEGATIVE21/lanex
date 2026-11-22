@@ -1073,7 +1073,7 @@ async function resolveConflict(t, mine) {
           (d.length > 400 ? "<div class='fx-diff-h'>" + (d.length - 400) + " more lines differ</div>" : "") + "</div>";
     }
     const choice = await customDialog({
-      title: fmt.escape(name) + " changed on disk",
+      title: name + " changed on disk",
       bodyHtml: body,
       wide: compare,
       buttons: [
