@@ -17,12 +17,17 @@ Until now the GUI is **read-only**. This is the *only* module that grants write
 power, so the guard is the whole point: every path is resolved strictly inside
 the design dir (no ``..``, no absolute escape, no symlink escape), only an
 allowlisted set of source extensions is writable, and writes are atomic
-(temp + ``os.replace``). Pure / stdlib only.
+(temp + ``os.replace``) and keep the file's mode and line endings. A save
+names the content it was based on, so it never overwrites a newer file on
+disk unasked. Pure / stdlib only.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import stat
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -56,17 +61,109 @@ def _resolve_inside(design_dir: str | Path, rel_path: str) -> Optional[Path]:
     return target
 
 
-def write_text(design_dir: str | Path, rel_path: str, content: str) -> Dict[str, Any]:
+def normalize_newlines(text: str) -> str:
+    """What Python's universal-newline read returns for *text*: CRLF and a lone
+    CR become LF. The editor and the read endpoint both see files this way."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def text_hash(text: str) -> str:
+    """The stamp of a file's content as the IDE read it (newlines normalised,
+    so a file the IDE saved with its CRLF endings kept reads back the same)."""
+    return hashlib.sha256(normalize_newlines(text).encode("utf-8")).hexdigest()
+
+
+def disk_hash(path: str | Path) -> Optional[str]:
+    """:func:`text_hash` of the file on disk, or None when it isn't there."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return None
+    return text_hash(raw.decode("utf-8", errors="replace"))
+
+
+def _uses_crlf(raw: bytes) -> bool:
+    """Most of the file's line breaks are CRLF (a file written on Windows)."""
+    crlf = raw.count(b"\r\n")
+    return crlf > 0 and crlf >= raw.count(b"\n") - crlf
+
+
+_umask_lock = threading.Lock()
+
+
+def _default_mode() -> int:
+    """The mode a plain ``open(..., "w")`` would give a new file (0666 less the
+    umask). ``mkstemp`` makes 0600, which is what a save used to leave behind."""
+    with _umask_lock:
+        um = os.umask(0)
+        os.umask(um)
+    return 0o666 & ~um
+
+
+def free_name(design_dir: str | Path, rel_path: str) -> str:
+    """*rel_path*, or ``name_2.ext``, ``name_3.ext`` … whichever is not taken."""
+    p = Path(rel_path)
+    stem, suffix = p.stem, p.suffix
+    base = Path(design_dir)
+    n = 2
+    cand = rel_path
+    while (base / cand).exists():
+        cand = (p.parent / f"{stem}_{n}{suffix}").as_posix()
+        n += 1
+    return cand
+
+
+def write_text(design_dir: str | Path, rel_path: str, content: str, *,
+               base_hash: Optional[str] = None, force: bool = False,
+               on_exists: Optional[str] = None) -> Dict[str, Any]:
     """Atomically write *content* to *rel_path* inside *design_dir*.
 
-    Returns ``{ok, path, bytes}`` or ``{ok: False, error}``. Refuses paths that
-    escape the design dir or carry a non-allowlisted extension."""
+    Returns ``{ok, path, bytes, hash}`` or ``{ok: False, error}``. Refuses paths
+    that escape the design dir or carry a non-allowlisted extension.
+
+    * *base_hash*: the :func:`text_hash` the IDE read. When the file on disk no
+      longer matches it (Setup, a terminal or another window changed it since),
+      nothing is written and the answer is ``{ok: False, conflict: True, hash}``,
+      unless *force* (the person chose to keep their version).
+    * *on_exists*: ``"error"`` refuses an existing file (``exists: True`` plus
+      a free ``suggested`` name), ``"keep_both"`` writes under that free name,
+      anything else replaces it (the old behaviour).
+    * The file keeps its mode, and its CRLF line endings when the new text
+      comes from the editor (LF only).
+    """
     target = _resolve_inside(design_dir, rel_path)
     if target is None:
         return {"ok": False, "error": "path escapes the design directory"}
     if target.suffix.lower() not in EDITABLE_EXTS:
         return {"ok": False, "error": f"extension '{target.suffix}' is not editable"}
-    data = content.encode("utf-8")
+    if target.exists() and on_exists in ("error", "keep_both"):
+        if not target.is_file():
+            return {"ok": False, "error": f"{rel_path} exists and is not a file"}
+        suggested = free_name(design_dir, rel_path)
+        if on_exists == "error":
+            return {"ok": False, "exists": True, "suggested": suggested,
+                    "error": f"{rel_path} already exists"}
+        rel_path = suggested
+        target = _resolve_inside(design_dir, rel_path)
+        if target is None:
+            return {"ok": False, "error": "path escapes the design directory"}
+    raw_old: Optional[bytes] = None
+    mode: Optional[int] = None
+    if target.is_file():
+        try:
+            raw_old = target.read_bytes()
+            mode = stat.S_IMODE(target.stat().st_mode)
+        except OSError as ex:
+            return {"ok": False, "error": str(ex)}
+        if base_hash is not None and not force:
+            now = text_hash(raw_old.decode("utf-8", errors="replace"))
+            if now != base_hash:
+                return {"ok": False, "conflict": True, "hash": now,
+                        "error": f"{rel_path} changed on disk since it was opened"}
+    text = content
+    if raw_old is not None and "\r" not in text and _uses_crlf(raw_old):
+        text = text.replace("\n", "\r\n")
+    data = text.encode("utf-8")
     if len(data) > MAX_WRITE_BYTES:
         return {"ok": False, "error": "file too large to save"}
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -75,6 +172,10 @@ def write_text(design_dir: str | Path, rel_path: str, content: str) -> Dict[str,
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+        try:
+            os.chmod(tmp, mode if mode is not None else _default_mode())
+        except OSError:
+            pass  # a filesystem without modes (some Windows mounts): nothing to keep
         os.replace(tmp, target)
     except Exception as ex:
         try:
@@ -82,7 +183,8 @@ def write_text(design_dir: str | Path, rel_path: str, content: str) -> Dict[str,
         except OSError:
             pass
         return {"ok": False, "error": str(ex)}
-    return {"ok": True, "path": rel_path, "bytes": len(data)}
+    return {"ok": True, "path": Path(rel_path).as_posix(), "bytes": len(data), "hash": text_hash(text),
+            "eol": "crlf" if "\r\n" in text else "lf"}
 
 
 def create_file(design_dir: str | Path, rel_path: str) -> Dict[str, Any]:

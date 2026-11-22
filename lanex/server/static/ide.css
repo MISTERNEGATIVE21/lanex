@@ -519,3 +519,6 @@ body.theme-light .cm-wavetip-row b { color: var(--pass); }
 .nf-use { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; color: var(--text); }
 .nf-use[hidden] { display: none; }
 .ide-file-menu .ism-key { float: right; margin-left: 16px; font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+/* A save that met a newer file on disk: the Compare view (fix.css draws the lines). */
+.ide-cmp { max-height: calc(52vh / var(--ll-zoom, 1)); margin: 10px 0 0; overflow: auto; }
+.ide-cmp .fx-dl code { overflow: visible; text-overflow: clip; }

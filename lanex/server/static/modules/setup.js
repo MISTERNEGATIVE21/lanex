@@ -103,25 +103,16 @@ function wireSetupActions() {
     input.addEventListener("change", async () => {
       const files = [...input.files];
       input.value = "";
-      let ok = 0;
-      const added = [];
-      for (const f of files) {
-        const name = f.name;
-        const isTb = /(^tb_|_tb\.|testbench)/i.test(name);
-        const isHdl = /\.(s?v|vh|svh)$/i.test(name);
-        const rel = (isHdl ? (isTb ? "verify/" : "src/") : "") + name;
-        try {
-          const r = await api.fileWrite(rel, await f.text());
-          if (r.ok) { ok++; added.push(rel); } else toast.show("Could not add " + name + ": " + (r.error || "refused"), "error");
-        } catch (ex) {
-          toast.show("Could not add " + name + ": " + (ex.message || ex), "error");
-        }
-      }
+      // A file of the same name asks first: Replace or Keep both (addfiles.js).
+      const { addProjectFiles } = await import("./addfiles.js");
+      const res = await addProjectFiles(files, { report: (msg, bad) => toast.show(msg, bad ? "error" : "info") });
+      const ok = res.added.length;
       if (ok) {
-        toast.show("Added " + ok + " file" + (ok === 1 ? "" : "s") + " to the project.", "success");
+        toast.show("Added " + ok + " file" + (ok === 1 ? "" : "s") + " to the project" +
+          (res.replaced.length ? " (" + res.replaced.length + " replaced)" : "") + ".", "success");
         await loadFilesFor(state.designDir);
         const base = state.designDir.replace(/\/+$/, "") + "/";
-        const design = added.filter((rel) => rel.startsWith("src/") && /\.s?v$/i.test(rel)).map((rel) => base + rel);
+        const design = res.forConfig.filter((rel) => rel.startsWith("src/") && /\.s?v$/i.test(rel)).map((rel) => base + rel);
         if (design.length) {
           const { includeInConfig } = await import("./fs.js");
           includeInConfig(design);

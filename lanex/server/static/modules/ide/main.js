@@ -13,6 +13,9 @@ import { explain, explainMessage, TESTBENCH_STYLE } from "./lintinfo.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
+import { getPref } from "../prefs.js";
+import { refreshAction, conflictKind, lineDiff, isConfigFile } from "./filesync.js";
+import { addProjectFiles } from "../addfiles.js";
 
 const state = {
   designDir: null, files: [], top: null, topAbs: null,
@@ -62,6 +65,8 @@ export async function initIde(opts = {}) {
     await loadTree();
     await loadTestbenches();
     autoOpen();
+    // Files may have changed while another tab was showing (Setup writes the config).
+    refreshFromDisk();
     return;
   }
   _inited = true;
@@ -115,6 +120,7 @@ export async function initIde(opts = {}) {
     e.returnValue = "";
   });
 
+  wireDiskSync();
   sse.open();
   sse.on(onEvent);
   await loadTree();
@@ -669,14 +675,15 @@ async function deleteFile(rel) {
 
 async function undoDelete(rel, text) {
   try {
-    const r = await api.fileWrite(rel, text);
+    const r = await api.fileWrite(rel, text, { on_exists: "error" });
     if (r && r.ok === false) throw new Error(r.error || "refused");
     await afterFilesChanged();
     const f = state.files.find((x) => x.relpath === rel);
     if (f) await openFile(f.abspath, rel);
     note("Restored " + rel);
   } catch (ex) {
-    note("Couldn't restore " + rel + ": " + (ex.message || ex), true);
+    note(conflictKind(ex) === "exists" ? "Couldn't restore " + rel + ": a file of that name was made since. Nothing was overwritten."
+      : "Couldn't restore " + rel + ": " + (ex.message || ex), true);
   }
 }
 
@@ -724,8 +731,8 @@ async function renameFile(rel) {
   const t = state.tabs.find((x) => x.rel === rel);
   try {
     if (t && t.text !== t.saved) {
-      const w = await api.fileWrite(rel, t.text);
-      if (w.ok) t.saved = t.text;
+      const how = await saveTab(t, t.text);
+      if (how === "cancel") { note("Not renamed: " + rel + " changed on disk and wasn't saved.", true); return; }
     }
     const r = await api.fileRename(rel, dir + name);
     if (!r.ok) throw new Error(r.error || "refused");
@@ -771,7 +778,7 @@ async function openFile(abs, rel) {
       t = state.tabs.find((x) => x.rel === rel);
       if (!t) {
         const f = state.files.find((x) => x.relpath === rel);
-        t = { abs: f ? f.abspath : abs, rel, text: r.text, saved: r.text };
+        t = { abs: f ? f.abspath : abs, rel, text: r.text, saved: r.text, hash: r.hash || null };
         state.tabs.push(t);
         await restoreDraft(t);
       }
@@ -990,14 +997,19 @@ async function saveFile({ quiet = false } = {}) {
   if (!t || !ed.relPath) { note("Open a file first.", true); return; }
   const text = ed.getValue();
   try {
-    const r = await api.fileWrite(t.rel, text);
-    if (!r.ok) throw new Error(r.error || "write refused");
-    t.text = text;
-    t.saved = text;
-    dropDraft(t.abs);
+    const how = await saveTab(t, text);
     renderTabs();
+    if (how === "cancel") {
+      note(t.rel + " wasn't saved: it changed on disk. Save again to choose which version to keep.", true);
+      return;
+    }
+    if (how === "reload") {
+      note("Reloaded " + t.rel + " from disk. Your edits are not in the file; Ctrl+Z in the editor brings them back.");
+      return;
+    }
+    t.text = text;
     dropSimDiags([t.rel]);
-    note("Saved " + t.rel);
+    note((how === "mine" ? "Saved your version of " : "Saved ") + t.rel);
     if (state.explorerView === "hier") renderHierarchy();
     // The Setup page reads the config and the file list; let it catch up.
     document.dispatchEvent(new CustomEvent("g:sources_changed"));
@@ -1005,6 +1017,140 @@ async function saveFile({ quiet = false } = {}) {
   } catch (ex) {
     note("Save failed: " + (ex.message || ex), true);
   }
+}
+
+// ------------------------------------------------------------------ disk sync
+// Each tab keeps the hash of the text it read (or last saved). A save sends
+// it; the server refuses with 409 when the file changed on disk since (Setup
+// wrote the config, a terminal, the other window), and the person chooses:
+// reload the disk's version, keep theirs, or compare first. Tabs without
+// edits follow the disk by themselves (on focus and on g:config_changed).
+
+// Write a tab's text based on the version it read. Throws the server's
+// error (a 409 carries {conflict} or {exists}).
+async function writeTab(t, text, { force = false } = {}) {
+  const r = await api.fileWrite(t.rel, text, force ? { force: true } : t.hash ? { base_hash: t.hash } : {});
+  if (r && r.ok === false) throw new Error(r.error || "write refused");
+  t.saved = text;
+  t.hash = (r && r.hash) || t.hash;
+  t.diskHash = null;
+  dropDraft(t.abs);
+  // The config is what Setup shows: it reads it again.
+  if (isConfigFile(t.rel)) document.dispatchEvent(new CustomEvent("g:config_changed", { detail: { from: "ide" } }));
+  return r;
+}
+
+// Save, and when the file changed on disk, ask. -> "saved" | "mine" (kept
+// over the disk's) | "reload" (the disk's version is in the tab now) | "cancel".
+async function saveTab(t, text) {
+  try {
+    await writeTab(t, text);
+    return "saved";
+  } catch (ex) {
+    if (conflictKind(ex) !== "changed") throw ex;
+    return resolveConflict(t, text);
+  }
+}
+
+async function resolveConflict(t, mine) {
+  let disk = null;
+  try { disk = await api.readText(t.abs); } catch (_e) { disk = null; }
+  const diskText = disk && typeof disk.text === "string" ? disk.text : null;
+  const name = t.rel.split("/").pop();
+  const { customDialog } = await import("../dialog.js");
+  let compare = false;
+  for (;;) {
+    let body = "<p>" + fmt.escape(t.rel) + " was changed outside this editor since you opened it" +
+      (isConfigFile(t.rel) ? " (Setup writes this file when you change a setting there)" : " (Setup, a terminal or another window)") +
+      ". Your edits are still here. Keeping yours overwrites that change.</p>";
+    if (compare && diskText !== null) {
+      const d = lineDiff(diskText, mine);
+      body += !d ? "<p class='muted'>The texts are the same.</p>"
+        : "<div class='fx-diff ide-cmp' aria-label='How your version differs from the file on disk'>" +
+          "<div class='fx-diff-h'>− on disk · + yours</div>" +
+          d.slice(0, 400).map((x) => "<div class='fx-dl is-" + (x.op === "+" ? "add" : "del") + "'><span class='fx-ln'>" + x.line +
+            "</span><span class='fx-op'>" + x.op + "</span><code>" + fmt.escape(x.text) + "</code></div>").join("") +
+          (d.length > 400 ? "<div class='fx-diff-h'>" + (d.length - 400) + " more lines differ</div>" : "") + "</div>";
+    }
+    const choice = await customDialog({
+      title: fmt.escape(name) + " changed on disk",
+      bodyHtml: body,
+      wide: compare,
+      buttons: [
+        { label: "Cancel", value: null, cls: "btn-ghost" },
+        ...(compare || diskText === null ? [] : [{ label: "Compare", value: "compare", cls: "btn-ghost" }]),
+        { label: "Reload from disk", value: "reload", cls: "btn-ghost" },
+        // Overwrites the other change: a danger button, so Cancel has the focus.
+        { label: "Keep mine", value: "mine", cls: "btn-warn" },
+      ],
+    });
+    if (choice === "compare") { compare = true; continue; }
+    if (choice === "reload") {
+      if (diskText === null) return "cancel";
+      reloadTab(t, diskText, disk.hash);
+      return "reload";
+    }
+    if (choice === "mine") {
+      await writeTab(t, mine, { force: true });
+      return "mine";
+    }
+    return "cancel";
+  }
+}
+
+// Show the disk's text in a tab (its own edits, if any, are dropped).
+function reloadTab(t, text, hash) {
+  t.text = text;
+  t.saved = text;
+  t.hash = hash || null;
+  t.diskHash = null;
+  dropDraft(t.abs);
+  const ed = window.ideEditor;
+  if (ed && state.active === t.abs && ed.relPath === t.rel) {
+    ed.setText(text);
+    applyMarkers();
+  } else if (ed) {
+    ed.forget(t.rel);
+  }
+}
+
+// Bring tabs without edits up to date with the disk; say which tabs with
+// edits now differ from it (their next save asks).
+let _refreshing = null;
+function refreshFromDisk() {
+  if (_refreshing || !state.designDir || !state.tabs.length) return _refreshing;
+  _refreshing = (async () => {
+    const dir = state.designDir;
+    const reloaded = [], flagged = [];
+    for (const t of state.tabs.slice()) {
+      if (!t.hash) continue;
+      let r = null;
+      try { r = await api.readText(t.abs); } catch (_e) { r = null; }
+      if (state.designDir !== dir) return;
+      if (!state.tabs.includes(t)) continue;
+      stash();
+      const act = refreshAction(t, r && typeof r.text === "string" ? r.hash : null);
+      if (act === "reload") { reloadTab(t, r.text, r.hash); reloaded.push(t.rel); }
+      else if (act === "flag" && t.diskHash !== r.hash) { t.diskHash = r.hash; flagged.push(t.rel); }
+    }
+    if (reloaded.length || flagged.length) renderTabs();
+    if (flagged.length) note(flagged.join(", ") + (flagged.length === 1 ? " was" : " were") +
+      " changed on disk. Your edits are kept here; saving asks which version to keep.", true);
+    else if (reloaded.length) note("Reloaded " + reloaded.join(", ") + ": it changed on disk.");
+  })().finally(() => { _refreshing = null; });
+  return _refreshing;
+}
+
+function wireDiskSync() {
+  document.addEventListener("g:config_changed", () => { refreshFromDisk(); });
+  let last = 0;
+  const onBack = () => {
+    if (!ideShowing() || Date.now() - last < 1500) return;
+    last = Date.now();
+    refreshFromDisk();
+  };
+  window.addEventListener("focus", onBack);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") onBack(); });
 }
 
 // The simulator's compile errors describe the text it compiled: once a file
@@ -1017,15 +1163,20 @@ function dropSimDiags(rels) {
 }
 
 // Save every changed tab (before a simulation, like an IDE's "save all").
+// A tab whose file changed on disk asks first, as a plain save does; the
+// files left unsaved that way come back, so the caller doesn't check or
+// simulate text that isn't on disk.
 async function saveAll() {
   stash();
+  const skipped = [];
   for (const t of state.tabs.filter((x) => x.text !== x.saved)) {
     try {
-      const r = await api.fileWrite(t.rel, t.text);
-      if (r.ok) { t.saved = t.text; dropDraft(t.abs); }
+      const how = await saveTab(t, t.text);
+      if (how === "cancel") skipped.push(t.rel);
     } catch (_e) { /* the simulation reports what's wrong */ }
   }
   renderTabs();
+  return skipped;
 }
 
 // Check on save: every save of a Verilog file re-runs the syntax check, so the
@@ -1062,23 +1213,18 @@ function wireUpload() {
     const files = [...input.files];
     input.value = "";
     if (!files.length) return;
-    const added = [];
-    for (const f of files) {
-      const isHdl = /\.(s?v|vh|svh)$/i.test(f.name);
-      const isTb = /(^tb_|_tb\.|testbench)/i.test(f.name);
-      const rel = (isHdl ? (isTb ? "verify/" : "src/") : "") + f.name;
-      try {
-        const r = await api.fileWrite(rel, await f.text());
-        if (r.ok) added.push(rel); else note("Refused " + f.name + ": " + (r.error || "?"), true);
-      } catch (ex) { note("Upload failed for " + f.name + ": " + (ex.message || ex), true); }
-    }
+    // A file of the same name asks first: Replace or Keep both (addfiles.js).
+    const res = await addProjectFiles(files, { report: (msg, bad) => note(msg, bad) });
+    const added = res.added;
     if (added.length) note("Added " + added.join(", "));
     const base = state.designDir.replace(/\/+$/, "") + "/";
-    const design = added.filter((rel) => rel.startsWith("src/") && /\.s?v$/i.test(rel)).map((rel) => base + rel);
+    const design = res.forConfig.filter((rel) => rel.startsWith("src/") && /\.s?v$/i.test(rel)).map((rel) => base + rel);
     if (design.length) document.dispatchEvent(new CustomEvent("g:sources_added", { detail: { files: design } }));
     document.dispatchEvent(new CustomEvent("g:sources_changed"));
     await loadTree();
     await loadTestbenches();
+    // A replaced file that is open shows its new text.
+    if (res.replaced.length) refreshFromDisk();
     if (added.length) {
       const f = state.files.find((x) => x.relpath === added[0]);
       if (f) openFile(f.abspath, f.relpath);

@@ -586,7 +586,13 @@ def h_read_text(handler: Any) -> None:
         _respond(handler, "path is outside the active design / PDK directories", 403)
         return
     try:
-        _respond(handler, fsbrowser.read_text(path))
+        res = fsbrowser.read_text(path)
+        if res.get("ok") and isinstance(res.get("text"), str):
+            # The stamp the IDE sends back with a save, so a file that changed
+            # on disk since (Setup, a terminal) is never overwritten unasked.
+            from ..controller import editor
+            res["hash"] = editor.text_hash(res["text"])
+        _respond(handler, res)
     except Exception as ex:
         _log.exception("read_text failed")
         _respond(handler, str(ex), 500)
@@ -3682,8 +3688,19 @@ def h_file_write(handler: Any) -> None:
     if not design_dir:
         _respond(handler, "no active design dir", 400)
         return
-    result = editor.write_text(design_dir, rel, content)
+    base_hash = body.get("base_hash")
+    on_exists = body.get("on_exists")
+    result = editor.write_text(
+        design_dir, rel, content,
+        base_hash=base_hash if isinstance(base_hash, str) and base_hash else None,
+        force=bool(body.get("force")),
+        on_exists=on_exists if on_exists in ("error", "keep_both", "replace") else None)
     if not result.get("ok"):
+        if result.get("conflict") or result.get("exists"):
+            # 409 with the details: the IDE asks Reload / Keep mine, Add files
+            # asks Replace / Keep both.
+            handler._send_json(result, 409)
+            return
         _respond(handler, result.get("error"), 400)
         return
     _respond(handler, result)

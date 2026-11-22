@@ -344,6 +344,20 @@ function detectIndent(text) {
   return counts[2] > counts[4] ? "  " : "    ";
 }
 
+// The one change that turns `cur` into `next` (newlines as LF, as the editor
+// keeps them): the common start and end are left alone. null when equal.
+export function minimalChange(cur, next) {
+  cur = String(cur || "");
+  next = String(next || "").replace(/\r\n?/g, "\n");
+  if (cur === next) return null;
+  let a = 0;
+  const max = Math.min(cur.length, next.length);
+  while (a < max && cur.charCodeAt(a) === next.charCodeAt(a)) a++;
+  let b = 0;
+  while (b < max - a && cur.charCodeAt(cur.length - 1 - b) === next.charCodeAt(next.length - 1 - b)) b++;
+  return { from: a, to: cur.length - b, insert: next.slice(a, next.length - b) };
+}
+
 export class Editor {
   constructor(host, { onChange, onCursor, onSave } = {}) {
     this.host = host;
@@ -460,6 +474,14 @@ export class Editor {
   forget(relPath) { this.states.delete(relPath); }
 
   getValue() { return this.view.state.doc.toString(); }
+
+  // Replace the text in place (the file changed on disk): only the changed
+  // middle is swapped, so the cursor and scroll stay where they were outside
+  // it, and Ctrl+Z brings the old text back.
+  setText(text) {
+    const change = minimalChange(this.getValue(), text);
+    if (change) this.view.dispatch({ changes: change });
+  }
 
   focus() { this.view.focus(); }
 
