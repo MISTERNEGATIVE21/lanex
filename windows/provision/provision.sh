@@ -24,7 +24,7 @@
 #
 # Environment knobs:
 #   LANEX_REF=<ref>        branch/tag/SHA of the repo to install (default: main)
-#   LANEX_REPO=<owner/name> source repository (default: AkshatIsWired/lanex)
+#   LANEX_REPO=<owner/name> source repository (default: lanex-eda/lanex)
 #   LANEX_INSTALL_SCRIPT=<path> exact bundled scripts/install.sh to execute
 #   LANEX_FROM=<path/url>   exact LanEx wheel/source passed to install.sh
 #   LANEX_PIP_CONSTRAINT=<path> locked Windows dependency constraints
@@ -42,7 +42,7 @@ export COLUMNS=120
 export LINES=40
 export TERM=dumb
 
-REPO="${LANEX_REPO:-AkshatIsWired/lanex}"
+REPO="${LANEX_REPO:-lanex-eda/lanex}"
 REF="${LANEX_REF:-main}"
 APP_USER="${LANEX_USER:-lanex}"
 INSTALL_SH="${LANEX_INSTALL_SCRIPT:-}"

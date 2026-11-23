@@ -34,7 +34,7 @@ param(
     [string]$Outcome,
     [string]$OutcomeMessage,
     [string]$OutputPath,
-    [string]$SourceRepository = 'AkshatIsWired/lanex',
+    [string]$SourceRepository = 'lanex-eda/lanex',
     [string]$SourceRef = 'main',
     [string]$SourceSha,
     [string]$AppVersion = '0.0.0',

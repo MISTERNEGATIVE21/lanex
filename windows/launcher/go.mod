@@ -1,4 +1,4 @@
-module github.com/AkshatIsWired/lanex/windows/launcher
+module github.com/lanex-eda/lanex/windows/launcher
 
 go 1.21
 

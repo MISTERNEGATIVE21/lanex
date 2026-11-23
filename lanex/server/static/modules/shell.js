@@ -429,7 +429,7 @@ async function renderAbout(body) {
     "LibreLane directly if you plan to manufacture.</div>" +
     "<div class='about-links'>" +
     "<a class='btn btn-ghost btn-sm' href='https://librelane.org/' target='_blank' rel='noopener'>LibreLane docs</a>" +
-    "<a class='btn btn-ghost btn-sm' href='https://github.com/AkshatIsWired/lanex' target='_blank' rel='noopener'>LanEx on GitHub</a>" +
+    "<a class='btn btn-ghost btn-sm' href='https://github.com/lanex-eda/lanex' target='_blank' rel='noopener'>LanEx on GitHub</a>" +
     "</div>" +
     "<details class='about-full'><summary>Full license and notices</summary><pre id='about-notice'></pre></details>";
   // Only ever the repo's real NOTICE text, never a hand-written copy.

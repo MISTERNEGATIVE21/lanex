@@ -105,6 +105,16 @@ def test_mac_leaves_a_foreign_app_alone(mac):
     assert not (foreign / "MacOS").exists()
 
 
+def test_mac_refreshes_a_shortcut_made_before_the_org_move(mac):
+    old = mac / "Applications" / "LanEx.app" / "Contents"
+    old.mkdir(parents=True)
+    (old / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "io.github.akshatiswired.lanex"}))
+    res = shortcut.install(home=mac, python="/x/python")
+    assert res["ok"] is True
+    info = plistlib.loads((old / "Info.plist").read_bytes())
+    assert info["CFBundleIdentifier"] == shortcut.BUNDLE_ID
+
+
 def test_mac_remove(mac):
     shortcut.install(home=mac, python="/x/python")
     res = shortcut.remove(home=mac)

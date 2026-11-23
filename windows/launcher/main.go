@@ -72,7 +72,7 @@ const (
 	// without this the shell would start with nowhere to draw.
 	createNewConsole = 0x00000010
 
-	releasesURL = "https://github.com/AkshatIsWired/lanex/releases"
+	releasesURL = "https://github.com/lanex-eda/lanex/releases"
 )
 
 func main() {

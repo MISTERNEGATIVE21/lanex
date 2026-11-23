@@ -26,7 +26,10 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-BUNDLE_ID = "io.github.akshatiswired.lanex"
+BUNDLE_ID = "io.github.lanex-eda.lanex"
+# Shortcuts made before the repository moved to the lanex-eda org carry this
+# identifier; they are still ours to refresh or remove.
+_LEGACY_BUNDLE_IDS = ("io.github.akshatiswired.lanex",)
 APP_NAME = "LanEx"
 DESKTOP_FILE = "lanex.desktop"
 LOG_NAME = "lanex-app.log"
@@ -130,7 +133,7 @@ def mac_info_plist(has_icon: bool, version: str) -> bytes:
 def _is_our_bundle(app: Path) -> bool:
     try:
         info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
-        return info.get("CFBundleIdentifier") == BUNDLE_ID
+        return info.get("CFBundleIdentifier") in (BUNDLE_ID, *_LEGACY_BUNDLE_IDS)
     except Exception:
         return False
 

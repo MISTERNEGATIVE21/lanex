@@ -26,7 +26,7 @@ def pe_subsystem(path: Path) -> int:
     return int.from_bytes(data[pe + 24 + 68:pe + 24 + 70], "little")
 
 
-MIRROR_BASE = "https://github.com/AkshatIsWired/lanex/releases/download/deps-v1"
+MIRROR_BASE = "https://github.com/lanex-eda/lanex/releases/download/deps-v1"
 ROOTFS_FILE = "ubuntu-24.04.4-wsl-amd64.wsl"
 ROOTFS_URL = f"https://releases.ubuntu.com/24.04.4/{ROOTFS_FILE}"
 ROOTFS_URLS = "|".join([
@@ -156,7 +156,7 @@ def main() -> int:
         $params = @{{
             Action = 'NewManifest'
             OutputPath = '{manifest_path}'
-            SourceRepository = 'AkshatIsWired/lanex'
+            SourceRepository = 'lanex-eda/lanex'
             SourceRef = '{source_ref}'
             SourceSha = '{source_sha}'
             AppVersion = '1.0.0'
@@ -202,7 +202,7 @@ def main() -> int:
         "/DAppVersionNumeric=1.0.0",
         f"/DLanexRef={source_sha}",
         f"/DLanexSourceSha={source_sha}",
-        "/DLanexSourceRepo=AkshatIsWired/lanex",
+        "/DLanexSourceRepo=lanex-eda/lanex",
         f"/DLanexWheel={wheel_path}",
         f"/DSetupWorkerSha256={worker_hash}",
         r"/DLauncherExe=..\launcher\LanEx.exe",

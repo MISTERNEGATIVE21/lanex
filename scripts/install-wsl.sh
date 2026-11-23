@@ -3,7 +3,7 @@
 # (universal: any major Linux distro, WSL2, macOS); this URL/name is kept
 # working forever because it is baked into older READMEs and guides:
 #
-#   curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install-wsl.sh | bash
 #
 # Runs the exact sibling script when executed from a checkout, otherwise fetches
 # the install.sh of the release below and runs it. The whole body is in main(),
@@ -22,7 +22,7 @@ main() {
         exec bash "$here/install.sh" "$@"
     fi
 
-    repo="${LANEX_REPO:-AkshatIsWired/lanex}"
+    repo="${LANEX_REPO:-lanex-eda/lanex}"
     ref="${LANEX_REF:-$LANEX_RELEASE_REF}"
     url="https://raw.githubusercontent.com/${repo}/${ref}/scripts/install.sh"
     # To a file, then run it: passing the download inline to bash -c ran an empty script and

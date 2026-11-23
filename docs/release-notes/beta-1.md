@@ -20,14 +20,14 @@ Everything goes into a private Linux environment of its own: your other WSL dist
 ### Linux and macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 ```
 
 Works on Debian/Ubuntu, Fedora, Arch, openSUSE, macOS 13+ and inside WSL2. In a terminal it opens an installer with the same choices as Windows Setup, shows the download and disk size first, asks for your password once, and installs with a progress view. Then run `lanex`.
 
 <p align="center"><img src="../screenshots/installer-terminal.png" alt="The Linux and macOS installer" width="70%"></p>
 
-Unattended: `... | bash -s -- --profile recommended`. More in [docs/INSTALL.md](https://github.com/AkshatIsWired/lanex/blob/main/docs/INSTALL.md).
+Unattended: `... | bash -s -- --profile recommended`. More in [docs/INSTALL.md](https://github.com/lanex-eda/lanex/blob/main/docs/INSTALL.md).
 
 ## What it does
 

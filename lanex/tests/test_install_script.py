@@ -253,7 +253,7 @@ def test_piped_stamped_installer_hands_over_to_the_release_copy(tmp_path: Path) 
     assert 'LANEX_RELEASE_REF="v9.9.9"' in stamped
     res = _run_with_fake_curl(tmp_path, "-s", "--", "--help", stdin=stamped)
     assert res.returncode == 0, res.stderr
-    assert "/AkshatIsWired/lanex/v9.9.9/scripts/install.sh" in res.stdout
+    assert "/lanex-eda/lanex/v9.9.9/scripts/install.sh" in res.stdout
     assert "ref=v9.9.9 boot=1 args=--help" in res.stdout
 
 
