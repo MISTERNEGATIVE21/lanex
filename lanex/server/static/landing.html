@@ -7,7 +7,7 @@
   <meta name="description" content="LanEx is a cockpit and IDE built on LibreLane for open-source RTL-to-GDSII chip design. Run the complete flow with direct access to every EDA tool report." />
   <meta property="og:title" content="LanEx: Open-source ASIC cockpit and IDE" />
   <meta property="og:description" content="A cockpit and IDE built on LibreLane for the open-source RTL-to-GDSII flow." />
-  <meta property="og:image" content="https://raw.githubusercontent.com/AkshatIsWired/lanex/main/docs/social-preview.png" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/lanex-eda/lanex/main/docs/social-preview.png" />
   <meta property="og:image:type" content="image/png" />
   <meta name="twitter:card" content="summary_large_image" />
   <!-- Fonts are bundled with LanEx for offline and air-gapped use without external CDNs. -->
@@ -67,7 +67,7 @@
       <a href="#how">How it works</a>
       <a href="#install">Install</a>
       <a class="btn btn-primary nav-launch" href="/" data-launch>Open cockpit</a>
-      <a href="https://github.com/AkshatIsWired/lanex" target="_blank" rel="noopener" class="nav-gh">
+      <a href="https://github.com/lanex-eda/lanex" target="_blank" rel="noopener" class="nav-gh">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 2.9-.39c.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.35.77 1.04.77 2.1 0 1.52-.01 2.74-.01 3.11 0 .3.2.66.8.55A10.52 10.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>
         GitHub
       </a>
@@ -325,9 +325,9 @@
             </div>
             <p>Installs LanEx and prerequisites on Linux, WSL2, or macOS. Re-run the command at any time to update to the latest release.</p>
             <div class="cmd">
-              <pre><code>curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 lanex</code></pre>
-              <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash&#10;lanex">Copy</button>
+              <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash&#10;lanex">Copy</button>
             </div>
           </article>
           <!-- macOS -->
@@ -342,9 +342,9 @@ lanex</code></pre>
             <div class="cmd">
               <pre><code>brew install pipx
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
-pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
+pipx install https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz
 lanex</code></pre>
-              <button class="copy-btn" data-copy="brew install pipx&#10;pipx ensurepath; export PATH=&quot;$HOME/.local/bin:$PATH&quot;&#10;pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz&#10;lanex">Copy</button>
+              <button class="copy-btn" data-copy="brew install pipx&#10;pipx ensurepath; export PATH=&quot;$HOME/.local/bin:$PATH&quot;&#10;pipx install https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz&#10;lanex">Copy</button>
             </div>
           </article>
           <!-- Fedora -->
@@ -359,9 +359,9 @@ lanex</code></pre>
             <div class="cmd">
               <pre><code>sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
-pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
+pipx install https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz
 lanex</code></pre>
-              <button class="copy-btn" data-copy="sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc&#10;pipx ensurepath; export PATH=&quot;$HOME/.local/bin:$PATH&quot;&#10;pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz&#10;lanex">Copy</button>
+              <button class="copy-btn" data-copy="sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc&#10;pipx ensurepath; export PATH=&quot;$HOME/.local/bin:$PATH&quot;&#10;pipx install https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz&#10;lanex">Copy</button>
             </div>
           </article>
           <!-- Existing LibreLane -->
@@ -374,10 +374,10 @@ lanex</code></pre>
             </div>
             <p>If LibreLane is already installed in an active virtualenv or Conda environment, install LanEx directly to utilize your existing toolchain.</p>
             <div class="cmd">
-              <pre><code>git clone https://github.com/AkshatIsWired/lanex && cd lanex
+              <pre><code>git clone https://github.com/lanex-eda/lanex && cd lanex
 pip install .
 lanex</code></pre>
-              <button class="copy-btn" data-copy="git clone https://github.com/AkshatIsWired/lanex && cd lanex&#10;pip install .&#10;lanex">Copy</button>
+              <button class="copy-btn" data-copy="git clone https://github.com/lanex-eda/lanex && cd lanex&#10;pip install .&#10;lanex">Copy</button>
             </div>
           </article>
         </div>
@@ -462,9 +462,9 @@ lanex</code></pre>
       <p class="footer-lede">Independent open-source project under Apache-2.0. Built on <a href="https://github.com/librelane/librelane" target="_blank" rel="noopener">LibreLane</a>; not affiliated with or endorsed by LibreLane maintainers.</p>
       <p class="footer-lede">LanEx is a viewer, not a sign-off tool; lithography, dicing and packaging happen at a foundry, after the GDSII handoff.</p>
       <nav class="footer-nav">
-        <a href="https://github.com/AkshatIsWired/lanex" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/AkshatIsWired/lanex/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
-        <a href="https://github.com/AkshatIsWired/lanex/blob/main/NOTICE" target="_blank" rel="noopener">Notices</a>
+        <a href="https://github.com/lanex-eda/lanex" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/lanex-eda/lanex/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+        <a href="https://github.com/lanex-eda/lanex/blob/main/NOTICE" target="_blank" rel="noopener">Notices</a>
       </nav>
       <p class="footer-copy">Built for the open-silicon community.</p>
     </div>

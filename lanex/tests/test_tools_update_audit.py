@@ -472,10 +472,10 @@ def test_versions_that_say_nothing():
 
 def _release(tag="v1.1.0", **kw):
     d = {"tag_name": tag, "name": "LanEx " + tag, "draft": False, "prerelease": False,
-         "html_url": f"https://github.com/AkshatIsWired/lanex/releases/tag/{tag}",
+         "html_url": f"https://github.com/lanex-eda/lanex/releases/tag/{tag}",
          "published_at": "2026-12-01T10:00:00Z",
          "assets": [{"name": "LanEx-Setup-1.1.0.exe",
-                     "browser_download_url": f"https://github.com/AkshatIsWired/lanex/releases/download/{tag}/LanEx-Setup-1.1.0.exe"}]}
+                     "browser_download_url": f"https://github.com/lanex-eda/lanex/releases/download/{tag}/LanEx-Setup-1.1.0.exe"}]}
     d.update(kw)
     return d
 
@@ -488,7 +488,7 @@ def test_release_answer_is_validated():
     assert updatecheck._release_from_json(_release(tag="v1; rm -rf /")) is None
     odd = updatecheck._release_from_json(_release(html_url="https://evil.example/x",
                                                   assets=[{"name": "a.exe", "browser_download_url": "https://evil.example/a.exe"}]))
-    assert odd["url"].startswith("https://github.com/AkshatIsWired/lanex/releases/")
+    assert odd["url"].startswith("https://github.com/lanex-eda/lanex/releases/")
     assert odd["windows_installer"] == ""
 
 
@@ -521,7 +521,7 @@ def test_check_sends_a_plain_request_once_a_day(home, monkeypatch):
     assert s["newer"] and s["latest"]["version"] == "1.1.0" and s["how"]
     assert len(seen) == 1
     req = seen[0]
-    assert req.full_url == "https://api.github.com/repos/AkshatIsWired/lanex/releases/latest"
+    assert req.full_url == "https://api.github.com/repos/lanex-eda/lanex/releases/latest"
     assert req.get_method() == "GET" and req.data is None
     headers = {k.lower(): v for k, v in req.header_items()}
     assert headers == {"user-agent": "LanEx-update-check", "accept": "application/vnd.github+json"}
@@ -570,7 +570,7 @@ def test_how_to_update_per_platform(home, monkeypatch):
     (home / "runtime.json").unlink()
     unix = updatecheck.how_to_update(rel)
     assert unix["platform"] == "unix"
-    assert unix["command"] == ("curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/v1.1.0/"
+    assert unix["command"] == ("curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/v1.1.0/"
                                "scripts/install.sh | LANEX_REF=v1.1.0 bash")
 
 

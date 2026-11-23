@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # install.sh — universal LanEx installer: Linux (any major distro), WSL2, macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 #   # no curl on a fresh box? wget works the same:
-#   wget -qO- https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+#   wget -qO- https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 #
 # DESIGN RULES (read before editing):
 #   * Every stage is a FALLBACK CHAIN. The bottom of every chain is a plain
@@ -39,7 +39,7 @@ shopt -s extglob 2>/dev/null || true
 #                     (default: LANEX_RELEASE_REF below, the release this
 #                     installer belongs to)
 #   LANEX_REPO=<owner/name>  GitHub repository for LANEX_REF (default:
-#                     AkshatIsWired/lanex; useful for fork candidates)
+#                     lanex-eda/lanex; useful for fork candidates)
 #   LANEX_PIP_CONSTRAINT=<path>  pip constraints file (versions only). Default:
 #                     windows/setup/constraints.txt from the same ref, the
 #                     exact package versions Windows Setup ships.
@@ -75,7 +75,7 @@ set -u -o pipefail
 # before the first stamped release. LANEX_REF still overrides it.
 LANEX_RELEASE_REF="main"
 
-REPO="${LANEX_REPO:-AkshatIsWired/lanex}"
+REPO="${LANEX_REPO:-lanex-eda/lanex}"
 REF="${LANEX_REF:-$LANEX_RELEASE_REF}"
 # codeload's ref-aware endpoint resolves branches, tags, and full commit SHAs.
 # The old branch-qualified archive URL silently made tags and SHAs impossible.
@@ -2845,7 +2845,7 @@ usage() {
     cat << 'EOFUSAGE'
 LanEx installer
 
-  curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 
 In a terminal it asks what to install (Recommended, Custom, Minimal, Complete).
 Unattended:

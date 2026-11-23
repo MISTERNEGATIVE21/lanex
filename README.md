@@ -12,7 +12,7 @@ A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librela
 
 <br>
 
-[![Release](https://img.shields.io/github/v/release/AkshatIsWired/lanex?style=flat-square&color=2f6fe0&label=release)](https://github.com/AkshatIsWired/lanex/releases/latest)
+[![Release](https://img.shields.io/github/v/release/lanex-eda/lanex?style=flat-square&color=2f6fe0&label=release)](https://github.com/lanex-eda/lanex/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache%202.0-2f6fe0.svg?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-2f6fe0?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-1338%20passing-3fb950?style=flat-square)](#for-developers)
@@ -44,7 +44,7 @@ A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librela
 
 ### Windows
 
-<a href="https://github.com/AkshatIsWired/lanex/releases/latest/download/LanEx-Setup.exe"><img src="https://img.shields.io/badge/Download-LanEx--Setup.exe-2f6fe0?style=for-the-badge&logo=windows&logoColor=white" alt="Download LanEx-Setup.exe"></a>
+<a href="https://github.com/lanex-eda/lanex/releases/latest/download/LanEx-Setup.exe"><img src="https://img.shields.io/badge/Download-LanEx--Setup.exe-2f6fe0?style=for-the-badge&logo=windows&logoColor=white" alt="Download LanEx-Setup.exe"></a>
 
 1. Run **LanEx-Setup.exe**, accept the license and click **Install**.
 2. If Windows asks to restart, let it. Setup carries on after you sign in.
@@ -58,7 +58,7 @@ A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librela
 ### Linux and macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 ```
 
 Then run `lanex`.
@@ -73,7 +73,7 @@ Then run `lanex`.
 Install without questions (for CI and scripts):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash -s -- --profile recommended
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash -s -- --profile recommended
 ```
 
 | Profile | Installs |
@@ -194,7 +194,7 @@ LanEx runs the ordinary `librelane` command. The **Command** tab in the console 
 LanEx is plain Python with no web framework and no build step.
 
 ```bash
-git clone https://github.com/AkshatIsWired/lanex && cd lanex
+git clone https://github.com/lanex-eda/lanex && cd lanex
 python3 -m venv .venv && . .venv/bin/activate
 pip install -c windows/setup/constraints.txt -e . pytest
 lanex                                  # run it
@@ -213,7 +213,7 @@ The golden-run corpus fails the build if a displayed number stops matching the t
 
 </details>
 
-Found a bug or have an idea? Open an [issue](https://github.com/AkshatIsWired/lanex/issues). For Windows install problems, use the **Windows install problem** form.
+Found a bug or have an idea? Open an [issue](https://github.com/lanex-eda/lanex/issues). For Windows install problems, use the **Windows install problem** form.
 
 ## License
 

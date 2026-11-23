@@ -314,8 +314,8 @@ check("pdkinfo: routing layers spelled as each PDK's tech LEF does (audit G17)",
 
 const UB = await import(toUrl(resolve(MOD, "updatebanner.js")));
 check("update banner: shown for a newer release unless that version was dismissed", () => {
-  const s = { current: "1.0.0", newer: true, latest: { version: "1.1.0", tag: "v1.1.0", url: "https://github.com/AkshatIsWired/lanex/releases/tag/v1.1.0" },
-    how: { platform: "unix", text: "Run this in a terminal.", command: "curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/v1.1.0/scripts/install.sh | LANEX_REF=v1.1.0 bash" } };
+  const s = { current: "1.0.0", newer: true, latest: { version: "1.1.0", tag: "v1.1.0", url: "https://github.com/lanex-eda/lanex/releases/tag/v1.1.0" },
+    how: { platform: "unix", text: "Run this in a terminal.", command: "curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/v1.1.0/scripts/install.sh | LANEX_REF=v1.1.0 bash" } };
   assert.equal(UB.shouldShow(s, ""), true);
   assert.equal(UB.shouldShow(s, "1.1.0"), false);
   assert.equal(UB.shouldShow(s, "1.0.9"), true);
@@ -327,8 +327,8 @@ check("update banner: shown for a newer release unless that version was dismisse
   assert.match(h, /What's new/);
   assert.match(h, /LANEX_REF=v1\.1\.0 bash/);
   assert.match(h, /data-ub='dismiss'/);
-  const w = UB.bannerHtml({ ...s, how: { platform: "windows", text: "Download the new LanEx Setup.", download: "https://github.com/AkshatIsWired/lanex/releases/download/v1.1.0/LanEx-Setup.exe" } });
-  assert.match(w, /href='https:\/\/github\.com\/AkshatIsWired\/lanex\/releases\/download\/v1\.1\.0\/LanEx-Setup\.exe'/);
+  const w = UB.bannerHtml({ ...s, how: { platform: "windows", text: "Download the new LanEx Setup.", download: "https://github.com/lanex-eda/lanex/releases/download/v1.1.0/LanEx-Setup.exe" } });
+  assert.match(w, /href='https:\/\/github\.com\/lanex-eda\/lanex\/releases\/download\/v1\.1\.0\/LanEx-Setup\.exe'/);
   assert.ok(!/<pre/.test(w), "Windows gets the installer, not a shell command");
   const bad = UB.bannerHtml({ ...s, latest: { ...s.latest, version: "<img src=x>" } });
   assert.ok(!/<img/.test(bad), "release data is escaped");

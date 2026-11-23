@@ -72,7 +72,7 @@ const (
 	// without this the shell would start with nowhere to draw.
 	createNewConsole = 0x00000010
 
-	releasesURL = "https://github.com/AkshatIsWired/lanex/releases"
+	releasesURL = "https://github.com/lanex-eda/lanex/releases"
 )
 
 func main() {
@@ -219,6 +219,7 @@ func msgbox(text string, flags uint32) int32 {
 
 func showInfo(text string)  { msgbox(text, mbOK|mbIconInfo) }
 func showError(text string) { msgbox(text, mbOK|mbIconError) }
+
 // cachedSetupPath is the copy of LanEx-Setup.exe that Setup keeps for Repair
 // (the Start menu's "Repair LanEx" entry runs the same file with /REPAIR=1).
 func cachedSetupPath() string {

@@ -55,9 +55,9 @@ classifiers = [
 dependencies = ["librelane==3.0.4", "ciel==2.6.1"]
 
 [project.urls]
-Homepage = "https://github.com/AkshatIsWired/lanex"
-Repository = "https://github.com/AkshatIsWired/lanex"
-Issues = "https://github.com/AkshatIsWired/lanex/issues"
+Homepage = "https://github.com/lanex-eda/lanex"
+Repository = "https://github.com/lanex-eda/lanex"
+Issues = "https://github.com/lanex-eda/lanex/issues"
 
 [project.scripts]
 lanex = "lanex.cli:main"

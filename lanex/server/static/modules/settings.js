@@ -131,7 +131,7 @@ async function aboutHtml() {
     "Before you fabricate, check your design against your foundry's official sign-off decks.</div>" +
     "<div class='st-acts'><button class='btn btn-sm' data-st='notices'>License and notices</button>" +
     "<a class='btn btn-sm btn-ghost' href='https://librelane.org/' target='_blank' rel='noopener'>LibreLane docs</a>" +
-    "<a class='btn btn-sm btn-ghost' href='https://github.com/AkshatIsWired/lanex' target='_blank' rel='noopener'>LanEx on GitHub</a></div>";
+    "<a class='btn btn-sm btn-ghost' href='https://github.com/lanex-eda/lanex' target='_blank' rel='noopener'>LanEx on GitHub</a></div>";
 }
 
 function card(title, body, cls = "") {

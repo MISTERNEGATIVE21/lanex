@@ -27,7 +27,7 @@ long version.
 ## Windows — the installer
 
 Download **LanEx-Setup.exe** from the
-[Releases page](https://github.com/AkshatIsWired/lanex/releases), run it, and
+[Releases page](https://github.com/lanex-eda/lanex/releases), run it, and
 click through five pages: **Welcome → License → Configure → Installing →
 Finished**. Setup runs in your own Windows account. If WSL is not on yet,
 Windows asks for administrator permission (once on Windows 11; twice on
@@ -75,7 +75,7 @@ and B, GF180MCU D and IHP SG13G2, about 6 GB to download).
 **If something goes wrong,** every message Setup shows names its log:
 `%LOCALAPPDATA%\LanEx\logs\install.log` (paste that into Explorer's address
 bar). Please attach it to a
-[Windows install issue](https://github.com/AkshatIsWired/lanex/issues/new?template=windows-install.yml).
+[Windows install issue](https://github.com/lanex-eda/lanex/issues/new?template=windows-install.yml).
 Setup never leaves a half-installed LanEx behind: it stops with the reason and
 the next step, and running it again carries on from what is already verified.
 
@@ -347,7 +347,7 @@ Windows Setup ships, and puts the `lanex` command on your PATH. Safe to re-run;
 **a re-run also upgrades LanEx in place**.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 ```
 
 In a terminal it opens an interactive installer with the Windows Setup's
@@ -362,7 +362,7 @@ with a progress view and a log file. Arrow keys, Space, Enter and Esc drive it;
 Unattended (CI, scripts, no terminal), name the profile up front:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash -s -- --profile recommended
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash -s -- --profile recommended
 ```
 
 `--profile complete` and `--profile minimal` work the same way, and
@@ -392,7 +392,7 @@ installer says so and falls back to the newest versions that fit.
 No `curl` on a fresh box? `wget` works the same:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 ```
 
 Every step in it has a fallback (no `pipx` package on your distro → pip → a
@@ -459,7 +459,7 @@ sudo apt update && sudo apt install -y pipx python3-venv git xfonts-base libgl1 
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
 # 3. install LanEx straight from the repo tarball (no git needed;
 #    once LanEx is on PyPI this simply becomes: pipx install lanex)
-pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
+pipx install https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz
 # 4. optional: pre-pull the version-matched LibreLane image (needs Docker/Podman;
 #    skip if you have neither — the in-app Tools tab installs an engine for you)
 lanex --pull-image
@@ -471,7 +471,7 @@ lanex
 runs these steps for you — plus fallbacks for machines where one of them
 fails — and upgrades on re-run. It also installs the exact Python package
 versions Windows Setup was tested with; to get those in any manual row, put
-`PIP_CONSTRAINT=https://raw.githubusercontent.com/AkshatIsWired/lanex/main/windows/setup/constraints.txt`
+`PIP_CONSTRAINT=https://raw.githubusercontent.com/lanex-eda/lanex/main/windows/setup/constraints.txt`
 in front of the `pipx install` command. Python 3.11+ only: Ubuntu 22.04's 3.10
 can't take one of the pins.)
 
@@ -491,7 +491,7 @@ sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc      # Fedora
 # sudo pacman -S --needed python-pipx git mesa xorg-fonts-misc base-devel  # Arch
 # 2. PATH, then install LanEx from the repo tarball (PyPI once published)
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
-pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
+pipx install https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz
 # 3. launch (add `lanex --pull-image` first if you have Docker/Podman)
 lanex
 ```
@@ -509,7 +509,7 @@ drivers as a one-click fix from the Tools tab when a viewer needs them.)</td></t
 brew install pipx
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
 # 2. install LanEx from the repo tarball (PyPI once published)
-pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
+pipx install https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz
 # 3. launch (Container engine recommended — install one of:)
 #    brew install --cask docker-desktop   # then open Docker.app once
 #    brew install podman && podman machine init && podman machine start
@@ -529,7 +529,7 @@ the troubleshooting entry below if a viewer still says "no display".</td></tr>
 
 ```bash
 # activate your existing librelane env FIRST, then, from a clone of this repo:
-git clone https://github.com/AkshatIsWired/lanex && cd lanex
+git clone https://github.com/lanex-eda/lanex && cd lanex
 pip install .               # plain pip is correct INSIDE an activated env
 lanex
 ```
@@ -576,7 +576,7 @@ says so.) Nothing else on your PC is touched either way.</td></tr>
 <td>Re-run the same line — it upgrades in place:<br>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 ```
 
 (The older `install-wsl.sh` URL keeps working — it now runs the same universal
@@ -586,7 +586,7 @@ installer.)</td></tr>
 <td>
 
 ```bash
-pipx install --force https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
+pipx install --force https://github.com/lanex-eda/lanex/archive/refs/heads/main.tar.gz
 ```
 
 (`--force` is what makes it an upgrade — a plain `pipx upgrade` sees the same
@@ -620,7 +620,7 @@ cd lanex && git pull && pip install . --force    # from a clone, in the activate
 <td>
 
 ```bash
-pipx install "git+https://github.com/AkshatIsWired/lanex@main" --force
+pipx install "git+https://github.com/lanex-eda/lanex@main" --force
 ```
 
 Tracks the tip of `main` — newer than any release, but not yet version-blessed.</td></tr>

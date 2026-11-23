@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-REPO = "AkshatIsWired/lanex"
+REPO = "lanex-eda/lanex"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_URL = f"https://github.com/{REPO}/releases"
 USER_AGENT = "LanEx-update-check"

@@ -50,7 +50,7 @@
   #define AppVersionNumeric AppVersion
 #endif
 #define AppPublisher   "LanEx Contributors"
-#define AppURL         "https://github.com/AkshatIsWired/lanex"
+#define AppURL         "https://github.com/lanex-eda/lanex"
 #define VirtualizationHelpURL "https://support.microsoft.com/en-US/Windows/Experience/enable-virtualization-on-windows"
 #define RepoRoot       "..\..\"
 #ifndef LauncherExe
@@ -71,7 +71,7 @@
   #define LanexRef     "main"
 #endif
 #ifndef LanexSourceRepo
-  #define LanexSourceRepo "AkshatIsWired/lanex"
+  #define LanexSourceRepo "lanex-eda/lanex"
 #endif
 #ifndef LanexSourceSha
   #error LanexSourceSha is required: Setup must identify an exact checked-out commit
@@ -113,7 +113,7 @@
 ; where Canonical moves a point release once a newer one ships. The SHA-256
 ; above decides; the location never does.
 #ifndef MirrorBase
-  #define MirrorBase   "https://github.com/AkshatIsWired/lanex/releases/download/deps-v1"
+  #define MirrorBase   "https://github.com/lanex-eda/lanex/releases/download/deps-v1"
 #endif
 #define RootfsUrls     MirrorBase + "/" + RootfsFile + "|" + RootfsUrl + "|https://old-releases.ubuntu.com/releases/24.04.4/" + RootfsFile
 

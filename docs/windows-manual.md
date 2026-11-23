@@ -13,7 +13,7 @@ Open your Ubuntu (WSL) terminal and run the one-line installer — the same one
 Linux users run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lanex-eda/lanex/main/scripts/install.sh | bash
 ```
 
 Full details, per-distro alternatives, and troubleshooting:

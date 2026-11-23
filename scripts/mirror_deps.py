@@ -38,7 +38,7 @@ PDK_PINS = SETUP / "pdk-pins.json"
 PDK_ASSETS = SETUP / "pdk-assets.json"
 MANIFEST = SETUP / "build-manifest.json"
 CIEL_STATIC = "https://fossi-foundation.github.io/ciel-releases"
-DEFAULT_REPO = "AkshatIsWired/lanex"
+DEFAULT_REPO = "lanex-eda/lanex"
 DEFAULT_TAG = "deps-v1"
 ROOTFS = {
     "file": "ubuntu-24.04.4-wsl-amd64.wsl",
