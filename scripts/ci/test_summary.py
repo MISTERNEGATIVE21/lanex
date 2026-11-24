@@ -85,6 +85,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_tools": "Tool/engine detection is accurate and its probes can't hang the UI.",
     "test_fsbrowser": "The file browser stays confined to allowed roots (no path traversal).",
     "test_native_pick": "The system file and folder pickers open in the right mode and only ever filter by plain file extensions.",
+    "test_install_rate_limit": "Clicking Install on several PDKs or tools in a row starts every one; only the same install clicked twice within a second is refused once.",
     "test_presence": "Closing the last LanEx window quits LanEx, but a window that only went quiet (sleep, Wi-Fi, a frozen background tab) keeps it running: its heartbeat counts until it says goodbye.",
     "test_cells_tab": "The Cells & macros tab shows the library as the flow sees it: the cells, memories and macros the run can use and the rules it applies.",
     "test_run_stages": "Every results page agrees on which step drew each flow stage, including runs resumed from another.",
