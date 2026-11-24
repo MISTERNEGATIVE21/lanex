@@ -663,8 +663,17 @@ function Get-LivePreflightFacts {
                 $probeTar = Join-Path $probeBase "p.tar.gz"
                 $probeName = "lanex_probe_" + [Guid]::NewGuid().ToString('N').Substring(0, 8)
                 try {
+                    # Shaped like a real root filesystem (os-release, passwd, an
+                    # LF-only /bin/sh without a BOM): some WSL releases (seen:
+                    # 2.5.7) refuse a bare one-file archive with
+                    # WSL_E_NOT_A_LINUX_DISTRO.
                     New-Item -ItemType Directory -Path "$probeContent\bin" -Force | Out-Null
-                    Set-Content -Path "$probeContent\bin\sh" -Value "#!/bin/sh`nexit 0"
+                    New-Item -ItemType Directory -Path "$probeContent\etc" -Force | Out-Null
+                    $noBom = New-Object System.Text.UTF8Encoding($false)
+                    [System.IO.File]::WriteAllText("$probeContent\bin\sh", "#!/bin/sh`nexit 0`n", $noBom)
+                    [System.IO.File]::WriteAllText("$probeContent\etc\os-release", "ID=lanex-probe`nNAME=`"LanEx probe`"`nVERSION_ID=1`n", $noBom)
+                    [System.IO.File]::WriteAllText("$probeContent\etc\passwd", "root:x:0:0:root:/root:/bin/sh`n", $noBom)
+                    [System.IO.File]::WriteAllText("$probeContent\etc\group", "root:x:0:`n", $noBom)
                     $tarExe = Join-Path $env:SystemRoot 'System32\tar.exe'
                     if (-not (Test-Path -LiteralPath $tarExe -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'sysnative\tar.exe') -PathType Leaf)) {
                         $tarExe = Join-Path $env:SystemRoot 'sysnative\tar.exe'
@@ -676,9 +685,19 @@ function Get-LivePreflightFacts {
                         $kernelRun = Invoke-WslKernelProbe $wslExe @('--import', $probeName, $probeRootfs, $probeTar, '--version', '2')
                         if ($kernelRun.exitCode -eq 0) {
                             $kernelRun = Invoke-WslKernelProbe $wslExe @('--system', '--exec', '/bin/true')
+                            $kernelUsable = ($kernelRun.exitCode -eq 0)
+                            if (-not $kernelUsable) { $kernelError = $kernelRun.error }
+                        } elseif ([string]$kernelRun.error -match 'WSL_E_NOT_A_LINUX_DISTRO|not a valid Linux distribution') {
+                            # A WSL 2 import unpacks the archive inside the
+                            # utility VM, so this answer means the kernel
+                            # started and only our stand-in archive was judged.
+                            # Not a reason to stop: the real image is imported
+                            # next and reports its own error if WSL fails.
+                            $kernelUsable = $true
+                        } else {
+                            $kernelUsable = $false
+                            $kernelError = $kernelRun.error
                         }
-                        $kernelUsable = ($kernelRun.exitCode -eq 0)
-                        if (-not $kernelUsable) { $kernelError = $kernelRun.error }
                     } else {
                         $kernelRun = Invoke-WslBounded $wslExe @('--system', '--exec', '/bin/true') 90
                         if ($kernelRun.output -match 'no installed distributions') {

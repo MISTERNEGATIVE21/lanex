@@ -988,6 +988,19 @@ def test_preflight_bounds_every_wsl_call() -> None:
     assert "'wsl-not-responding'" in INNO.read_text(encoding="utf-8")
 
 
+def test_zero_distro_probe_does_not_block_on_its_own_stand_in_archive() -> None:
+    # Field report 2026-11-24 (WSL 2.5.7, no distros): WSL rejected the
+    # one-file probe archive with WSL_E_NOT_A_LINUX_DISTRO and Setup told the
+    # user to turn on virtualization, which was already on. A WSL 2 import
+    # unpacks inside the utility VM, so that answer proves the kernel started.
+    body = SETUP.read_text(encoding="utf-8")
+    facts = body[body.index("function Get-LivePreflightFacts"):body.index("function Get-PreflightDecision")]
+    assert "WSL_E_NOT_A_LINUX_DISTRO" in facts
+    assert "etc\\os-release" in facts and "etc\\passwd" in facts
+    assert "Set-Content" not in facts  # PowerShell 5.1 writes CRLF/ANSI
+    assert "wsl --update" in INNO.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("build,ubr,code", [
     (19045, 2006, "windows-update-required"),   # 22H2 as released, inbox WSL only
     (19045, 2311, "ready"),                      # KB5020030: Store WSL works

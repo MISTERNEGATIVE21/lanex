@@ -3358,7 +3358,8 @@ begin
   begin
     Result := 'WSL is installed, but its Linux kernel could not start, so LanEx cannot '
       + 'run on this PC yet.' + #13#10#13#10
-      + 'On a PC: make sure virtualization is turned on in the BIOS/UEFI settings '
+      + 'First open PowerShell, run  wsl --update , restart Windows and run LanEx Setup again. '
+      + 'If that does not help on a PC: make sure virtualization is turned on in the BIOS/UEFI settings '
       + '(Intel VT-x or AMD-V/SVM), restart, and run LanEx Setup again. In a virtual '
       + 'machine: its host must allow nested virtualization.' + #13#10#13#10
       + 'Setup did not download or import an environment. Existing WSL '
