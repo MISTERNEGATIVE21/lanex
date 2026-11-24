@@ -134,7 +134,15 @@ setup_privileges() {
         fi
         SUDO=""     # genuinely root (container, WSL root user): fine.
     elif command -v sudo >/dev/null 2>&1; then
-        SUDO="sudo"
+        if sudo -n true 2>/dev/null; then
+            SUDO="sudo"
+        elif [ "${LANEX_ASSUME_YES:-0}" = "1" ] || [ -n "${CI:-}" ]; then
+            SUDO=""
+            warn "LANEX_ASSUME_YES=1 and sudo requires a password — skipping system packages."
+            PKG="none"
+        else
+            SUDO="sudo"
+        fi
     else
         SUDO=""
         warn "Neither root nor sudo available — skipping system packages."
@@ -432,7 +440,7 @@ install_with_venv() {
     # The universal bottom of the chain: nothing but python3 + venv.
     say "Installing LanEx into its own virtualenv (~/.lanex/venv)"
     local venv="$HOME/.lanex/venv"
-    "$PY" -m venv "$venv" 2>/dev/null || {
+    "$PY" -m venv --clear "$venv" 2>/dev/null || {
         # Two known causes: Debian splits venv out of python3 (apt_stage
         # installs it, but a 'none' package-manager path can miss it), or
         # ~/.lanex is root-owned from an earlier sudo mishap.
