@@ -248,6 +248,23 @@ await checkAsync("tools: a 429 on Install waits and asks once more; a double cli
   assert.equal(calls, 2);
   assert.deepEqual(waited, [1100]);
   assert.equal(r.status, "started");
+  // Refused three times in a row (field report 2026-11-24): the fourth ask
+  // goes through; a fifth refusal would still reach the caller.
+  let busy = 0;
+  const waited2 = [];
+  const r2 = await toolsModule.requestJob("k1b", async () => {
+    busy++;
+    if (busy <= 3) { const e = new Error("Rate limit exceeded"); e.status = 429; throw e; }
+    return { ok: true, status: "started" };
+  }, async (ms) => { waited2.push(ms); });
+  assert.equal(busy, 4);
+  assert.deepEqual(waited2, [1100, 1100, 1100]);
+  assert.equal(r2.status, "started");
+  let always = 0;
+  await assert.rejects(toolsModule.requestJob("k1c", async () => {
+    always++; const e = new Error("Rate limit exceeded"); e.status = 429; throw e;
+  }, async () => {}));
+  assert.equal(always, 4);
   // Two clicks while the first request is out: the second does not ask.
   let n = 0;
   let release;

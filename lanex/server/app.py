@@ -656,7 +656,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    _install_rates: Dict[str, float] = {}
+    _install_rates: Dict[Tuple[str, str, str], float] = {}
 
     def do_POST(self) -> None:  # noqa: N802
         try:
@@ -708,16 +708,6 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             from ..controller.platform_env import note_client_utc_offset
             note_client_utc_offset(self.headers.get("X-LanEx-UTC-Offset"))
 
-        # Rate limit install endpoints
-        if "/install" in path:
-            ip = self.client_address[0]
-            now = time.time()
-            if now - self._install_rates.get(ip, 0) < 1.0:
-                self._discard_body()
-                self._send_error(429, "Rate limit exceeded", code="rate")
-                return
-            self._install_rates[ip] = now
-
         if route[0] in RAW_BODY_ROUTES:
             # The handler streams the raw body itself (a file upload can be
             # far bigger than any JSON body).
@@ -733,6 +723,22 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
                 self._discard_body()
             self._send_error(413 if "too large" in msg.lower() else 400, msg)
             return
+
+        # The same install asked for twice within a second (a double click) is
+        # refused once. The limit is per job, not per client: every request
+        # in the desktop app comes from 127.0.0.1, and one limit shared by all
+        # installs refused a third PDK clicked right after two others (field
+        # report 2026-11-24: "PDK ihp-sg13g2 install error: Rate limit
+        # exceeded"). Different jobs never wait on each other; the installers'
+        # own job guards answer "already running" for a true duplicate.
+        if "/install" in path:
+            job = (self.client_address[0], path,
+                   str(body.get("pdk", "")) if isinstance(body, dict) else "")
+            now = time.time()
+            if now - self._install_rates.get(job, 0) < 1.0:
+                self._send_error(429, "Rate limit exceeded", code="rate")
+                return
+            self._install_rates[job] = now
 
         self._body = body  # type: ignore[attr-defined]
         self._dispatch(route[1])

@@ -212,12 +212,13 @@ export async function requestJob(key, fn, wait = _sleep) {
   if (_requesting.has(key)) return { ok: true, in_progress: true, duplicate: true };
   _requesting.add(key);
   try {
-    try {
-      return await fn();
-    } catch (ex) {
-      if (!ex || ex.status !== 429) throw ex;
-      await wait(1100);
-      return await fn();
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await fn();
+      } catch (ex) {
+        if (!ex || ex.status !== 429 || attempt >= 4) throw ex;
+        await wait(1100);
+      }
     }
   } finally {
     _requesting.delete(key);
