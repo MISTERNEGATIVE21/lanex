@@ -593,6 +593,16 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             if not result.get("ok"):
                 failures.append({"component": f"engine:{engine}", "result": result})
             else:
+                if engine == "docker" and sys.platform.startswith("linux"):
+                    # Installing Docker here creates the docker group after the
+                    # appliance user exists; without joining it the daemon is
+                    # unreachable for this user and the check below waits two
+                    # minutes and fails (field report 2026-11-24). Membership
+                    # works at once through `sg docker` (tools.resolve_engine).
+                    joined = installer.enable_docker_group()
+                    drain()
+                    if not joined.get("ok"):
+                        print(f"could not join the docker group: {joined.get('reason')}", flush=True)
                 for attempt in range(1, 61):
                     if cancel_requested.is_set():
                         failures.append({"component": f"engine:{engine}", "cancelled": True})

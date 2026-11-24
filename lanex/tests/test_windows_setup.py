@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -244,6 +245,55 @@ def test_foreign_name_collision_gets_distinct_owned_name_and_exact_binding(tmp_p
     bound = _run_setup("-Action", "BindAppliance", "-StatePath", state,
                        "-RegistrySnapshotPath", owned_snapshot, "-TestOwnerSid", OWNER)
     assert bound["registryId"] == "{OWNED}"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs the Windows Start menu and LOCALAPPDATA")
+def test_hide_distro_shortcuts_removes_only_wsls_own_files_for_our_distro(tmp_path: Path) -> None:
+    # Field report 2026-11-24: WSL's own "lanex" Start-menu shortcut opened a
+    # bare Linux shell and the user took it for LanEx.
+    import os
+    import uuid
+    state, base = _bound_appliance(tmp_path)
+    tag = uuid.uuid4().hex[:8]
+    start_menu = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu"
+    fragments = Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "Windows Terminal" / "Fragments" / "Microsoft.WSL"
+    fragments.mkdir(parents=True, exist_ok=True)
+    ours_lnk = start_menu / f"lanex-test-{tag}.lnk"
+    ours_json = fragments / f"{{lanex-test-{tag}}}.json"
+    foreign_lnk = start_menu / f"other-test-{tag}.lnk"
+    stray = tmp_path / f"lanex-test-{tag}.lnk"     # ours by registry, but outside the Start menu
+    for f in (ours_lnk, ours_json, foreign_lnk, stray):
+        f.write_text("x", encoding="utf-8")
+    try:
+        registry = tmp_path / "registry-with-shortcuts.json"
+        registry.write_text(json.dumps([
+            {"registryId": "{OWNED}", "name": "lanex", "basePath": str(base),
+             "shortcutPath": str(ours_lnk), "terminalProfilePath": str(ours_json)},
+            {"registryId": "{OTHER}", "name": "Ubuntu", "basePath": str(tmp_path / "ubuntu"),
+             "shortcutPath": str(foreign_lnk), "terminalProfilePath": ""},
+        ]), encoding="utf-8")
+        result = _run_setup("-Action", "HideDistroShortcuts", "-StatePath", state,
+                            "-RegistrySnapshotPath", registry, "-TestOwnerSid", OWNER)
+        assert not ours_lnk.exists() and not ours_json.exists()
+        assert foreign_lnk.exists()
+        assert len(result["removed"]) == 2 and result["note"] == ""
+        registry.write_text(json.dumps([
+            {"registryId": "{OWNED}", "name": "lanex", "basePath": str(base),
+             "shortcutPath": str(stray), "terminalProfilePath": ""},
+        ]), encoding="utf-8")
+        _run_setup("-Action", "HideDistroShortcuts", "-StatePath", state,
+                   "-RegistrySnapshotPath", registry, "-TestOwnerSid", OWNER)
+        assert stray.exists()
+    finally:
+        for f in (ours_lnk, ours_json, foreign_lnk):
+            f.unlink(missing_ok=True)
+
+
+def test_wizard_removes_wsl_distro_shortcuts_on_every_run() -> None:
+    inno = INNO.read_text(encoding="utf-8")
+    assert "-Action HideDistroShortcuts" in inno
+    # After both the fresh-import and the existing-distro branches.
+    assert inno.index("-Action HideDistroShortcuts") > inno.index("already exists and is adopted; skipping import")
 
 
 def _bound_appliance(tmp_path: Path):

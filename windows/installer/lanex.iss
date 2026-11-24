@@ -3632,6 +3632,16 @@ begin
     AppendLiveLine('  [OK] Private LanEx environment (' + DistroNameValue + ') is ready.');
   end;
 
+  // WSL gives the imported distro its own Start-menu shortcut and Terminal
+  // profile named "lanex" that open a bare Linux shell; people picked it
+  // instead of LanEx. Every run removes them (an upgrade cleans old installs).
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  if PowerShellCapture('& ' + PSQuote(Worker) + ' -Action HideDistroShortcuts -StatePath '
+      + PSQuote(StateFile), Output) then
+    LogLine('WSL distro shortcuts: ' + Output)
+  else
+    LogLine('could not remove the WSL distro shortcuts: ' + Output);
+
   // 5. A no-op Repair proves owner/build identity and runs the appliance
   // self-test without invoking pip or apt. Only a failed health check re-enters
   // idempotent provisioning; an identity mismatch is never overwritten.

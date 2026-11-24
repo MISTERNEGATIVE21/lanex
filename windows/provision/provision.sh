@@ -473,8 +473,16 @@ docker_ce() {
     # tab CAN install it (installer.py:613-617 runs this exact script), but that
     # path needs a sudo password prompt in a terminal — precisely what this
     # installer promises the user will never see.
-    if command -v docker >/dev/null 2>&1; then
-        note "already installed ($(docker --version 2>/dev/null || echo 'version unknown'))."
+    # Only a docker inside this distro counts. WSL appends the Windows PATH, so
+    # with Docker Desktop on the PC `command -v docker` finds its Windows-side
+    # stub under /mnt/c, which prints "could not be found in this WSL 2
+    # distro" (field report 2026-11-24): Docker was then never installed here
+    # and the appliance user never joined the docker group.
+    local docker_path
+    docker_path="$(command -v docker 2>/dev/null || true)"
+    case "$docker_path" in /mnt/*) docker_path="" ;; esac
+    if [ -n "$docker_path" ] && "$docker_path" --version >/dev/null 2>&1; then
+        note "already installed ($("$docker_path" --version 2>/dev/null))."
     else
         # Ubuntu's docker.io from the same package snapshot as everything
         # else, so every install gets the Docker version we tested. (The old
@@ -746,6 +754,12 @@ finalize() {
             chown -h "$APP_USER:$APP_USER" "/home/${APP_USER}/.local/bin/$tool" 2>/dev/null || true
         fi
     done
+    # A Docker installed after the base step (by a Retry, or by the step
+    # below) created the docker group after the appliance user existed: join
+    # it here, so the engine check below can reach the daemon via `sg docker`.
+    if getent group docker >/dev/null 2>&1 && ! id -nG "$APP_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        usermod -aG docker "$APP_USER" 2>/dev/null && note "added ${APP_USER} to the docker group."
+    fi
     # The appliance user owns its home, Ciel store, image lock and GDS3D build.
     # Running the strict CLI as root would recreate the historical root-owned
     # PDK store failure and would violate the per-user appliance contract.

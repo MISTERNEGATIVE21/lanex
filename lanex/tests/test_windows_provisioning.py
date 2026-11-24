@@ -399,6 +399,45 @@ def test_finalizer_waits_for_synchronous_pdk_result(
     assert report["installFailures"][0]["component"] == "pdk:sky130A"
 
 
+def test_finalizer_joins_docker_group_after_installing_docker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Field report 2026-11-24: Docker installed by the finalizer (because the
+    # base step mistook Docker Desktop's Windows-side stub for a docker) was
+    # unreachable for the appliance user, who was never in the docker group.
+    from lanex.controller import tools
+
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={"profile": "custom", "engine": "docker", "image": False,
+                 "pdks": [], "libraries": {}, "nativeTools": []},
+    )
+    initial = {"schema": 1, "ready": False, "checks": {"engine:docker": {"ready": False}}}
+    monkeypatch.setattr(provisioning, "readiness_report", lambda *a, **k: initial)
+    monkeypatch.setattr(provisioning.sys, "platform", "linux")
+    events = []
+    monkeypatch.setattr(installer, "install_tool",
+                        lambda key: events.append(("install", key)) or {"ok": True})
+    monkeypatch.setattr(installer, "enable_docker_group",
+                        lambda: events.append(("group",)) or {"ok": True})
+    monkeypatch.setattr(tools, "resolve_engine",
+                        lambda *a: {"ready": ("group",) in events, "engine": "docker"})
+    monkeypatch.setattr(provisioning.time, "sleep", lambda s: None)
+    report = provisioning.finalize(plan)
+    assert events[:2] == [("install", "docker"), ("group",)]
+    assert not [f for f in report["installFailures"] if f["component"] == "engine:docker"]
+
+
+def test_base_step_ignores_docker_desktops_windows_stub() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    provision = (repo / "windows/provision/provision.sh").read_text()
+    docker = provision[provision.index("docker_ce() {"):provision.index("SELECTED_ENGINE=")]
+    assert 'case "$docker_path" in /mnt/*) docker_path="" ;; esac' in docker
+    assert "if command -v docker >/dev/null" not in docker
+    finalize = provision[provision.index("systemd is ready."):provision.index("--provision-finalize")]
+    assert 'usermod -aG docker "$APP_USER"' in finalize
+
+
 def test_finalizer_cancel_file_stops_current_job_and_no_later_component(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

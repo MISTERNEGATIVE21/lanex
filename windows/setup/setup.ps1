@@ -11,7 +11,7 @@ Windows PowerShell 5.1 is the compatibility floor.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('NewManifest', 'InitializeState', 'ResolveAppliance', 'BindAppliance', 'SetComponent', 'ReadState',
+    [ValidateSet('NewManifest', 'InitializeState', 'ResolveAppliance', 'BindAppliance', 'HideDistroShortcuts', 'SetComponent', 'ReadState',
         'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume', 'PlanChoices', 'RecordOutcome',
         'ValidateUninstall', 'ExportAppliance', 'RemoveAppliance', 'CommitUpdate', 'RollbackUpdate', 'NetworkCheck')]
     [string]$Action,
@@ -218,6 +218,8 @@ function Get-RegistryEntries {
             registryId = $key.PSChildName
             name = [string]$p.DistributionName
             basePath = [string]$p.BasePath
+            shortcutPath = [string]$p.ShortcutPath
+            terminalProfilePath = [string]$p.TerminalProfilePath
         }
     }
     return $entries
@@ -1524,6 +1526,43 @@ function Bind-Appliance {
     return $state.appliance
 }
 
+function Hide-DistroShortcuts {
+    <# WSL 2.4+ gives every distro imported from a modern .wsl image its own
+       Start-menu shortcut and Windows Terminal profile, named after the distro
+       ("lanex") and opening a bare Linux shell. Users searching Start for
+       LanEx opened that shell instead of LanEx (field report 2026-11-24).
+       Removes only the two files WSL itself recorded for OUR registration
+       (ShortcutPath, TerminalProfilePath), and only inside the folders WSL
+       writes them to. Best effort: never fails Setup. #>
+    $removed = @()
+    try {
+        $state = Migrate-State (Read-JsonFile $StatePath 'Install state')
+        Assert-StateOwner $state (Get-OwnerSid)
+        $targetPath = Normalize-Path ([string]$state.appliance.basePath)
+        $matches = @(Get-RegistryEntries | Where-Object {
+            [string]::Equals([string]$_.name, [string]$state.appliance.name, [StringComparison]::OrdinalIgnoreCase) -and
+            (Normalize-Path ([string]$_.basePath)) -eq $targetPath
+        })
+        if ($matches.Count -ne 1) { return [pscustomobject]@{ removed = $removed; note = 'appliance registration not found' } }
+        $entry = $matches[0]
+        $startMenu = Normalize-Path ([Environment]::GetFolderPath('StartMenu'))
+        $fragments = Normalize-Path (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\Microsoft.WSL')
+        foreach ($pair in @(@('shortcutPath', $startMenu, '.lnk'), @('terminalProfilePath', $fragments, '.json'))) {
+            $file = [string]$entry.($pair[0])
+            if ([string]::IsNullOrWhiteSpace($file)) { continue }
+            $full = Normalize-Path $file
+            if ((Split-Path -Parent $full) -ne $pair[1] -or -not $full.EndsWith($pair[2])) { continue }
+            if (Test-Path -LiteralPath $file -PathType Leaf) {
+                Remove-Item -LiteralPath $file -Force -ErrorAction Stop
+                $removed += $file
+            }
+        }
+    } catch {
+        return [pscustomobject]@{ removed = $removed; note = $_.Exception.Message }
+    }
+    return [pscustomobject]@{ removed = $removed; note = '' }
+}
+
 function Set-ComponentState {
     if ([string]::IsNullOrWhiteSpace($Component) -or [string]::IsNullOrWhiteSpace($InputFingerprint)) {
         throw 'SetComponent requires Component and InputFingerprint.'
@@ -1591,6 +1630,7 @@ $result = switch ($Action) {
     'InitializeState' { Initialize-State }
     'ResolveAppliance' { Resolve-Appliance }
     'BindAppliance' { Bind-Appliance }
+    'HideDistroShortcuts' { Hide-DistroShortcuts }
     'SetComponent' { Set-ComponentState }
     'Preflight' { Invoke-Preflight }
     'EnableFeatures' {
